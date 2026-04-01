@@ -3,6 +3,7 @@ import {
   DependencyRulesConfig,
   ExternalRulesConfig,
 } from './dependency-rules-config';
+import { SheriffPlugin } from '../plugin/plugin';
 
 /**
  * Exported by **sheriff.config.ts**. It is optional and should be located
@@ -321,7 +322,7 @@ export interface UserSheriffConfig {
    * @note
    * For single-project setups, rather use the `entryFile` property instead.
    * Either `entryFile` or `entryPoints` can be set, but not both.
-   */
+  */
   entryPoints?: Record<string, string>;
 
   /**
@@ -343,4 +344,11 @@ export interface UserSheriffConfig {
    * ```
    */
   ignoreFileExtensions?: string[] | ((defaults: string[]) => string[]);
+
+  /**
+   * Optional Sheriff plugins that extend the CLI with additional commands.
+   *
+   * Plugins are instantiated directly in `sheriff.config.ts`.
+   */
+  plugins?: SheriffPlugin[];
 }

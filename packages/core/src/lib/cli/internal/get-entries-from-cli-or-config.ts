@@ -1,6 +1,7 @@
 import getFs from '../../fs/getFs';
 import { init } from '../../main/init';
 import { parseConfig } from '../../config/parse-config';
+import { Configuration } from '../../config/configuration';
 import { toFsPath } from '../../file-info/fs-path';
 import { isEmptyRecord } from '../../util/is-empty-record';
 import { parseEntryPointsFromCli } from './parse-entry-points-from-cli';
@@ -14,18 +15,21 @@ export function getEntriesFromCliOrConfig(
 export function getEntriesFromCliOrConfig(
   entryFileOrEntryPoints?: string,
   runInit?: true,
+  config?: Configuration,
 ): Array<EntryWithProjectInfo>;
 export function getEntriesFromCliOrConfig(
   entryFileOrEntryPoints?: string,
   runInit?: false,
+  config?: Configuration,
 ): Array<Entry>;
 export function getEntriesFromCliOrConfig(
   /**
    * the CLI forwards either the entry file e.g. "src/main.ts" or
    * the entry point(s) e.g. app-i,app-ii
-   */
+  */
   entryFileOrEntryPoints = '',
   runInit = true,
+  providedConfig?: Configuration,
 ): Array<Entry> | Array<EntryWithProjectInfo> {
   const fs = getFs();
   const potentialConfigFile = fs.join(fs.cwd(), 'sheriff.config.ts');
@@ -41,7 +45,7 @@ export function getEntriesFromCliOrConfig(
 
     if (fs.exists(potentialConfigFile)) {
       // two cases to check: check for entry points otherwise it is an entry file
-      const sheriffConfig = parseConfig(potentialConfigFile);
+      const sheriffConfig = providedConfig ?? parseConfig(potentialConfigFile);
 
       const potentialEntryPoints = parseEntryPointsFromCli(
         entryFileOrEntryPoints,
@@ -55,6 +59,21 @@ export function getEntriesFromCliOrConfig(
         // otherwise it is an entry file
         return processEntryFile(entryFileOrEntryPoints, runInit, fs);
       }
+    }
+  }
+
+  if (providedConfig) {
+    if (providedConfig.entryFile) {
+      return processEntryFile(providedConfig.entryFile, runInit, fs);
+    } else if (
+      providedConfig.entryPoints &&
+      !isEmptyRecord(providedConfig.entryPoints)
+    ) {
+      return processEntryFile(providedConfig.entryPoints, runInit, fs);
+    } else {
+      throw new Error(
+        'No entry file or entry points found in sheriff.config.ts. Please provide the option via the CLI.',
+      );
     }
   }
 
