@@ -28,6 +28,37 @@ Run `npx sheriff export main.ts > export.json` to export the dependency graph in
 
 See [Entry Files and Entry Points](#entry-files-and-entry-points) for configuration options.
 
+## Plugin Commands
+
+Sheriff can be extended with plugins registered in `sheriff.config.ts`. Plugins are instantiated directly in the config and exposed as additional CLI commands.
+
+```typescript
+import { SheriffConfig } from '@softarc/sheriff-core';
+import { JunitReporterPlugin } from 'mberger-junit-sheriff';
+import { SheriffUiPlugin } from '@softarc/sheriff-ui';
+
+export const config: SheriffConfig = {
+  modules: {
+    'src/feature': 'feature',
+    'src/shared': 'shared',
+  },
+  depRules: {
+    feature: 'shared',
+  },
+  plugins: [
+    new SheriffUiPlugin(),
+    new JunitReporterPlugin({ junitVersion: 1, reporters: ['html'] }),
+  ],
+};
+```
+
+With this configuration:
+
+```bash
+npx sheriff ui
+npx sheriff junit report.json
+```
+
 ## Entry Files and Entry Points
 
 Sheriff needs to know where to start traversing your project's imports. You can specify this using either an `entryFile` **or** `entryPoints`.
