@@ -1,5 +1,7 @@
 set -e
 
+export NODE_PATH="$(pwd)/node_modules"
+
 # We copy the test projects to a temporary directory to avoid any potential
 # issues with the dependencies from the root project.
 
@@ -30,6 +32,10 @@ bash ./integration-test.sh
 
 echo "Testing multiple configs in an Angular workspace"
 cd ../angular-v-multi
+bash ./integration-test.sh
+
+echo "Testing plugin system"
+cd ../plugin-i
 bash ./integration-test.sh
 
 cd ../..

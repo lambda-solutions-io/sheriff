@@ -1,0 +1,8 @@
+{
+  "entryFile": "src/main.ts",
+  "junitVersion": 1,
+  "reporters": [
+    "html"
+  ],
+  "success": true
+}
