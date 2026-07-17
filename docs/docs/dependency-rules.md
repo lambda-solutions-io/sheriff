@@ -364,37 +364,6 @@ export const sheriffConfig: SheriffConfig = {
 };
 ```
 
-### How Multiple `depRules` Match
-
-When Sheriff checks an import, every source tag of the importing module must
-have clearance. Source tags are therefore combined with AND.
-
-For a single source tag, however, multiple `depRules` keys can match. Those keys
-are combined with OR, and the first matching rule value that grants clearance
-wins. Target tags are also checked as alternatives: a source tag has clearance
-when it can access any tag of the imported module.
-
-This matters for modules with several tags. A permissive rule can grant
-clearance even if a more specific rule would not:
-
-```typescript
-export const sheriffConfig: SheriffConfig = {
-  modules: {
-    'src/domain': ['domain:booking', 'type:domain'],
-    'src/shared': ['shared'],
-  },
-  depRules: {
-    '*': 'shared',
-    'domain:*': 'shared',
-    'type:domain': 'type:domain',
-  },
-};
-```
-
-In this configuration, `src/domain` may import `src/shared` because the `*` and
-`domain:*` rules grant access to `shared`. The `type:domain` rule does not make
-the module stricter. `depRules` only grant clearance; they do not subtract it.
-
 ## `denyRules`
 
 Use `denyRules` when a tag must restrict dependencies even if `depRules` would
@@ -510,3 +479,42 @@ export const sheriffConfig: SheriffConfig = {
   },
 };
 ```
+
+### How Multiple `depRules` Match
+
+When Sheriff checks an import, every source tag of the importing module must
+have clearance. Source tags are therefore combined with AND.
+
+For a single source tag, however, multiple `depRules` keys can match. Sheriff
+evaluates all matching keys until a rule value returns `true`; those matches are
+combined with OR, and the first `true` wins. Target tags are also checked as
+alternatives: a source tag has clearance when it can access any tag of the
+imported module.
+
+This matters for modules with several tags. A permissive wildcard rule can grant
+clearance even if a more specific rule would not:
+
+```typescript
+import { noDependencies, SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const sheriffConfig: SheriffConfig = {
+  modules: {
+    'src/domain': ['domain:booking', 'type:domain'],
+    'src/shared': ['shared'],
+  },
+  depRules: {
+    '*': 'shared',
+    'domain:*': 'shared',
+    'type:domain': noDependencies,
+  },
+};
+```
+
+In this configuration, `src/domain` may import `src/shared`. The `domain:booking`
+source tag has clearance through `*` and `domain:*`. The `type:domain` source tag
+also has clearance because `*` matches it and allows `shared`; `noDependencies`
+does not make the module stricter because `depRules` only grant clearance, they
+do not subtract it.
+
+Use [`denyRules`](#denyrules) when a tag must veto dependencies that another
+matching `depRules` key would allow.

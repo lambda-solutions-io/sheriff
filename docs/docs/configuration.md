@@ -42,6 +42,28 @@ export const config: SheriffConfig = {
 
 `exports` is only needed when a barrel-less module should expose a smaller public API than "everything except `internal`". The patterns are matched against paths relative to the module folder. If `exports` is omitted, existing barrel-less behavior is unchanged; if it is an empty array, no files are public outside the module.
 
+### `exports` {#exports}
+
+- **Type**: `string[]`
+- **Default**: `undefined`
+- **Description**: Defines the public files of one barrel-less module when that module uses the object form in `modules`.
+
+```typescript
+export const config: SheriffConfig = {
+  modules: {
+    'domains/booking/api': {
+      tags: ['type:api', 'port'],
+      exports: ['*.port.ts', 'public-*.ts'],
+    },
+  },
+};
+```
+
+`exports` patterns are matched against paths relative to the module folder.
+Without `exports`, barrel-less modules keep the default behavior: every file is
+public except files below the configured encapsulation folder. With
+`exports: []`, no files are public outside the module.
+
 ### `depRules` {#deprules}
 
 - **Type**: `DependencyRulesConfig`
@@ -136,7 +158,7 @@ These options have sensible defaults and are typically only customized for speci
   }
   ```
 
-### configs {#configs}
+### `configs` {#configs}
 
 - **Type**: `Record<string, string>`
 - **Default**: `{}`
