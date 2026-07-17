@@ -5,7 +5,10 @@ import { Configuration } from '../config/configuration';
 import { isModuleDefinition, ModuleConfig } from '../config/module-config';
 import getFs from '../fs/getFs';
 import { PLACE_HOLDER_REGEX } from '../tags/calc-tags-for-module';
-import { wildcardToRegex } from '../util/wildcard-to-regex';
+import {
+  matchesFolderPathPattern,
+  normalizePathSeparators,
+} from './internal/segment-pattern';
 
 export interface ModulePathInfo {
   /**
@@ -62,11 +65,13 @@ function findExportsForModulePath(
   moduleConfig: ModuleConfig,
 ): string[] | undefined {
   const fs = getFs();
-  const relativeModulePath = fs.relativeTo(rootDir, modulePath);
+  const relativeModulePath = normalizePathSeparators(
+    fs.relativeTo(rootDir, modulePath),
+  );
 
   return flattenModuleExports(moduleConfig)
-    .filter(({ path }) => wildcardToRegex(path).test(relativeModulePath))
-    .sort((left, right) => right.path.length - left.path.length)
+    .filter(({ path }) => matchesFolderPathPattern(path, relativeModulePath))
+    .sort((left, right) => getSpecificity(right) - getSpecificity(left))
     .at(0)?.exports;
 }
 
@@ -94,4 +99,10 @@ function flattenModuleExports(
   }
 
   return flattened;
+}
+
+function getSpecificity(moduleExport: { path: string }): number {
+  const segments = normalizePathSeparators(moduleExport.path).split('/');
+  const staticSegments = segments.filter((segment) => !segment.includes('*'));
+  return segments.length * 100 + staticSegments.length;
 }

@@ -208,6 +208,209 @@ describe('module exports', () => {
         ),
       ).toEqual(['../api/secret.ts']);
     });
+
+    it('should not let root-level file patterns match nested files', () => {
+      const projectInfo = testInit('src/main.ts', {
+        'tsconfig.json': tsConfig(),
+        'sheriff.config.ts': sheriffConfig({
+          modules: {
+            'src/booking/api': {
+              tags: ['type:api'],
+              exports: ['*.port.ts'],
+            },
+            'src/booking/feature': ['type:feature'],
+          },
+          depRules: { '*': '*' },
+          enableBarrelLess: true,
+        } as UserSheriffConfig),
+        src: {
+          'main.ts': ['./booking/feature/booking.ts'],
+          booking: {
+            api: {
+              'booking.port.ts': [],
+              admin: {
+                'admin.port.ts': [],
+              },
+            },
+            feature: {
+              'booking.ts': [
+                '../api/booking.port.ts',
+                '../api/admin/admin.port.ts',
+              ],
+            },
+          },
+        },
+      });
+
+      expect(
+        Object.keys(
+          hasEncapsulationViolations(
+            toFsPath('/project/src/booking/feature/booking.ts'),
+            projectInfo,
+          ),
+        ),
+      ).toEqual(['../api/admin/admin.port.ts']);
+    });
+
+    it('should match an explicit one-level subfolder export pattern', () => {
+      const projectInfo = testInit('src/main.ts', {
+        'tsconfig.json': tsConfig(),
+        'sheriff.config.ts': sheriffConfig({
+          modules: {
+            'src/booking/api': {
+              tags: ['type:api'],
+              exports: ['sub/*.ts'],
+            },
+            'src/booking/feature': ['type:feature'],
+          },
+          depRules: { '*': '*' },
+          enableBarrelLess: true,
+        } as UserSheriffConfig),
+        src: {
+          'main.ts': ['./booking/feature/booking.ts'],
+          booking: {
+            api: {
+              sub: {
+                'public.ts': [],
+                deep: {
+                  'private.ts': [],
+                },
+              },
+            },
+            feature: {
+              'booking.ts': [
+                '../api/sub/public.ts',
+                '../api/sub/deep/private.ts',
+              ],
+            },
+          },
+        },
+      });
+
+      expect(
+        Object.keys(
+          hasEncapsulationViolations(
+            toFsPath('/project/src/booking/feature/booking.ts'),
+            projectInfo,
+          ),
+        ),
+      ).toEqual(['../api/sub/deep/private.ts']);
+    });
+
+    it('should let exports override the default internal folder convention', () => {
+      const projectInfo = testInit('src/main.ts', {
+        'tsconfig.json': tsConfig(),
+        'sheriff.config.ts': sheriffConfig({
+          modules: {
+            'src/booking/api': {
+              tags: ['type:api'],
+              exports: ['internal/public.ts'],
+            },
+            'src/booking/feature': ['type:feature'],
+          },
+          depRules: { '*': '*' },
+          enableBarrelLess: true,
+        } as UserSheriffConfig),
+        src: {
+          'main.ts': ['./booking/feature/booking.ts'],
+          booking: {
+            api: {
+              internal: {
+                'public.ts': [],
+              },
+            },
+            feature: {
+              'booking.ts': ['../api/internal/public.ts'],
+            },
+          },
+        },
+      });
+
+      expect(
+        Object.keys(
+          hasEncapsulationViolations(
+            toFsPath('/project/src/booking/feature/booking.ts'),
+            projectInfo,
+          ),
+        ),
+      ).toEqual([]);
+    });
+  });
+
+  describe('exports are attached to the matched module key only', () => {
+    it('should not inherit exports from a shallower wildcard module key', () => {
+      const projectInfo = testInit('src/main.ts', {
+        'tsconfig.json': tsConfig(),
+        'sheriff.config.ts': sheriffConfig({
+          modules: {
+            'src/*': { tags: ['type:parent'], exports: ['a.ts'] },
+            'src/*/b': ['type:child'],
+            'app/feature': ['type:feature'],
+          },
+          depRules: { '*': '*' },
+          enableBarrelLess: true,
+        } as UserSheriffConfig),
+        src: {
+          'main.ts': ['../app/feature/use.ts'],
+          x: {
+            b: {
+              'c.ts': [],
+            },
+          },
+        },
+        app: {
+          feature: {
+            'use.ts': ['../../src/x/b/c.ts'],
+          },
+        },
+      });
+
+      expect(
+        Object.keys(
+          hasEncapsulationViolations(
+            toFsPath('/project/app/feature/use.ts'),
+            projectInfo,
+          ),
+        ),
+      ).toEqual([]);
+    });
+
+    it('should not inherit exports from a shallower placeholder module key', () => {
+      const projectInfo = testInit('src/main.ts', {
+        'tsconfig.json': tsConfig(),
+        'sheriff.config.ts': sheriffConfig({
+          modules: {
+            'src/<domain>': { tags: ['type:parent'], exports: ['a.ts'] },
+            'src/<domain>/b': ['type:child'],
+            'app/feature': ['type:feature'],
+          },
+          depRules: { '*': '*' },
+          enableBarrelLess: true,
+        } as UserSheriffConfig),
+        src: {
+          'main.ts': ['../app/feature/use.ts'],
+          x: {
+            b: {
+              'c.ts': [],
+            },
+          },
+        },
+        app: {
+          feature: {
+            'use.ts': ['../../src/x/b/c.ts'],
+          },
+        },
+      });
+
+      expect(
+        Object.keys(
+          hasEncapsulationViolations(
+            toFsPath('/project/app/feature/use.ts'),
+            projectInfo,
+          ),
+        ),
+      ).toEqual([]);
+    });
   });
 
   describe('exports does not apply within the same module', () => {

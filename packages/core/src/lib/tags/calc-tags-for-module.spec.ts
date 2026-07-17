@@ -438,4 +438,18 @@ describe('calc tags for module', () => {
       }),
     ).toEqual(['domain:holidays', 'type:data']);
   });
+
+  it('should treat tags plus another key as a nested module config', () => {
+    const rootDir = '/project' as FsPath;
+    const moduleDir = '/project/src/app/tags' as FsPath;
+
+    expect(
+      calcTagsForModule(moduleDir, rootDir, {
+        'src/app': {
+          tags: ['literal-tags-folder'],
+          api: ['api'],
+        },
+      }),
+    ).toEqual(['literal-tags-folder']);
+  });
 });
