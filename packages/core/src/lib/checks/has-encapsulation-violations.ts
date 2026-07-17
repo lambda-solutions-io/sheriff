@@ -3,6 +3,7 @@ import { Configuration } from '../config/configuration';
 import { ProjectInfo } from '../main/init';
 import { FileInfo } from '../modules/file.info';
 import getFs from '../fs/getFs';
+import { wildcardToRegex } from '../util/wildcard-to-regex';
 
 /**
  * verifies if an existing file has imports which break
@@ -58,11 +59,17 @@ function accessesExposedFileForBarrelLessModules(
 
   const relativePath = fs.relativeTo(fileInfo.moduleInfo.path, fileInfo.path);
 
+  if (fileInfo.moduleInfo.exportedFilePatterns !== undefined) {
+    return fileInfo.moduleInfo.exportedFilePatterns.some((exportPattern) =>
+      wildcardToRegex(exportPattern).test(relativePath),
+    );
+  }
+
   if (typeof encapsulationPattern === 'string') {
     return !relativePath.startsWith(encapsulationPattern);
   } else {
     const matches = relativePath.match(encapsulationPattern);
-    return !matches
+    return !matches;
   }
 }
 

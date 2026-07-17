@@ -1,4 +1,4 @@
-import { ModuleConfig } from '../../config/module-config';
+import { isModuleDefinition, ModuleConfig } from '../../config/module-config';
 import { PLACE_HOLDER_REGEX } from "../../tags/calc-tags-for-module";
 
 export function flattenModules(tagging: ModuleConfig, prefix = ''): string[] {
@@ -7,6 +7,7 @@ export function flattenModules(tagging: ModuleConfig, prefix = ''): string[] {
     const path = rawPath.replace(PLACE_HOLDER_REGEX, '*');
     const fullPath = prefix ? `${prefix}/${path}` : path;
     if (
+      isModuleDefinition(value) ||
       typeof value === 'string' ||
       typeof value === 'function' ||
       Array.isArray(value)

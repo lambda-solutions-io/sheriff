@@ -1,6 +1,8 @@
 import {
+  isModuleDefinition,
   MatcherContext,
   ModuleConfig,
+  ModuleDefinition,
   TagConfigValue,
 } from '../config/module-config';
 import getFs from '../fs/getFs';
@@ -78,7 +80,7 @@ function traverseModuleConfig(
     const value = tagConfig[pathMatcher];
     if (restPaths.length === 0) {
       assertLeafHasTag(value, [...tagConfigPath, pathMatcher]);
-      const tagProperty = value;
+      const tagProperty = isModuleDefinition(value) ? value.tags : value;
       if (typeof tagProperty === 'function') {
         return addToTags(
           tagProperty(placeholders, matcherContext),
@@ -89,7 +91,7 @@ function traverseModuleConfig(
         return addToTags(tagProperty, placeholders, moduleDir);
       }
     } else {
-      if (isTagConfigValue(value)) {
+      if (isModuleLeafValue(value)) {
         /**
          * Nested Module use case. Example:
          *
@@ -119,17 +121,20 @@ function traverseModuleConfig(
   return false;
 }
 
-function isTagConfigValue(
-  value: TagConfigValue | ModuleConfig,
-): value is TagConfigValue {
-  return !(typeof value === 'object' && !Array.isArray(value));
+function isModuleLeafValue(
+  value: TagConfigValue | ModuleDefinition | ModuleConfig,
+): value is TagConfigValue | ModuleDefinition {
+  return (
+    isModuleDefinition(value) ||
+    !(typeof value === 'object' && !Array.isArray(value))
+  );
 }
 
 function assertLeafHasTag(
-  value: TagConfigValue | ModuleConfig,
+  value: TagConfigValue | ModuleDefinition | ModuleConfig,
   tagConfigPath: string[],
-): asserts value is TagConfigValue {
-  if (!isTagConfigValue(value)) {
+): asserts value is TagConfigValue | ModuleDefinition {
+  if (!isModuleLeafValue(value)) {
     throw new TagWithoutValueError(tagConfigPath.join('/'));
   }
 }

@@ -27,6 +27,21 @@ These options are required for Sheriff to function properly. You need to underst
 - **Type**: `ModuleConfig`
 - **Description**: Defines the modules and assigns tags. This is the primary way to structure your project. If you don't define modules, you must enable `autoTagging` for Sheriff to work. See [Module Boundaries](./module_boundaries.md) for detailed examples.
 
+Module values can be a tag string, a tag array, a tag matcher function, or an explicit module definition with `tags` and optional file-level `exports`.
+
+```typescript
+export const config: SheriffConfig = {
+  modules: {
+    'domains/booking/api': {
+      tags: ['type:api', 'port'],
+      exports: ['*.port.ts'],
+    },
+  },
+};
+```
+
+`exports` is only needed when a barrel-less module should expose a smaller public API than "everything except `internal`". The patterns are matched against paths relative to the module folder. If `exports` is omitted, existing barrel-less behavior is unchanged; if it is an empty array, no files are public outside the module.
+
 ### `depRules` {#deprules}
 
 - **Type**: `DependencyRulesConfig`

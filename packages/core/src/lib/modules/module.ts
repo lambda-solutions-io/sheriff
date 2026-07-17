@@ -11,6 +11,14 @@ import getFs from '../fs/getFs';
 export class Module {
   readonly fileInfos: FileInfo[] = [];
 
+  /**
+   * Module-relative file patterns that are importable from outside this module.
+   *
+   * `undefined` keeps the historical behavior: barrel-less modules expose every
+   * file except those matching the configured encapsulation pattern.
+   */
+  exportedFilePatterns?: string[];
+
   constructor(
     public readonly path: FsPath,
     private readonly fileInfoMap: Map<FsPath, FileInfo>,

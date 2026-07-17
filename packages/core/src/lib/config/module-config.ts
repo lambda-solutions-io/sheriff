@@ -63,3 +63,20 @@ export interface ModuleDefinition {
 export interface ModuleConfig {
   [pathMatcher: string]: TagConfigValue | ModuleDefinition | ModuleConfig;
 }
+
+/**
+ * Checks whether a module config value is an explicit module definition.
+ *
+ * The object form is discriminated by the presence of `tags`; objects without
+ * `tags` are treated as nested {@link ModuleConfig} values.
+ */
+export function isModuleDefinition(
+  value: TagConfigValue | ModuleDefinition | ModuleConfig,
+): value is ModuleDefinition {
+  return (
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    value !== null &&
+    'tags' in value
+  );
+}

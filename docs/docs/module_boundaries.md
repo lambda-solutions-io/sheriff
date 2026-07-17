@@ -57,6 +57,32 @@ However, if `fetcher.ts` accesses `credentials.ts` from `db`, ESLint will show a
 
 <img width="1905" alt="Invalid Import" src="../img/module-boundaries-barrel-less-invalid.png"></img>
 
+### File-level exports
+
+For barrel-less modules, `internal` is a negative rule: files outside the `internal` folder are public. A module can also declare a positive public API with `exports`.
+
+```typescript
+export const config: SheriffConfig = {
+  modules: {
+    'domains/booking/api': {
+      tags: ['type:api', 'port'],
+      exports: ['*.port.ts'],
+    },
+    'domains/booking/feature': ['type:feature'],
+  },
+  enableBarrelLess: true,
+  depRules: {
+    '*': '*',
+  },
+};
+```
+
+With this configuration, files in other modules can import `domains/booking/api/booking.port.ts`, but they cannot import another file in the same module such as `domains/booking/api/http-booking.ts`. Imports inside `domains/booking/api` are still module-internal and are not checked by `exports`.
+
+If `exports` is omitted, the historical barrel-less behavior remains unchanged: every file is public except files matched by the encapsulation pattern (`internal` by default). An empty `exports` array exports nothing. Multiple patterns are alternatives.
+
+This solves a similar problem to `@private` and `@public` decorators, but at file level instead of symbol level. Decorators can be more precise, but Sheriff would need symbol-level AST analysis to enforce them. File-level `exports` is statically cheaper and follows the same module-relative matching model as the existing configuration.
+
 ## Barrel Modules
 
 Barrel modules have an `index.ts` in their root folder. Sheriff detects them automatically, even if `modules` in `sheriff.config.ts` doesn't define them.
