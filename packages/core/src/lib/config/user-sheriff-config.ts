@@ -155,7 +155,10 @@ export interface UserSheriffConfig {
    * file which governs that directory.
    *
    * The most specific (deepest) matching entry wins; files not covered by any
-   * entry keep using the root config.
+   * entry keep using the root config. Sub-config `modules` keys remain
+   * workspace-root-relative. A sub-config's own `configs`, `entryFile`, and
+   * `entryPoints` fields are ignored; only the root config selects configs and
+   * entry points.
    *
    * @example
    * ```typescript

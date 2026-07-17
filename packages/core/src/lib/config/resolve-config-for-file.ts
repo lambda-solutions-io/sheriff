@@ -16,7 +16,19 @@ export const resolveConfigForFile = (
   filePath: FsPath,
   rootDir: FsPath,
   configs: Record<string, string>,
-): string | undefined => {
+): string | undefined =>
+  resolveConfigEntryForFile(filePath, rootDir, configs)?.configPath;
+
+export const resolveConfigEntryForFile = (
+  filePath: FsPath,
+  rootDir: FsPath,
+  configs: Record<string, string>,
+):
+  | {
+      directory: string;
+      configPath: string;
+    }
+  | undefined => {
   const fs = getFs();
   const relativeFileSegments = getRelativeSegments(filePath, rootDir);
 
@@ -25,14 +37,25 @@ export const resolveConfigForFile = (
   }
 
   return Object.entries(configs)
-    .map(([directory, configPath]) => ({
-      configPath,
-      directorySegments: fs.isAbsolute(directory)
+    .map(([directory, configPath]) => {
+      const directorySegments = fs.isAbsolute(directory)
         ? undefined
-        : getRelativeSegments(fs.join(rootDir, directory), rootDir),
-    }))
+        : getRelativeSegments(fs.join(rootDir, directory), rootDir);
+
+      return {
+        directory,
+        configPath,
+        directorySegments,
+      };
+    })
     .filter(
-      (entry): entry is { configPath: string; directorySegments: string[] } =>
+      (
+        entry,
+      ): entry is {
+        directory: string;
+        configPath: string;
+        directorySegments: string[];
+      } =>
         entry.directorySegments !== undefined &&
         entry.directorySegments.length > 0 &&
         entry.directorySegments.every(
@@ -43,7 +66,7 @@ export const resolveConfigForFile = (
       (left, right) =>
         right.directorySegments.length - left.directorySegments.length,
     )
-    .at(0)?.configPath;
+    .at(0);
 };
 
 function getRelativeSegments(

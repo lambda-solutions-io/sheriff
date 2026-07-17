@@ -3,6 +3,7 @@ import { parseConfig } from '../parse-config';
 import { toFsPath } from '../../file-info/fs-path';
 import getFs, { useVirtualFs } from '../../fs/getFs';
 import '../../test/expect.extensions';
+import { InvalidConfigsDirectoryError } from '../../error/user-error';
 
 /**
  * Task 4, option B: a `configs` field in the root config maps a
@@ -81,5 +82,45 @@ export const config: SheriffConfig = {
       'apps/hexagonal-demo',
       'apps/vertical-demo',
     ]);
+  });
+
+  it('should throw for absolute configs directory keys', () => {
+    getFs().writeFile(
+      'sheriff.config.ts',
+      `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  configs: {
+    '/apps/hexagonal-demo': './apps/hexagonal-demo/sheriff.config.ts',
+  },
+  depRules: { 'noTag': 'noTag' },
+};
+      `,
+    );
+
+    expect(() =>
+      parseConfig(toFsPath(getFs().cwd() + '/sheriff.config.ts')),
+    ).toThrowUserError(new InvalidConfigsDirectoryError('/apps/hexagonal-demo'));
+  });
+
+  it('should throw for configs directory keys escaping the workspace root', () => {
+    getFs().writeFile(
+      'sheriff.config.ts',
+      `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  configs: {
+    '../hexagonal-demo': './apps/hexagonal-demo/sheriff.config.ts',
+  },
+  depRules: { 'noTag': 'noTag' },
+};
+      `,
+    );
+
+    expect(() =>
+      parseConfig(toFsPath(getFs().cwd() + '/sheriff.config.ts')),
+    ).toThrowUserError(new InvalidConfigsDirectoryError('../hexagonal-demo'));
   });
 });

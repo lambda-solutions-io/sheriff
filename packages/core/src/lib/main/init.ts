@@ -9,7 +9,8 @@ import { ParsedResult, parseProject } from './parse-project';
 import { initialized } from './internal/initialized';
 import { callbacks } from './internal/callback';
 import { defaultConfig } from '../config/default-config';
-import { resolveConfigForFile } from '../config/resolve-config-for-file';
+import { resolveConfigEntryForFile } from '../config/resolve-config-for-file';
+import { SheriffConfigNotFoundError } from '../error/user-error';
 
 let config: Configuration | undefined;
 
@@ -116,28 +117,23 @@ type ResolvedConfig = {
 };
 
 function getConfig(entryFile: FsPath, rootPath: FsPath): ResolvedConfig {
-  const fs = getFs();
   const configFile = findConfig(rootPath);
   if (configFile) {
     const rootConfig = parseConfig(configFile);
-    const selectedConfigPath = resolveConfigForFile(
+    const selectedConfig = resolveConfigEntryForFile(
       entryFile,
       rootPath,
       rootConfig.configs,
     );
-    const selectedConfigFile = selectedConfigPath
-      ? toFsPath(
-          fs.isAbsolute(selectedConfigPath)
-            ? selectedConfigPath
-            : fs.join(rootPath, selectedConfigPath),
-        )
+    const selectedConfigFile = selectedConfig
+      ? resolveSelectedConfigFile(rootPath, selectedConfig)
       : configFile;
 
     return {
       config:
         selectedConfigFile === configFile
           ? rootConfig
-          : parseConfig(selectedConfigFile),
+          : parseConfig(selectedConfigFile, { validateConfigs: false }),
       configFilePath: selectedConfigFile,
       usesMultipleConfigs: Object.keys(rootConfig.configs).length > 0,
     };
@@ -147,4 +143,23 @@ function getConfig(entryFile: FsPath, rootPath: FsPath): ResolvedConfig {
     config: { ...defaultConfig, isConfigFileMissing: true },
     usesMultipleConfigs: false,
   };
+}
+
+function resolveSelectedConfigFile(
+  rootPath: FsPath,
+  selectedConfig: { directory: string; configPath: string },
+): FsPath {
+  const fs = getFs();
+  const selectedConfigFile = fs.isAbsolute(selectedConfig.configPath)
+    ? selectedConfig.configPath
+    : fs.join(rootPath, selectedConfig.configPath);
+
+  if (!fs.exists(selectedConfigFile)) {
+    throw new SheriffConfigNotFoundError(
+      selectedConfig.directory,
+      selectedConfig.configPath,
+    );
+  }
+
+  return toFsPath(selectedConfigFile);
 }

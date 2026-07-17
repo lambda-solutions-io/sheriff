@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 import { init } from './init';
 import { toFsPath } from '../file-info/fs-path';
 import { sheriffConfig } from '../test/project-configurator';
+import { SheriffConfigNotFoundError } from '../error/user-error';
+import '../test/expect.extensions';
 
 describe('init', () => {
   it('should return config is no file present', () => {
@@ -47,5 +49,33 @@ describe('init', () => {
       returnOnMissingConfig: true,
     });
     expect(projectInfo).toBeUndefined();
+  });
+
+  it('should throw a UserError when a selected configs file is missing', () => {
+    createProject({
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': sheriffConfig({
+        configs: {
+          'apps/demo': './apps/demo/sheriff.config.ts',
+        },
+        depRules: {},
+      }),
+      apps: {
+        demo: {
+          src: {
+            'main.ts': [],
+          },
+        },
+      },
+    });
+
+    expect(() =>
+      init(toFsPath('/project/apps/demo/src/main.ts'), { traverse: true }),
+    ).toThrowUserError(
+      new SheriffConfigNotFoundError(
+        'apps/demo',
+        './apps/demo/sheriff.config.ts',
+      ),
+    );
   });
 });
