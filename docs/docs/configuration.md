@@ -32,6 +32,30 @@ These options are required for Sheriff to function properly. You need to underst
 - **Type**: `DependencyRulesConfig`
 - **Description**: Defines dependency rules between modules. Even with defaults, you should understand how this affects your project structure. See [Dependency Rules](./dependency-rules.md) for detailed examples.
 
+### `denyRules` {#denyrules}
+
+- **Type**: `DependencyRulesConfig`
+- **Default**: `{}`
+- **Description**: Defines dependency rules that forbid imports even when `depRules` would otherwise allow them. Sheriff evaluates `denyRules` after `depRules`; a matching deny rule wins over clearance from `depRules`.
+
+```typescript
+export const config: SheriffConfig = {
+  modules: {
+    'src/domain': ['domain:booking', 'type:domain'],
+    'src/shared': ['shared'],
+  },
+  depRules: {
+    '*': 'shared',
+    'type:domain': 'type:domain',
+  },
+  denyRules: {
+    'type:domain': ({ to }) => to !== 'type:domain',
+  },
+};
+```
+
+`denyRules` never grant access. If no deny rule matches, the `depRules` result stands. A tag without a `denyRules` entry is normal and does not raise a missing-rule error.
+
 ## Optional Options
 
 These options have sensible defaults and are typically only customized for specific use cases.

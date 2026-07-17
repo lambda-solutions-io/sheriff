@@ -2,6 +2,7 @@ import {
   DependencyCheckContext,
   DependencyRulesConfig,
 } from '../config/dependency-rules-config';
+import { wildcardToRegex } from '../util/wildcard-to-regex';
 
 /**
  * Returns `true` if a `denyRule` forbids the dependency.
@@ -10,13 +11,41 @@ import {
  * never raises `NoDependencyRuleForTagError`. A `denyRules` hit always wins
  * over any `depRules` match — deny beats allow.
  *
- * TODO: not implemented yet — see task 1. This is a signature-only stub so
- * that the specs fail on their assertions instead of on a missing module.
+ * `denyRules` keys are OR-combined: any matching key can deny the dependency.
  */
 export const isDependencyDenied = (
-  _from: string,
-  _config: DependencyRulesConfig,
-  _context: DependencyCheckContext,
+  from: string,
+  config: DependencyRulesConfig,
+  context: DependencyCheckContext,
 ): boolean => {
+  for (const tag in config) {
+    if (!from.match(wildcardToRegex(tag))) {
+      continue;
+    }
+
+    for (const to of context.toTags) {
+      const value = config[tag];
+      const matchers = Array.isArray(value) ? value : [value];
+
+      for (const matcher of matchers) {
+        if (
+          typeof matcher === 'string' &&
+          to.match(wildcardToRegex(matcher))
+        ) {
+          return true;
+        } else if (
+          typeof matcher === 'function' &&
+          matcher({
+            ...context,
+            from,
+            to,
+          })
+        ) {
+          return true;
+        }
+      }
+    }
+  }
+
   return false;
 };

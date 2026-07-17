@@ -5,6 +5,7 @@ displayed_sidebar: tutorialSidebar
 ---
 
 ## Introduction
+
 Dependency rules determine which modules can access each other. Since managing dependencies on a per-module basis doesn't scale well, Sheriff utilizes tags to group modules together. Dependency rules are then defined based on these tags.
 
 Each tag specifies a list of other tags it can access. To maintain clarity, it’s best practice to categorize tags into
@@ -362,6 +363,70 @@ export const sheriffConfig: SheriffConfig = {
   },
 };
 ```
+
+### How Multiple `depRules` Match
+
+When Sheriff checks an import, every source tag of the importing module must
+have clearance. Source tags are therefore combined with AND.
+
+For a single source tag, however, multiple `depRules` keys can match. Those keys
+are combined with OR, and the first matching rule value that grants clearance
+wins. Target tags are also checked as alternatives: a source tag has clearance
+when it can access any tag of the imported module.
+
+This matters for modules with several tags. A permissive rule can grant
+clearance even if a more specific rule would not:
+
+```typescript
+export const sheriffConfig: SheriffConfig = {
+  modules: {
+    'src/domain': ['domain:booking', 'type:domain'],
+    'src/shared': ['shared'],
+  },
+  depRules: {
+    '*': 'shared',
+    'domain:*': 'shared',
+    'type:domain': 'type:domain',
+  },
+};
+```
+
+In this configuration, `src/domain` may import `src/shared` because the `*` and
+`domain:*` rules grant access to `shared`. The `type:domain` rule does not make
+the module stricter. `depRules` only grant clearance; they do not subtract it.
+
+## `denyRules`
+
+Use `denyRules` when a tag must restrict dependencies even if `depRules` would
+otherwise allow them. Sheriff evaluates `denyRules` after `depRules`, and a
+matching deny rule always wins over an allow rule.
+
+```typescript
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const sheriffConfig: SheriffConfig = {
+  modules: {
+    'src/domain': ['domain:booking', 'type:domain'],
+    'src/shared': ['shared'],
+  },
+  depRules: {
+    '*': 'shared',
+    'domain:*': 'shared',
+    'type:domain': 'type:domain',
+  },
+  denyRules: {
+    'type:domain': ({ to }) => to !== 'type:domain',
+  },
+};
+```
+
+With this configuration, `src/domain` cannot import `src/shared`. The dependency
+first receives clearance from `depRules`, then `denyRules` rejects it because the
+importing module has `type:domain` and the target does not.
+
+`denyRules` do not grant access. If `depRules` do not allow an import,
+`denyRules` cannot make it valid. A source tag without a matching `denyRules`
+entry is normal and does not raise a missing-rule error.
 
 ## `depRules` Functions & Wildcards
 

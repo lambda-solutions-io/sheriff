@@ -70,10 +70,14 @@ function formatViolation(
   violation: DependencyRuleViolation,
   rootDir: FsPath,
 ): string {
-  const { fromModulePath, toModulePath, fromTag, toTags } = violation;
-  return `module ${fromModulePath.substring(
+  const { fromModulePath, toModulePath } = violation;
+  const prefix = `module ${fromModulePath.substring(
     rootDir.length,
-  )} cannot access ${toModulePath.substring(
-    rootDir.length,
-  )}. Tag ${fromTag} has no clearance for tags ${toTags.join(', ')}`;
+  )} cannot access ${toModulePath.substring(rootDir.length)}.`;
+
+  if (violation.cause === 'deny-rule') {
+    return `${prefix} Tag ${violation.fromTag} is denied by denyRules for tags ${violation.toTags.join(', ')}`;
+  }
+
+  return `${prefix} Tag ${violation.fromTag} has no clearance for tags ${violation.toTags.join(', ')}`;
 }

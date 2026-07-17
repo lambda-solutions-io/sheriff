@@ -78,8 +78,7 @@ export function verify(args: string[]) {
         hasAnyProjectError = true;
 
         const dependencyRules = dependencyRuleViolations.map(
-          (violation) =>
-            `from tag ${violation.fromTag} to tags ${violation.toTags.join(', ')}`,
+          formatDependencyRuleViolation,
         );
 
         const relativePath = fs.relativeTo(fs.cwd(), fileInfo.path);
@@ -155,4 +154,14 @@ export function verify(args: string[]) {
     }
     cli.endProcessOk();
   }
+}
+
+function formatDependencyRuleViolation(
+  violation: DependencyRuleViolation,
+): string {
+  if (violation.cause === 'deny-rule') {
+    return `denyRules denied from tag ${violation.fromTag} to tags ${violation.toTags.join(', ')}`;
+  }
+
+  return `from tag ${violation.fromTag} to tags ${violation.toTags.join(', ')}`;
 }
