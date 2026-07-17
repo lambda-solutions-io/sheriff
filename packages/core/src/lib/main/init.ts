@@ -9,12 +9,17 @@ import { ParsedResult, parseProject } from './parse-project';
 import { initialized } from './internal/initialized';
 import { callbacks } from './internal/callback';
 import { defaultConfig } from '../config/default-config';
+import { resolveConfigForFile } from '../config/resolve-config-for-file';
 
 let config: Configuration | undefined;
 
 export type ProjectInfo = {
   tsData: TsData;
   config: Configuration;
+  /** The config file selected for this project's entry file. */
+  configFilePath?: FsPath;
+  /** Whether the root config declares additional per-directory configs. */
+  usesMultipleConfigs: boolean;
 } & ParsedResult;
 
 /**
@@ -64,7 +69,10 @@ export function init<Options extends { returnOnMissingConfig: true }>(
 
 export function init(entryFile: FsPath, options: InitOptions): ProjectInfo;
 
-export function init(entryFile: FsPath, options: InitOptions = {}) {
+export function init(
+  entryFile: FsPath,
+  options: InitOptions = {},
+): ProjectInfo | undefined {
   const fullOptions = {
     ...{ traverse: true, returnOnMissingConfig: false },
     ...options,
@@ -74,7 +82,8 @@ export function init(entryFile: FsPath, options: InitOptions = {}) {
     fs.findNearestParentFile(entryFile, 'tsconfig.json'),
   );
   const tsData = generateTsData(tsConfigPath);
-  config = getConfig(tsData.rootDir);
+  const resolvedConfig = getConfig(entryFile, tsData.rootDir);
+  config = resolvedConfig.config;
 
   initialized.status = true;
   for (const callback of callbacks) {
@@ -87,7 +96,9 @@ export function init(entryFile: FsPath, options: InitOptions = {}) {
 
   return {
     tsData,
-    config,
+    config: resolvedConfig.config,
+    configFilePath: resolvedConfig.configFilePath,
+    usesMultipleConfigs: resolvedConfig.usesMultipleConfigs,
     ...parseProject(
       entryFile,
       fullOptions.traverse,
@@ -98,11 +109,42 @@ export function init(entryFile: FsPath, options: InitOptions = {}) {
   };
 }
 
-function getConfig(rootPath: FsPath): Configuration {
+type ResolvedConfig = {
+  config: Configuration;
+  configFilePath?: FsPath;
+  usesMultipleConfigs: boolean;
+};
+
+function getConfig(entryFile: FsPath, rootPath: FsPath): ResolvedConfig {
+  const fs = getFs();
   const configFile = findConfig(rootPath);
   if (configFile) {
-    return parseConfig(configFile);
+    const rootConfig = parseConfig(configFile);
+    const selectedConfigPath = resolveConfigForFile(
+      entryFile,
+      rootPath,
+      rootConfig.configs,
+    );
+    const selectedConfigFile = selectedConfigPath
+      ? toFsPath(
+          fs.isAbsolute(selectedConfigPath)
+            ? selectedConfigPath
+            : fs.join(rootPath, selectedConfigPath),
+        )
+      : configFile;
+
+    return {
+      config:
+        selectedConfigFile === configFile
+          ? rootConfig
+          : parseConfig(selectedConfigFile),
+      configFilePath: selectedConfigFile,
+      usesMultipleConfigs: Object.keys(rootConfig.configs).length > 0,
+    };
   }
 
-  return { ...defaultConfig, isConfigFileMissing: true };
+  return {
+    config: { ...defaultConfig, isConfigFileMissing: true },
+    usesMultipleConfigs: false,
+  };
 }

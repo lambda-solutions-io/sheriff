@@ -15,6 +15,7 @@ import {
   checkForExternalRuleViolation,
   ExternalRuleViolation,
 } from '../checks/check-for-external-rule-violation';
+import { ProjectInfo } from '../main/init';
 
 type ValidationsMap = Record<
   string,
@@ -118,11 +119,15 @@ export function verify(args: string[]) {
 
   // Process each project's validation results
   for (const [projectName, validation] of projectValidations.entries()) {
+    const projectInfo = projectEntries.find(
+      (entry) => entry.projectName === projectName,
+    )!.projectInfo;
     cli.log('');
     if (projectName !== DEFAULT_PROJECT_NAME) {
       cli.log(cli.bold(`Project: ${projectName}`));
       cli.log('');
     }
+    logAppliedConfig(projectInfo);
 
     if (validation.hasError) {
       cli.log('Issues found:');
@@ -190,6 +195,19 @@ export function verify(args: string[]) {
     }
     cli.endProcessOk();
   }
+}
+
+function logAppliedConfig(projectInfo: ProjectInfo): void {
+  if (!projectInfo.usesMultipleConfigs || !projectInfo.configFilePath) {
+    return;
+  }
+
+  const configPath = getFs().relativeTo(
+    projectInfo.rootDir,
+    projectInfo.configFilePath,
+  );
+  cli.log(`Config: ${configPath}`);
+  cli.log('');
 }
 
 function formatExternalRuleViolation(violation: ExternalRuleViolation): string {

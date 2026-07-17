@@ -136,6 +136,49 @@ These options have sensible defaults and are typically only customized for speci
   }
   ```
 
+### configs {#configs}
+
+- **Type**: `Record<string, string>`
+- **Default**: `{}`
+- **Description**: Selects an additional Sheriff config for an explicitly
+  mapped workspace directory. This opt-in model keeps existing workspaces
+  unchanged, even if nested `sheriff.config.ts` files already exist.
+
+The keys are workspace-relative directories and the values are config paths,
+relative to the workspace root or absolute. Matching happens at directory
+boundaries, so `apps/a` does not match `apps/ab`. If mappings overlap, the
+deepest matching directory wins. Files outside all mappings use the root
+config.
+
+```typescript
+export const config: SheriffConfig = {
+  entryPoints: {
+    hexagonal: './apps/hexagonal-demo/src/main.ts',
+    vertical: './apps/vertical-demo/src/main.ts',
+  },
+  configs: {
+    'apps/hexagonal-demo': './apps/hexagonal-demo/sheriff.config.ts',
+    'apps/vertical-demo': './apps/vertical-demo/sheriff.config.ts',
+  },
+  modules: {
+    // Modules outside the mapped applications use this root config.
+  },
+  depRules: {},
+};
+```
+
+Sheriff resolves the config after finding the root config and before parsing
+an entry point. ESLint therefore resolves it independently for every linted
+file. The CLI resolves it independently for every `entryPoints` value and
+prints the selected config in `list` and `verify` output when `configs` is in
+use.
+
+An import graph initialized from one entry point currently keeps that entry
+point's config for the complete traversal. Use separate `entryPoints` for
+architectures with separate configs. Applying different configs inside one
+cross-boundary traversal requires a future mixed-config project graph; this is
+tracked on the roadmap.
+
 ### Other Options
 
 #### `autoTagging` {#autotagging}

@@ -1,4 +1,5 @@
 import { FsPath } from '../file-info/fs-path';
+import getFs from '../fs/getFs';
 
 /**
  * Resolves which config file governs `filePath`, given the root config's
@@ -10,14 +11,54 @@ import { FsPath } from '../file-info/fs-path';
  * @param filePath the file to resolve the config for
  * @param rootDir the workspace root
  * @param configs the root config's `configs` field
- *
- * TODO: not implemented yet — see task 4. This is a signature-only stub so
- * that the specs fail on their assertions instead of on a missing module.
  */
 export const resolveConfigForFile = (
-  _filePath: FsPath,
-  _rootDir: FsPath,
-  _configs: Record<string, string>,
+  filePath: FsPath,
+  rootDir: FsPath,
+  configs: Record<string, string>,
 ): string | undefined => {
-  return undefined;
+  const fs = getFs();
+  const relativeFileSegments = getRelativeSegments(filePath, rootDir);
+
+  if (relativeFileSegments === undefined) {
+    return undefined;
+  }
+
+  return Object.entries(configs)
+    .map(([directory, configPath]) => ({
+      configPath,
+      directorySegments: fs.isAbsolute(directory)
+        ? undefined
+        : getRelativeSegments(fs.join(rootDir, directory), rootDir),
+    }))
+    .filter(
+      (entry): entry is { configPath: string; directorySegments: string[] } =>
+        entry.directorySegments !== undefined &&
+        entry.directorySegments.length > 0 &&
+        entry.directorySegments.every(
+          (segment, index) => relativeFileSegments[index] === segment,
+        ),
+    )
+    .sort(
+      (left, right) =>
+        right.directorySegments.length - left.directorySegments.length,
+    )
+    .at(0)?.configPath;
 };
+
+function getRelativeSegments(
+  path: string,
+  rootDir: FsPath,
+): string[] | undefined {
+  const relativePath = getFs().relativeTo(rootDir, path).replaceAll('\\', '/');
+
+  if (
+    relativePath === '..' ||
+    relativePath.startsWith('../') ||
+    getFs().isAbsolute(relativePath)
+  ) {
+    return undefined;
+  }
+
+  return relativePath.split('/').filter((segment) => segment !== '');
+}

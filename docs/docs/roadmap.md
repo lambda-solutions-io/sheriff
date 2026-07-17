@@ -21,6 +21,7 @@ In order to reach version 1, we plan to add following features
 
 - ESLint for _sheriff.config.ts_: Sheriff should be able to verify if the configuration with tagging and module definition is valid, in that sense if the defined directories actually exist.
 - Config API: Explore ways on how to improve the configuration file. Could be done via providing a fluent API, that provides better type-safety and DX.
+- Mixed-config project graphs: Resolve config, module vocabulary, and rules per file when one import traversal crosses directories mapped by `configs`. Separate entry points already select separate configs.
 - UI: Visualization of the dependencies with live-tracking of the dependency rules' impact.
 - ✅ Excluding third-party libraries: Restrict third-party imports per module tag with `externalRules`.
 - External dependency discovery: Read package manifests as a known dependency universe for rule validation and future warnings about unlisted dependencies.

@@ -26,6 +26,7 @@ export function list(args: string[]) {
       cli.log(cli.bold(`Project: ${projectName}`));
       cli.log('');
     }
+    logAppliedConfig(projectEntry.projectInfo);
     cli.log(`This project contains ${modulesCount} modules:`);
     cli.log('');
 
@@ -40,6 +41,19 @@ export function list(args: string[]) {
     );
     printDirectory(directory);
   }
+}
+
+function logAppliedConfig(projectInfo: ProjectInfo): void {
+  if (!projectInfo.usesMultipleConfigs || !projectInfo.configFilePath) {
+    return;
+  }
+
+  const configPath = getFs().relativeTo(
+    projectInfo.rootDir,
+    projectInfo.configFilePath,
+  );
+  cli.log(`Config: ${configPath}`);
+  cli.log('');
 }
 
 type Directory = Record<
