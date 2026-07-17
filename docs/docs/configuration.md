@@ -40,7 +40,17 @@ export const config: SheriffConfig = {
 };
 ```
 
-`exports` is only needed when a barrel-less module should expose a smaller public API than "everything except `internal`". The patterns are matched against paths relative to the module folder. If `exports` is omitted, existing barrel-less behavior is unchanged; if it is an empty array, no files are public outside the module.
+`exports` is only needed when a barrel-less module should expose a smaller public API than "everything except `internal`". The patterns are matched against paths relative to the module folder. A `*` matches within one path segment only, so `*.port.ts` matches `booking.port.ts` but not `internal/admin.port.ts`; use `internal/*.port.ts` when a subfolder is intentional. If `exports` is omitted, existing barrel-less behavior is unchanged; if it is an empty array, no files are public outside the module.
+
+Because `tags` is also a valid folder name, an object with only `tags` or with `tags` and `exports` is interpreted as an explicit module definition. If a leaf folder is literally named `tags`, express it with a path key or include it in a nested config that also has another child:
+
+```typescript
+export const config: SheriffConfig = {
+  modules: {
+    'src/app/tags': ['type:tags-folder'],
+  },
+};
+```
 
 ### `exports` {#exports}
 
@@ -59,9 +69,14 @@ export const config: SheriffConfig = {
 };
 ```
 
-`exports` patterns are matched against paths relative to the module folder.
+`exports` patterns are matched against paths relative to the module folder. A
+wildcard is segment-local: `*.port.ts` exports `booking.port.ts`, while
+`sub/*.ts` exports `sub/public.ts` but not `sub/deep/public.ts`.
+
 Without `exports`, barrel-less modules keep the default behavior: every file is
-public except files below the configured encapsulation folder. With
+public except files below the configured encapsulation folder. With `exports`,
+the list is the public API and takes precedence over that default convention,
+so `exports: ['internal/public.ts']` intentionally exposes that file. With
 `exports: []`, no files are public outside the module.
 
 ### `depRules` {#deprules}
@@ -170,7 +185,8 @@ The keys are workspace-relative directories and the values are config paths,
 relative to the workspace root or absolute. Matching happens at directory
 boundaries, so `apps/a` does not match `apps/ab`. If mappings overlap, the
 deepest matching directory wins. Files outside all mappings use the root
-config.
+config. Absolute directory keys and keys that escape the workspace root are
+invalid.
 
 ```typescript
 export const config: SheriffConfig = {
@@ -194,6 +210,25 @@ an entry point. ESLint therefore resolves it independently for every linted
 file. The CLI resolves it independently for every `entryPoints` value and
 prints the selected config in `list` and `verify` output when `configs` is in
 use.
+
+Sub-config `modules` keys are still workspace-root-relative, not relative to
+the sub-config file:
+
+```typescript
+// apps/demo/sheriff.config.ts
+export const config: SheriffConfig = {
+  modules: {
+    'apps/demo/src/domain/<domain>': ['domain:<domain>'],
+  },
+  depRules: {
+    '*': '*',
+  },
+};
+```
+
+Only the root config's `configs`, `entryFile`, and `entryPoints` are used for
+selection. The same fields inside a sub-config are ignored after that sub-config
+has been selected.
 
 An import graph initialized from one entry point currently keeps that entry
 point's config for the complete traversal. Use separate `entryPoints` for

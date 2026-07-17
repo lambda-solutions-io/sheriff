@@ -79,7 +79,12 @@ export const config: SheriffConfig = {
 
 With this configuration, files in other modules can import `domains/booking/api/booking.port.ts`, but they cannot import another file in the same module such as `domains/booking/api/http-booking.ts`. Imports inside `domains/booking/api` are still module-internal and are not checked by `exports`.
 
-If `exports` is omitted, the historical barrel-less behavior remains unchanged: every file is public except files matched by the encapsulation pattern (`internal` by default). An empty `exports` array exports nothing. Multiple patterns are alternatives.
+Export patterns are matched against module-relative file paths. A `*` matches
+within one path segment only: `*.port.ts` matches `booking.port.ts`, not
+`internal/admin.port.ts`. To export a file in a subfolder, include that segment
+explicitly, for example `internal/*.port.ts`.
+
+If `exports` is omitted, the historical barrel-less behavior remains unchanged: every file is public except files matched by the encapsulation pattern (`internal` by default). When `exports` is present, it defines the public API and takes precedence over the default `internal` convention, so an explicit pattern such as `internal/public.ts` exposes that file. An empty `exports` array exports nothing. Multiple patterns are alternatives.
 
 This solves a similar problem to `@private` and `@public` decorators, but at file level instead of symbol level. Decorators can be more precise, but Sheriff would need symbol-level AST analysis to enforce them. File-level `exports` is statically cheaper and follows the same module-relative matching model as the existing configuration.
 
