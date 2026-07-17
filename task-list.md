@@ -71,6 +71,27 @@ Der Helfer setzt nur `toTags`; `fromTags` bleibt `[]`. Tests, die `fromTags` bra
 `isDependencyAllowed` direkt mit vollem `createMockDependencyCheckContext({ fromTags, toTags })`
 auf — genau das macht der `describe('fromTags and toTags')`-Block. **Betrifft Task 1.**
 
+**Falle 5 — e2e-Tests brauchen `enableBarrelLess: true`.** *(vom Test-Agenten gefunden, verifiziert)*
+Ohne Barrel oder Barrel-less-Modus landet **jede Datei im impliziten Root-Modul**, und
+`checkForDependencyRuleViolation` überspringt modulinterne Importe
+(`.filter(fi => fi.moduleInfo.path !== …)`). Ein naiver e2e-Test liefert dann `[]` Violations
+und **wird aus dem völlig falschen Grund grün**. Die permissive Basis-Config braucht zusätzlich
+eine `root: '*'`-Regel. Betrifft jeden Test, der über `testInit` einen echten Projektbaum fährt.
+
+**Falle 6 — `project-creator.ts` zerbricht an mehrzeiligen Matchern und `"`.** *(gefunden & gefixt)*
+Ein **bestehender Bug**, nicht durch die neuen Features verursacht: Die `α…ω`-Entpackung ließ die
+von `JSON.stringify` gesetzten Escapes stehen. Verifiziert:
+
+| Matcher-Form | vorher |
+|---|---|
+| einzeilig, `'single quotes'` | ✓ funktionierte |
+| enthält `"double quotes"` | ✗ „Invalid or unexpected token" |
+| **mehrzeilig** (was Prettier erzeugt!) | ✗ „Invalid or unexpected token" |
+
+Bestehende Tests trafen ihn nie, weil sie nur Parameter vergleichen. Der Fix
+(`unescapeJsonString`) ist bereits drin und ist **unabhängig von allen vier Tasks wertvoll** —
+er repariert die Test-Infrastruktur. Kandidat für einen eigenen Upstream-PR (`fix(core): …`).
+
 **Nicht in `*.full-spec.ts` schreiben** — läuft nur in CI (`vitest.config.ci.ts`) und braucht
 gebaute Pakete.
 
@@ -363,11 +384,16 @@ für dasselbe Problemfeld. Der Impl-Agent muss die beiden Ansätze gegeneinander
 die Wahl begründen (Decorators wirken pro Symbol, `exports` pro Datei; letzteres ist statisch
 billiger und braucht keinen AST-Durchgriff auf Symbolebene).
 
-⚠️ `ModuleConfig` erlaubt heute `TagConfigValue | ModuleConfig` pro Key. Ein Objekt mit
-`tags`/`exports` kollidiert potenziell mit dem verschachtelten `ModuleConfig`-Fall. Der
-Impl-Agent muss zuerst prüfen, ob das eindeutig unterscheidbar ist (`SingleTag`/`MultiTags`
-in `module-config.ts` deuten auf eine bereits angedachte Objekt-Form hin) — falls nicht, ist
-ein anderer Schlüsselname nötig. **Diese Prüfung ist Teil der Task.**
+⚠️ **Die Kollision ist real — empirisch bestätigt.** `isTagConfigValue` in
+`tags/calc-tags-for-module.ts` klassifiziert **jedes Nicht-Array-Objekt** als verschachteltes
+`ModuleConfig`. Ein `{ tags, exports }` wirft deshalb heute `TagWithoutValueError`.
+
+Das Design bleibt tragfähig, **aber nur mit einem expliziten Diskriminator**. Der Test-Agent
+hat das in `module-exports.spec.ts` festgenagelt — inklusive Regressions-Wächter, dass ein
+schlichtes verschachteltes `ModuleConfig` weiterhin funktioniert. Angenommene Form:
+`ModuleDefinition = { tags, exports? }`, unterschieden am Vorhandensein von `tags`.
+**Der Impl-Agent muss diesen Diskriminator in `isTagConfigValue` einbauen** — sonst greifen
+die Tests nicht.
 
 ### Outcome
 
@@ -443,6 +469,21 @@ export const config: SheriffConfig = {
 ```
 
 **Empfehlung: B.** v1 ist raus; A würde die Semantik existierender Workspaces still ändern.
+
+### ⚠️ Diese Task ist unterspezifiziert — bewusst
+
+*(bestätigt vom Test-Agenten)* `findConfig(rootDir)` wird in `init.ts` **genau einmal** aufgerufen,
+**bevor** irgendeine Datei bekannt ist. Die Frage „welche Config gilt für diese Datei?" lässt sich
+im aktuellen Aufrufgraph also gar nicht stellen — sie erfordert eine Design-Entscheidung, die
+**der Impl-Agent treffen muss**, nicht diese Liste.
+
+Was deshalb getestet ist: der **Parsing-Vertrag** (`configs.spec.ts` — Regressions-Wächter, grün)
+und ein **eigenständiger Pfadauflösungs-Vertrag** (`resolve-config-for-file.spec.ts` — rot,
+5 Tests). Die `init`-Verdrahtung ist bewusst unberührt.
+
+**Erste Amtshandlung des Impl-Agenten für diese Task:** entscheiden, an welcher Stelle im
+Aufrufgraph die Config pro Datei aufgelöst wird — und das begründen. Ohne diese Entscheidung
+ist Task 4 nicht umsetzbar. Wenn sie zu teuer wird: Task 4 zurückstellen, Task 1–3 liefern.
 
 ### Outcome
 
@@ -535,6 +576,45 @@ wichtigste Entscheidung der Engine dort, wo sie fällt.
 ---
 
 ## Für den Implementierungs-Agenten: wo du anfängst
+
+**Stand: 35 rote Tests, 381 grüne** (`npx vitest run --config vitest.config.ts`, 418 gesamt).
+Alle Fehler sind echte `AssertionError` — keine Compile- oder „cannot find module"-Fehler.
+Die Baseline von 352 Alt-Tests ist unverändert grün.
+
+| Task | Spec-Datei | Tests | rot |
+|---|---|---|---|
+| 1 | `checks/tests/is-dependency-denied.spec.ts` | 19 | 12 |
+| 1 | `checks/tests/deny-rules.spec.ts` (e2e) | 10 | 5 |
+| 2 | `checks/tests/external-rules.spec.ts` | 15 | 7 |
+| 3 | `checks/tests/module-exports.spec.ts` | 9 | 6 |
+| 4 | `config/tests/resolve-config-for-file.spec.ts` | 8 | 5 |
+| 4 | `config/tests/configs.spec.ts` | 3 | 0 (Regressions-Wächter) |
+
+**Die grünen Tests in roten Dateien sind Absicht** — sie sind die eingebaute Mutationsprobe.
+Beispiel: „should allow the import when no denyRules are configured" muss grün bleiben; sie
+beweist, dass die roten Nachbarn wirklich an `denyRules` hängen und nicht an etwas anderem.
+
+**Drei Stub-Dateien** (`is-dependency-denied.ts`, `check-for-external-rule-violation.ts`,
+`resolve-config-for-file.ts`) existieren mit Signatur + JSDoc + `TODO`, aber **ohne Logik**
+(`return false` / `[]` / `undefined`). Sie sind nötig, damit die Specs an ihren Assertions
+scheitern statt an einem fehlenden Modul. **Du ersetzt die Rümpfe.**
+
+Geprüft: Ein trivialer Fake (`return true` statt `false`) macht die Suite **nicht** grün —
+9 Tests scheitern dann weiterhin, nur andere. Die Tests sind nicht überlistbar; nur eine
+echte Implementierung erfüllt sie.
+
+**Angenommene API-Formen** (vom Test-Agenten festgelegt — die Tests hängen daran):
+- `isDependencyDenied(from, config: DependencyRulesConfig, context)` → `boolean`.
+  Spiegelt `isDependencyAllowed`, wirft aber **nie** `NoDependencyRuleForTagError`.
+- `checkForExternalRuleViolation(fsPath, projectInfo)` → `ExternalRuleViolation[]` mit
+  `{ externalLibrary, fromModulePath, fromFilePath, fromTag }`. Wildcard über den vollen
+  Import-String; mehrere Tags AND-verknüpft (ein Veto genügt); `[]` verbietet alles,
+  fehlender Key erlaubt alles.
+- `ModuleDefinition = { tags, exports? }`, unterschieden am Vorhandensein von `tags`.
+- `resolveConfigForFile(filePath, rootDir, configs)` → Config-Pfad oder `undefined`;
+  tiefster Treffer gewinnt, Matching an Segmentgrenzen.
+
+---
 
 Die Tests sind **vor** der Implementierung geschrieben und **rot**. Das ist Absicht, kein Defekt.
 
