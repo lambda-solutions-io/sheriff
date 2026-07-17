@@ -5,6 +5,10 @@ export const config: SheriffConfig = {
     'app-i': 'projects/app-i/src/main.ts',
     'app-ii': 'projects/app-ii/src/main.ts',
   },
+  configs: {
+    'projects/app-i': './projects/app-i/sheriff.config.ts',
+    'projects/app-ii': './projects/app-ii/sheriff.config.ts',
+  },
   enableBarrelLess: true,
   showWarningOnBarrelCollision: false,
   modules: {

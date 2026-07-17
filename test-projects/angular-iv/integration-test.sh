@@ -1,4 +1,6 @@
 set -e
+export NX_DAEMON=false
+export NX_ISOLATE_PLUGINS=false
 yarn
 yalc add @lambda-solutions/sheriff-core @lambda-solutions/eslint-plugin-sheriff
 cd node_modules/.bin # yalc doesn't create symlink in node_modules/.bin
@@ -53,6 +55,24 @@ npx ng lint --force --format json --output-file tests/actual/dependency-rule-lin
 ../remove-paths.mjs tests/actual/dependency-rule-lint.json
 diff tests/actual/dependency-rule-lint.json tests/expected/dependency-rule-lint.json
 mv src/app/customers/ui/customer/customer.component.ts.original src/app/customers/ui/customer/customer.component.ts
+
+## Deny Rule Check
+echo 'checking for deny rule error'
+cp tests/deny-rules.config.ts sheriff.config.ts
+npx sheriff verify src/app/bookings/overview/overview.component.ts > tests/actual/cli-deny-rule.txt || true
+diff tests/actual/cli-deny-rule.txt tests/expected/cli-deny-rule.txt
+cp sheriff.config.ts.original sheriff.config.ts
+
+## File-Level Exports Check
+echo 'checking for file-level exports error'
+cp tests/exports.config.ts sheriff.config.ts
+mv src/app/bookings/overview/overview.component.ts src/app/bookings/overview/overview.component.ts.original
+cp tests/overview.exports.component.ts src/app/bookings/overview/overview.component.ts
+npx ng lint --lint-file-patterns 'src/app/bookings/overview/overview.component.ts' --force --format json --output-file tests/actual/exports-lint.json
+../remove-paths.mjs tests/actual/exports-lint.json
+diff tests/actual/exports-lint.json tests/expected/exports-lint.json
+mv src/app/bookings/overview/overview.component.ts.original src/app/bookings/overview/overview.component.ts
+cp sheriff.config.ts.original sheriff.config.ts
 
 ## External Rule Checks
 echo 'checking for external rule error in CLI verify'
