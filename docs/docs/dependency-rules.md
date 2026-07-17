@@ -428,6 +428,53 @@ importing module has `type:domain` and the target does not.
 `denyRules` cannot make it valid. A source tag without a matching `denyRules`
 entry is normal and does not raise a missing-rule error.
 
+## `externalRules`
+
+`externalRules` restrict imports from external libraries in `node_modules`.
+The keys match the importing module's tags, while each value is an allow-list
+of library patterns:
+
+```typescript
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const sheriffConfig: SheriffConfig = {
+  modules: {
+    'src/domain': ['type:domain'],
+    'src/api': ['type:api'],
+    'src/infra': ['type:infra'],
+  },
+  depRules: {
+    '*': '*',
+  },
+  externalRules: {
+    'type:domain': [],
+    'type:api': ['@angular/core'],
+    'type:infra': ['@angular/*', 'rxjs'],
+  },
+};
+```
+
+Sheriff matches library wildcards against the full import string. An exact
+`@angular/core` pattern therefore does not allow `@angular/core/testing`, while
+`@angular/*` allows both. Rule keys are wildcard-aware as well, so `type:*`
+can govern every type tag.
+
+Every matching restriction must allow the import. This gives modules carrying
+multiple tags AND semantics: if one matching tag allows a library and another
+matching tag rejects it, Sheriff reports the vetoing tag. An empty array
+rejects all external libraries. A tag for which no key matches is unrestricted,
+so omitting `externalRules` preserves the previous behavior.
+
+A matcher function can make the decision from the full external import and the
+importing module context:
+
+```typescript
+externalRules: {
+  'type:api': ({ externalLibrary, from }) =>
+    externalLibrary === '@angular/core' && from === 'type:api',
+}
+```
+
 ## `depRules` Functions & Wildcards
 
 `depRules` allows functions instead of static values. The names of the tags can include wildcards:

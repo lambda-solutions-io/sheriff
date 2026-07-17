@@ -1,0 +1,25 @@
+[
+  {
+    "filePath": "./src/app/customers/api/index.ts",
+    "messages": [
+      {
+        "ruleId": "@lambda-solutions/sheriff/dependency-rule",
+        "severity": 2,
+        "message": "module /src/app/customers/api cannot import external library @angular/core. Tag type:api has no clearance in externalRules",
+        "line": 1,
+        "column": 1,
+        "nodeType": "ImportDeclaration",
+        "endLine": 1,
+        "endColumn": 52
+      }
+    ],
+    "suppressedMessages": [],
+    "errorCount": 1,
+    "fatalErrorCount": 0,
+    "warningCount": 0,
+    "fixableErrorCount": 0,
+    "fixableWarningCount": 0,
+    "source": "import { inject, Injectable } from '@angular/core';\nimport { CustomersRepository } from '../data';\n\n@Injectable({ providedIn: 'root' })\nexport class CustomersApi {\n  repo = inject(CustomersRepository);\n  get selectedCustomer$() {\n    return this.repo.selectedCustomer$;\n  }\n}\n",
+    "usedDeprecatedRules": []
+  }
+]

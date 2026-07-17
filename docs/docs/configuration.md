@@ -56,6 +56,40 @@ export const config: SheriffConfig = {
 
 `denyRules` never grant access. If no deny rule matches, the `depRules` result stands. A tag without a `denyRules` entry is normal and does not raise a missing-rule error.
 
+### `externalRules` {#externalrules}
+
+- **Type**: `Record<string, string[] | ExternalRuleMatcherFn>`
+- **Default**: `{}`
+- **Description**: Restricts imports from external libraries in `node_modules` according to the importing module's tags.
+
+```typescript
+export const config: SheriffConfig = {
+  modules: {
+    'src/domain': ['type:domain'],
+    'src/api': ['type:api'],
+    'src/infra': ['type:infra'],
+  },
+  depRules: {
+    '*': '*',
+  },
+  externalRules: {
+    'type:domain': [],
+    'type:api': ['@angular/core'],
+    'type:infra': ['@angular/*', 'rxjs'],
+  },
+};
+```
+
+Rule keys support wildcards and are matched against source tags. Library
+patterns are matched against the full import string, so `@angular/core` does
+not match `@angular/core/testing`; use `@angular/*` to allow both. When an
+importing module has multiple tags with matching rules, every rule must allow
+the import. One veto is enough to report a violation.
+
+An empty array forbids every external import for the matching tag. A tag with
+no matching key is unrestricted, which keeps configurations without
+`externalRules` unchanged.
+
 ## Optional Options
 
 These options have sensible defaults and are typically only customized for specific use cases.

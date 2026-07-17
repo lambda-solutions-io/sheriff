@@ -22,8 +22,9 @@ In order to reach version 1, we plan to add following features
 - ESLint for _sheriff.config.ts_: Sheriff should be able to verify if the configuration with tagging and module definition is valid, in that sense if the defined directories actually exist.
 - Config API: Explore ways on how to improve the configuration file. Could be done via providing a fluent API, that provides better type-safety and DX.
 - UI: Visualization of the dependencies with live-tracking of the dependency rules' impact.
-- Excluding third-party libraries: Exclude third-party libraries to be used in modules.
+- ✅ Excluding third-party libraries: Restrict third-party imports per module tag with `externalRules`.
+- External dependency discovery: Read package manifests as a known dependency universe for rule validation and future warnings about unlisted dependencies.
 - Nx Interop: Allow Sheriff to consume Nx dependency rules.
-- Quality metrics: Extend Sheriff by adding various quality metrics which run next to the dependency rules. 
+- Quality metrics: Extend Sheriff by adding various quality metrics which run next to the dependency rules.
 - Tutorial/Playground in the Docs: Provide a tutorial with WebContainers
 - API Documentation

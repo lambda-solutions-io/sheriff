@@ -1,0 +1,13 @@
+
+[1mVerification Report[0m
+
+Issues found:
+  Total Invalid Files: 1
+  Total Encapsulation Violations: 0
+  Total Dependency Rule Violations: 0
+  Total External Rule Violations: 1
+----------------------------------
+
+|-- src/app/customers/api/index.ts
+|   |-- External Rule Violations
+|   |   |-- external library @angular/core is not allowed for tag type:api

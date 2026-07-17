@@ -105,6 +105,22 @@ function serializeRules<T extends Record<string, unknown>>(rules: T): T {
   ) as T;
 }
 
+/**
+ * Replaces external matcher functions without changing their scalar shape.
+ */
+function serializeExternalRules<T extends Record<string, unknown>>(
+  rules: T,
+): T {
+  return Object.entries(rules).reduce(
+    (current, [from, matcher]) => ({
+      ...current,
+      [from]:
+        typeof matcher === 'function' ? `α${matcher.toString()}ω` : matcher,
+    }),
+    {},
+  ) as T;
+}
+
 function serializeDepRules(config: UserSheriffConfig): Configuration {
   const mergedConfig = { ...defaultConfig, ...config };
   const ignoreFileExtensions =
@@ -116,7 +132,7 @@ function serializeDepRules(config: UserSheriffConfig): Configuration {
     ...mergedConfig,
     depRules: serializeRules(mergedConfig.depRules),
     denyRules: serializeRules(mergedConfig.denyRules),
-    externalRules: serializeRules(mergedConfig.externalRules),
+    externalRules: serializeExternalRules(mergedConfig.externalRules),
     ignoreFileExtensions,
   };
 }

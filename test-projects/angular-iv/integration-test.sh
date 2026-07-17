@@ -54,6 +54,18 @@ npx ng lint --force --format json --output-file tests/actual/dependency-rule-lin
 diff tests/actual/dependency-rule-lint.json tests/expected/dependency-rule-lint.json
 mv src/app/customers/ui/customer/customer.component.ts.original src/app/customers/ui/customer/customer.component.ts
 
+## External Rule Checks
+echo 'checking for external rule error in CLI verify'
+cp tests/external-rules.config.ts sheriff.config.ts
+npx sheriff verify src/app/customers/api/index.ts > tests/actual/cli-external-rule.txt || true
+diff tests/actual/cli-external-rule.txt tests/expected/cli-external-rule.txt
+
+echo 'checking for external rule error in ESLint'
+npx ng lint --lint-file-patterns 'src/app/customers/api/index.ts' --force --format json --output-file tests/actual/external-rule-lint.json
+../remove-paths.mjs tests/actual/external-rule-lint.json
+diff tests/actual/external-rule-lint.json tests/expected/external-rule-lint.json
+cp sheriff.config.ts.original sheriff.config.ts
+
 ## User Error Processing
 echo 'checking for user error processing'
 cp tests/empty-sheriff.config.ts sheriff.config.ts
