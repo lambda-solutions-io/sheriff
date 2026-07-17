@@ -27,6 +27,39 @@ export type TagConfigValue =
   | string[]
   | TagMatcherFn<string[] | string>;
 
+/**
+ * Explicit, object-shaped module declaration.
+ *
+ * It is distinguishable from a nested {@link ModuleConfig} by the presence of
+ * the `tags` property, which a nested `ModuleConfig` can never carry, because
+ * its values are path matchers.
+ *
+ * @example
+ * ```typescript
+ * modules: {
+ *   'domains/booking/api': {
+ *     tags: ['type:api', 'port'],
+ *     exports: ['*.port.ts'],
+ *   },
+ * }
+ * ```
+ */
+export interface ModuleDefinition {
+  /**
+   * The tags assigned to this module.
+   */
+  tags: TagConfigValue;
+
+  /**
+   * Files which are importable from outside the module. Wildcard patterns are
+   * matched against the module-relative path of the imported file.
+   *
+   * Without `exports`, the module behaves as before: everything is public
+   * except the encapsulation pattern (`internal` by default).
+   */
+  exports?: string[];
+}
+
 export interface ModuleConfig {
-  [pathMatcher: string]: TagConfigValue | ModuleConfig;
+  [pathMatcher: string]: TagConfigValue | ModuleDefinition | ModuleConfig;
 }

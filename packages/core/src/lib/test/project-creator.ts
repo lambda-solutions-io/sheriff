@@ -59,7 +59,14 @@ class ProjectCreator {
           );
         }
 
-        serializedConfig = serializedConfig.replace(/"α([^ω]+)ω"/g, '$1');
+        // Unwrap the `α…ω` markers back into real code. JSON.stringify has
+        // escaped the function source, so string literals inside the body
+        // (e.g. `to !== 'x'`) must be unescaped again, otherwise the emitted
+        // config file is not valid JavaScript.
+        serializedConfig = serializedConfig.replace(
+          /"α([^ω]+)ω"/g,
+          (_match, fnSource: string) => unescapeJsonString(fnSource),
+        );
         this.fs.writeFile(
           `${currentDir}/${child}`,
           `export const config = ${serializedConfig};`,
@@ -71,6 +78,33 @@ class ProjectCreator {
   };
 }
 
+/**
+ * Reverses the escaping which `JSON.stringify` applied to a function's source
+ * code, so that it can be emitted as executable JavaScript again.
+ */
+function unescapeJsonString(value: string): string {
+  return value
+    .replace(/\\n/g, '\n')
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\');
+}
+
+/**
+ * Replaces every function matcher with a `α…ω` marker, so that it survives
+ * `JSON.stringify` and can be unwrapped back into real code afterwards.
+ */
+function serializeRules<T extends Record<string, unknown>>(rules: T): T {
+  return Object.entries(rules).reduce(
+    (current, [from, tos]) => ({
+      ...current,
+      [from]: (Array.isArray(tos) ? tos : [tos]).map((matcher) =>
+        typeof matcher === 'function' ? `α${matcher.toString()}ω` : matcher,
+      ),
+    }),
+    {},
+  ) as T;
+}
+
 function serializeDepRules(config: UserSheriffConfig): Configuration {
   const mergedConfig = { ...defaultConfig, ...config };
   const ignoreFileExtensions =
@@ -80,15 +114,9 @@ function serializeDepRules(config: UserSheriffConfig): Configuration {
 
   return {
     ...mergedConfig,
-    depRules: Object.entries(mergedConfig.depRules).reduce(
-      (current, [from, tos]) => ({
-        ...current,
-        [from]: (Array.isArray(tos) ? tos : [tos]).map((matcher) =>
-          typeof matcher === 'function' ? `α${matcher.toString()}ω` : matcher,
-        ),
-      }),
-      {},
-    ),
+    depRules: serializeRules(mergedConfig.depRules),
+    denyRules: serializeRules(mergedConfig.denyRules),
+    externalRules: serializeRules(mergedConfig.externalRules),
     ignoreFileExtensions,
   };
 }

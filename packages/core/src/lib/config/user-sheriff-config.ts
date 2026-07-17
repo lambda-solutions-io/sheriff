@@ -1,5 +1,8 @@
 import { ModuleConfig } from './module-config';
-import { DependencyRulesConfig } from './dependency-rules-config';
+import {
+  DependencyRulesConfig,
+  ExternalRulesConfig,
+} from './dependency-rules-config';
 
 /**
  * Exported by **sheriff.config.ts**. It is optional and should be located
@@ -105,6 +108,63 @@ export interface UserSheriffConfig {
   autoTagging?: boolean;
 
   depRules: DependencyRulesConfig;
+
+  /**
+   * Rules that FORBID dependencies. A matching `denyRule` always wins over any
+   * `depRules` match — deny beats allow, regardless of key order.
+   *
+   * Use this when a tag must restrict, not widen: `depRules` keys are
+   * OR-combined, so a module carrying several tags can only ever gain
+   * clearance, never lose it.
+   *
+   * A tag without a `denyRules` entry is normal and does not raise
+   * `NoDependencyRuleForTagError`. `denyRules` alone never allows anything.
+   *
+   * @example
+   * ```typescript
+   * denyRules: {
+   *   'type:domain': ({ to }) => to !== 'type:domain',
+   * }
+   * ```
+   */
+  denyRules?: DependencyRulesConfig;
+
+  /**
+   * Rules for imports from `node_modules` (external libraries). Keys are
+   * matched against the importing module's tags; values are wildcard patterns
+   * matched against the package import string.
+   *
+   * A tag without an entry is unrestricted — external imports stay allowed by
+   * default, so existing projects are unaffected. An empty array forbids every
+   * external import for that tag.
+   *
+   * @example
+   * ```typescript
+   * externalRules: {
+   *   'type:domain': [],                     // core: no external deps
+   *   'type:api': ['@angular/core'],         // ports: DI tokens only
+   *   'type:infra': ['@angular/*', 'rxjs'],  // adapters: may use anything
+   * }
+   * ```
+   */
+  externalRules?: ExternalRulesConfig;
+
+  /**
+   * Additional Sheriff configs which apply to a sub-tree of the workspace.
+   * Keys are workspace-relative directories, values are paths to the config
+   * file which governs that directory.
+   *
+   * The most specific (deepest) matching entry wins; files not covered by any
+   * entry keep using the root config.
+   *
+   * @example
+   * ```typescript
+   * configs: {
+   *   'apps/hexagonal-demo': './apps/hexagonal-demo/sheriff.config.ts',
+   * }
+   * ```
+   */
+  configs?: Record<string, string>;
 
   // optional property. Has the value `1` by default.
   version?: number;
