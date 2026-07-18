@@ -36,7 +36,7 @@ describe('isEmptyRecord', () => {
   });
 
   it('should return false for a record with at least one key-value-pair', () => {
-    expect(isEmptyRecord<Record<string, string>>({ key: 'value' })).toBe(false);
+    expect(isEmptyRecord({ key: 'value' })).toBe(false);
   });
 
   it('should return true if value is an empty object', () => {
@@ -44,6 +44,6 @@ describe('isEmptyRecord', () => {
   });
 
   it('should return true if value is an empty record', () => {
-    expect(isEmptyRecord<Record<never, never>>({})).toBe(true);
+    expect(isEmptyRecord({})).toBe(true);
   });
 });
