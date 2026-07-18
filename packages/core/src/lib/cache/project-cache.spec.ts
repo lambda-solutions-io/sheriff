@@ -2,7 +2,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import getFs, { useVirtualFs } from '../fs/getFs';
 import { VirtualFs } from '../fs/virtual-fs';
 import { toFsPath } from '../file-info/fs-path';
-import { clearProjectCache, getOrCompute } from './project-cache';
+import {
+  clearProjectCache,
+  getOrCompute,
+  invalidatePath,
+  invalidateStructure,
+} from './project-cache';
 
 describe('project cache', () => {
   let fs: VirtualFs;
@@ -100,6 +105,38 @@ describe('project cache', () => {
     getOrCompute('the-key', compute);
 
     expect(compute).toHaveBeenCalledTimes(2);
+  });
+
+  it('should recompute after invalidatePath for a dependency', () => {
+    const mainTs = writeMain();
+    fs.writeFile('/project/other.ts', '');
+    const compute = vi.fn(() => ({ value: 42, dependencies: [mainTs] }));
+
+    getOrCompute('the-key', compute);
+    invalidatePath(toFsPath('/project/other.ts'));
+    getOrCompute('the-key', compute);
+    expect(compute).toHaveBeenCalledTimes(1);
+
+    invalidatePath(mainTs);
+    getOrCompute('the-key', compute);
+    expect(compute).toHaveBeenCalledTimes(2);
+  });
+
+  it('should drop only structure-dependent entries on invalidateStructure', () => {
+    const mainTs = writeMain();
+    const computeExact = vi.fn(() => ({ value: 1, dependencies: [mainTs] }));
+    const computeStructure = vi.fn(() => ({ value: 2, dependencies: [] }));
+
+    getOrCompute('exact', computeExact);
+    getOrCompute('structure', computeStructure, { ttlMs: 60_000 });
+
+    invalidateStructure();
+
+    getOrCompute('exact', computeExact);
+    getOrCompute('structure', computeStructure, { ttlMs: 60_000 });
+
+    expect(computeExact).toHaveBeenCalledTimes(1);
+    expect(computeStructure).toHaveBeenCalledTimes(2);
   });
 
   it('should recompute after clearProjectCache', () => {

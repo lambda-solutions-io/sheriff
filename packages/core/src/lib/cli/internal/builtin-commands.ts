@@ -4,4 +4,5 @@ export const BUILTIN_COMMANDS = new Set([
   'list',
   'export',
   'version',
+  'daemon',
 ]);

@@ -73,6 +73,32 @@ export function clearProjectCache(): void {
   cacheByFilesystemGeneration.delete(getFilesystemGeneration());
 }
 
+/**
+ * Drops all entries depending on the given file. Used by the daemon's
+ * watcher to invalidate exactly instead of waiting for mtime checks.
+ */
+export function invalidatePath(path: FsPath): void {
+  const entries = getEntriesForActiveGeneration();
+  for (const [key, entry] of entries) {
+    if (entry.dependencies.some((dependency) => dependency.path === path)) {
+      entries.delete(key);
+    }
+  }
+}
+
+/**
+ * Drops all structure-dependent (TTL) entries. Used by the daemon's
+ * watcher when files or directories are added or removed.
+ */
+export function invalidateStructure(): void {
+  const entries = getEntriesForActiveGeneration();
+  for (const [key, entry] of entries) {
+    if (entry.expiresAt !== undefined || entry.writeClock !== undefined) {
+      entries.delete(key);
+    }
+  }
+}
+
 function createEntry<T>(
   value: T,
   dependencies: FsPath[],

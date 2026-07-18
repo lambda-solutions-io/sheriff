@@ -21,3 +21,14 @@ export {
   ExternalRuleViolationInfo,
   ProjectDataOptions,
 } from './lib/plugin';
+export {
+  DaemonClient,
+  getDaemonStatus,
+  stopDaemon,
+} from './lib/daemon/client';
+export { startDaemonServer } from './lib/daemon/server';
+export {
+  clearProjectCache,
+  invalidatePath,
+  invalidateStructure,
+} from './lib/cache/project-cache';
