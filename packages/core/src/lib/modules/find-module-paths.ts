@@ -69,32 +69,32 @@ function findExportsForModulePath(
     fs.relativeTo(rootDir, modulePath),
   );
 
-  return flattenModuleExports(moduleConfig)
+  return flattenModuleEntries(moduleConfig)
     .filter(({ path }) => matchesFolderPathPattern(path, relativeModulePath))
     .sort((left, right) => getSpecificity(right) - getSpecificity(left))
     .at(0)?.exports;
 }
 
-function flattenModuleExports(
+function flattenModuleEntries(
   moduleConfig: ModuleConfig,
   prefix = '',
-): { path: string; exports: string[] }[] {
-  let flattened: { path: string; exports: string[] }[] = [];
+): { path: string; exports?: string[] }[] {
+  let flattened: { path: string; exports?: string[] }[] = [];
 
   for (const [rawPath, value] of Object.entries(moduleConfig)) {
     const path = rawPath.replace(PLACE_HOLDER_REGEX, '*');
     const fullPath = prefix ? `${prefix}/${path}` : path;
 
     if (isModuleDefinition(value)) {
-      if (value.exports !== undefined) {
-        flattened.push({ path: fullPath, exports: value.exports });
-      }
+      flattened.push({ path: fullPath, exports: value.exports });
     } else if (
       typeof value !== 'string' &&
       typeof value !== 'function' &&
       !Array.isArray(value)
     ) {
-      flattened = [...flattened, ...flattenModuleExports(value, fullPath)];
+      flattened = [...flattened, ...flattenModuleEntries(value, fullPath)];
+    } else {
+      flattened.push({ path: fullPath });
     }
   }
 

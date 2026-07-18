@@ -338,6 +338,77 @@ describe('module exports', () => {
   });
 
   describe('exports are attached to the matched module key only', () => {
+    it('should let an exact module without exports beat a wildcard module with exports', () => {
+      const projectInfo = testInit('src/main.ts', {
+        'tsconfig.json': tsConfig(),
+        'sheriff.config.ts': sheriffConfig({
+          modules: {
+            'src/app/special': ['type:special'],
+            'src/app/*': { tags: ['type:generic'], exports: ['public.ts'] },
+            'src/app/feature': ['type:feature'],
+          },
+          depRules: { '*': '*' },
+          enableBarrelLess: true,
+        } as UserSheriffConfig),
+        src: {
+          'main.ts': ['./app/feature/use.ts'],
+          app: {
+            special: {
+              'public.ts': [],
+              'secret.ts': [],
+            },
+            feature: {
+              'use.ts': ['../special/public.ts', '../special/secret.ts'],
+            },
+          },
+        },
+      });
+
+      expect(
+        Object.keys(
+          hasEncapsulationViolations(
+            toFsPath('/project/src/app/feature/use.ts'),
+            projectInfo,
+          ),
+        ),
+      ).toEqual([]);
+    });
+
+    it('should apply wildcard exports when the wildcard is the most specific match', () => {
+      const projectInfo = testInit('src/main.ts', {
+        'tsconfig.json': tsConfig(),
+        'sheriff.config.ts': sheriffConfig({
+          modules: {
+            'src/app/*': { tags: ['type:generic'], exports: ['public.ts'] },
+            'src/app/feature': ['type:feature'],
+          },
+          depRules: { '*': '*' },
+          enableBarrelLess: true,
+        } as UserSheriffConfig),
+        src: {
+          'main.ts': ['./app/feature/use.ts'],
+          app: {
+            special: {
+              'public.ts': [],
+              'secret.ts': [],
+            },
+            feature: {
+              'use.ts': ['../special/public.ts', '../special/secret.ts'],
+            },
+          },
+        },
+      });
+
+      expect(
+        Object.keys(
+          hasEncapsulationViolations(
+            toFsPath('/project/src/app/feature/use.ts'),
+            projectInfo,
+          ),
+        ),
+      ).toEqual(['../special/secret.ts']);
+    });
+
     it('should not inherit exports from a shallower wildcard module key', () => {
       const projectInfo = testInit('src/main.ts', {
         'tsconfig.json': tsConfig(),
