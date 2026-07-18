@@ -1,0 +1,25 @@
+import { describe, expect, it } from 'vitest';
+import { getDaemonSocketPath } from '../socket-path';
+
+describe('daemon socket path', () => {
+  it('should be deterministic per root dir', () => {
+    expect(getDaemonSocketPath('/some/project')).toBe(
+      getDaemonSocketPath('/some/project'),
+    );
+  });
+
+  it('should differ between root dirs', () => {
+    expect(getDaemonSocketPath('/project-a')).not.toBe(
+      getDaemonSocketPath('/project-b'),
+    );
+  });
+
+  it('should use a named pipe on windows and a socket file elsewhere', () => {
+    const socketPath = getDaemonSocketPath('/some/project');
+    if (process.platform === 'win32') {
+      expect(socketPath).toMatch(/^\\\\\.\\pipe\\sheriff-/);
+    } else {
+      expect(socketPath).toMatch(/sheriff-[0-9a-f]{12}\.sock$/);
+    }
+  });
+});

@@ -28,6 +28,29 @@ Run `npx sheriff export main.ts > export.json` to export the dependency graph in
 
 See [Entry Files and Entry Points](#entry-files-and-entry-points) for configuration options.
 
+## `verify --watch [main.ts]`
+
+Run `npx sheriff verify --watch main.ts` to keep the verification running. Sheriff watches the project for file changes, invalidates only the affected parts of its internal cache, and re-runs the verification — subsequent runs only re-analyze changed files.
+
+## `daemon <start|stop|status>`
+
+Sheriff can run as a background daemon that keeps the parsed project in memory and watches for file changes. Clients (e.g. editor integrations or custom tooling) talk to it over a local socket using newline-delimited JSON-RPC and get instant results because tsconfig parsing, config evaluation, and import resolution stay warm.
+
+- `npx sheriff daemon start` starts (or reuses) the daemon for the current directory.
+- `npx sheriff daemon status` prints the daemon's pid and version.
+- `npx sheriff daemon stop` shuts it down.
+
+One daemon runs per project root. It exits automatically after 5 minutes without requests (override with `SHERIFF_DAEMON_IDLE_MS`), when its version differs from a connecting client, or when `sheriff.config.ts` changes — the config is evaluated code, so a changed config always gets a fresh process. Clients respawn it on demand.
+
+Available RPC methods: `handshake`, `verify`, `getProjectData`, `getConfig` (function-valued fields are stripped), `lintFile` (accepts unsaved file content), `clearCache`, and `shutdown`.
+
+## Caching
+
+Sheriff caches expensive work (config evaluation, tsconfig parsing, module path scanning, import resolution) in-process, validated via file modification times. Two environment variables control it:
+
+- `SHERIFF_NO_CACHE=1` disables all caching.
+- `SHERIFF_CACHE_TTL=<ms>` overrides the staleness window (default 2000ms) for results that depend on directory structure and therefore cannot be validated by file mtimes alone. Under the daemon or `verify --watch`, the file watcher invalidates these exactly instead.
+
 ## Plugin Commands
 
 Sheriff can be extended with plugins registered in `sheriff.config.ts`. Plugins are instantiated directly in the config and exposed as additional CLI commands.
