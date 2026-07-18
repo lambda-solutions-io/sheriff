@@ -66,8 +66,26 @@ export function getDependencyUniverse(
       return new Set<string>();
     }
 
-    currentDirectory = fs.getParent(currentDirectory);
+    const parent = fs.getParent(currentDirectory);
+    // On win32, drive-letter casing can keep the normalized root comparison
+    // from matching. Stop when the filesystem reports a self-parent root.
+    if (parent === currentDirectory) {
+      cacheVisitedDirectories(cache, visitedDirectories, undefined);
+      return new Set<string>();
+    }
+
+    currentDirectory = parent;
   }
+}
+
+/**
+ * Clears cached dependency manifests for the active filesystem generation.
+ *
+ * Sheriff calls this at the start of every fresh run so long-lived processes
+ * re-read package manifests with the same lifetime as config and tsconfig.
+ */
+export function clearDependencyUniverseCache(): void {
+  cacheByFilesystemGeneration.delete(getFilesystemGeneration());
 }
 
 /**
@@ -83,9 +101,7 @@ export function extractPackageName(specifier: string): string {
 }
 
 function getCache(): DependencyUniverseCache {
-  const fs = getFs();
-  const virtualFsRoot = (fs as typeof fs & { root?: object }).root;
-  const filesystemGeneration = virtualFsRoot ?? fs;
+  const filesystemGeneration = getFilesystemGeneration();
   const cached = cacheByFilesystemGeneration.get(filesystemGeneration);
 
   if (cached) {
@@ -98,6 +114,12 @@ function getCache(): DependencyUniverseCache {
   };
   cacheByFilesystemGeneration.set(filesystemGeneration, cache);
   return cache;
+}
+
+function getFilesystemGeneration(): object {
+  const fs = getFs();
+  const virtualFsRoot = (fs as typeof fs & { root?: object }).root;
+  return virtualFsRoot ?? fs;
 }
 
 function getUniverseFromManifest(

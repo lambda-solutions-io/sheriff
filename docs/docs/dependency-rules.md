@@ -439,6 +439,10 @@ nearest `package.json` up to the project root. Packages declared in
 `dependencies`, `peerDependencies`, or `optionalDependencies` are still
 governed by `externalRules` even when they are not installed. Undeclared,
 unresolvable imports remain unresolvable and are not checked as externals.
+A tsconfig path alias that matches but fails to resolve also falls into this
+fallback; when the same name is declared in `package.json`, as with workspace
+packages, Sheriff treats it as external. Manifest reads are cached for one
+Sheriff run.
 
 A matcher function can make the decision from the full external import and the
 importing module context:
