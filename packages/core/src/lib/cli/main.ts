@@ -3,6 +3,8 @@
 import { handleError, handleErrorAsync } from './internal/handle-error';
 import { init } from './init';
 import { verify } from './verify';
+import { verifyWatch } from './verify-watch';
+import { daemonCommand } from './daemon-command';
 import { list } from './list';
 import { cli } from './cli';
 import { exportData } from './export-data';
@@ -35,6 +37,12 @@ function showHelp(plugins: SheriffPlugin[]): void {
   );
   cli.log(
     '  sheriff verify [main.ts]: runs the verification process for the project.',
+  );
+  cli.log(
+    '  sheriff verify --watch [main.ts]: re-runs the verification on file changes.',
+  );
+  cli.log(
+    '  sheriff daemon <start|stop|status>: manages the background daemon.',
   );
   cli.log('  sheriff version: prints out the current version.');
 
@@ -91,6 +99,11 @@ export function main(...argv: string[]) {
         handleError(() => init());
         break;
       case 'verify':
+        if (args.includes('--watch')) {
+          // watch mode keeps the process alive; no endProcess handling
+          verifyWatch(args.filter((arg) => arg !== '--watch'));
+          break;
+        }
         handleError(() => verify(args));
         break;
       case 'list':
@@ -102,6 +115,15 @@ export function main(...argv: string[]) {
       case 'version':
         version();
         break;
+      case 'daemon':
+        if (args[0] === 'run') {
+          // foreground server must not exit after startup
+          return daemonCommand(args).catch((error) => {
+            console.error(error instanceof Error ? error.message : error);
+            process.exit(1);
+          });
+        }
+        return handleErrorAsync(() => daemonCommand(args));
     }
     return;
   }
