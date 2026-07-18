@@ -252,9 +252,9 @@ tracked on the roadmap.
 **Example:**
 
 ```typescript
-import { SheriffConfig } from '@softarc/sheriff-core';
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
 import { JunitReporterPlugin } from 'mberger-junit-sheriff';
-import { SheriffUiPlugin } from '@softarc/sheriff-ui';
+import { SheriffUiPlugin } from '@lambda-solutions/sheriff-ui';
 
 export const config: SheriffConfig = {
   version: 1,

@@ -1,10 +1,10 @@
 set -e
 
 npm i
-yalc add @softarc/sheriff-core @softarc/eslint-plugin-sheriff
+yalc add @lambda-solutions/sheriff-core @lambda-solutions/eslint-plugin-sheriff
 mkdir -p node_modules/.bin
 cd node_modules/.bin
-ln -sf ../@softarc/sheriff-core/src/bin/main.js ./sheriff
+ln -sf ../@lambda-solutions/sheriff-core/src/bin/main.js ./sheriff
 cd ../../
 
 mkdir -p tests/actual
