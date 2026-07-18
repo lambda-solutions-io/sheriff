@@ -2,6 +2,12 @@ import { FsPath, toFsPath } from '../file-info/fs-path';
 import { ProjectInfo } from '../main/init';
 import { calcTagsForModule } from '../tags/calc-tags-for-module';
 import { isDependencyAllowed } from './is-dependency-allowed';
+import { isDependencyDenied } from './is-dependency-denied';
+
+/**
+ * Describes why Sheriff reported a dependency rule violation.
+ */
+export type DependencyRuleViolationCause = 'deny-rule';
 
 export type DependencyRuleViolation = {
   rawImport: string;
@@ -9,6 +15,11 @@ export type DependencyRuleViolation = {
   toModulePath: FsPath;
   fromTag: string;
   toTags: string[];
+  /**
+   * Present when a dependency was allowed by `depRules` but then rejected by
+   * `denyRules`. Missing means the importing tag had no depRules clearance.
+   */
+  cause?: DependencyRuleViolationCause;
 };
 
 export function checkForDependencyRuleViolation(
@@ -51,26 +62,40 @@ export function checkForDependencyRuleViolation(
         config.modules,
         config.autoTagging,
       );
-      const isViolation = !isDependencyAllowed(
+      const context = {
+        fromModulePath: fromModule,
+        toModulePath: toFsPath(importedModulePath),
+        fromFilePath: fsPath,
+        toFilePath: toFsPath(importedModulePath),
+        fromTags,
+        toTags,
+      };
+      const isAllowed = isDependencyAllowed(
         fromTag,
         config.depRules,
-        {
-          fromModulePath: fromModule,
-          toModulePath: toFsPath(importedModulePath),
-          fromFilePath: fsPath,
-          toFilePath: toFsPath(importedModulePath),
-          fromTags,
-          toTags,
-        },
+        context,
       );
 
-      if (isViolation) {
+      if (!isAllowed) {
         violations.push({
           rawImport,
           fromModulePath: fromModule,
           toModulePath: toFsPath(importedModulePath),
           fromTag,
           toTags,
+        });
+
+        break;
+      }
+
+      if (isDependencyDenied(fromTag, config.denyRules, context)) {
+        violations.push({
+          rawImport,
+          fromModulePath: fromModule,
+          toModulePath: toFsPath(importedModulePath),
+          fromTag,
+          toTags,
+          cause: 'deny-rule',
         });
 
         break;

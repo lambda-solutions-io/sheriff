@@ -6,6 +6,7 @@ import { Configuration } from './configuration';
 import {
   CollidingEncapsulationSettings,
   CollidingEntrySettings,
+  InvalidConfigsDirectoryError,
   MissingModulesWithoutAutoTaggingError,
   NoEntryPointsFoundError,
   TaggingAndModulesError,
@@ -13,8 +14,16 @@ import {
 import { defaultConfig } from './default-config';
 import { isEmptyRecord } from '../util/is-empty-record';
 
-export const parseConfig = (configFile: FsPath): Configuration => {
+type ParseConfigOptions = {
+  validateConfigs?: boolean;
+};
+
+export const parseConfig = (
+  configFile: FsPath,
+  options: ParseConfigOptions = {},
+): Configuration => {
   const tsCode = getFs().readFile(configFile);
+  const fullOptions = { validateConfigs: true, ...options };
 
   const { outputText } = ts.transpileModule(tsCode, {
     compilerOptions: { module: ts.ModuleKind.NodeNext },
@@ -61,6 +70,14 @@ export const parseConfig = (configFile: FsPath): Configuration => {
   ) {
     throw new NoEntryPointsFoundError();
   }
+
+  if (fullOptions.validateConfigs) {
+    validateConfigsKeys(
+      userSheriffConfig.configs ?? {},
+      getFs().getParent(configFile),
+    );
+  }
+
   const mergedConfig = { ...defaultConfig, ...rest };
 
   const ignoreFileExtensions = getIgnoreFileExtensions(
@@ -72,6 +89,28 @@ export const parseConfig = (configFile: FsPath): Configuration => {
     ignoreFileExtensions,
   };
 };
+
+function validateConfigsKeys(
+  configs: Record<string, string>,
+  rootDir: FsPath,
+): void {
+  const fs = getFs();
+
+  for (const directory of Object.keys(configs)) {
+    const relativeDirectory = fs
+      .relativeTo(rootDir, fs.join(rootDir, directory))
+      .replaceAll('\\', '/');
+
+    if (
+      fs.isAbsolute(directory) ||
+      relativeDirectory === '..' ||
+      relativeDirectory.startsWith('../') ||
+      fs.isAbsolute(relativeDirectory)
+    ) {
+      throw new InvalidConfigsDirectoryError(directory);
+    }
+  }
+}
 
 function getIgnoreFileExtensions(
   ignoreFileExtensions: string[] | ((defaults: string[]) => string[]),

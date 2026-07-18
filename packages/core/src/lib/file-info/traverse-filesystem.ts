@@ -5,6 +5,11 @@ import { TsData } from './ts-data';
 import { FsPath } from './fs-path';
 import { resolvePotentialTsPath } from './resolve-potential-ts-path';
 import { fixPathSeparators } from './fix-path-separators';
+import { isRelativeImport } from '../eslint/is-relative-import';
+import {
+  extractPackageName,
+  getDependencyUniverse,
+} from './dependency-universe';
 
 export type ResolveFn = (
   moduleName: string,
@@ -87,7 +92,18 @@ export function traverseFilesystem(
     // or an incomplete import (= developer is still typing),
     // if we read from an unsaved file via ESLint.
     else {
-      fileInfo.addUnresolvableImport(fileName);
+      const isDeclaredExternal =
+        !isRelativeImport(fileName) &&
+        !fs.isAbsolute(fileName) &&
+        getDependencyUniverse(fs.getParent(fsPath), rootDir).has(
+          extractPackageName(fileName),
+        );
+
+      if (isDeclaredExternal) {
+        fileInfo.addExternalLibrary(fileName);
+      } else {
+        fileInfo.addUnresolvableImport(fileName);
+      }
     }
 
     if (importPath) {

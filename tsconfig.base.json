@@ -16,8 +16,8 @@
     "strict": true,
     "baseUrl": ".",
     "paths": {
-      "@softarc/eslint-plugin-sheriff": ["packages/eslint-plugin/src/index.ts"],
-      "@softarc/sheriff-core": ["packages/core/src/index.ts"]
+      "@lambda-solutions/eslint-plugin-sheriff": ["packages/eslint-plugin/src/index.ts"],
+      "@lambda-solutions/sheriff-core": ["packages/core/src/index.ts"]
     }
   },
   "exclude": ["node_modules", "tmp"]

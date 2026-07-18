@@ -11,10 +11,10 @@ export default defineConfig({
     include: ['packages/**/*.spec.ts'],
     setupFiles: ['packages/core/src/lib/test/expect.extensions.ts'],
     alias: {
-      '@softarc/eslint-plugin-sheriff': resolve(
+      '@lambda-solutions/eslint-plugin-sheriff': resolve(
         './packages/eslint-plugin/src/index.ts',
       ),
-      '@softarc/sheriff-core': resolve('./packages/core/src/index.ts'),
+      '@lambda-solutions/sheriff-core': resolve('./packages/core/src/index.ts'),
     },
   },
 });

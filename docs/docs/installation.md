@@ -11,14 +11,14 @@ Examples are available at https://github.com/softarc-consulting/sheriff/tree/mai
 In order to get the best developer experience, we recommend to use Sheriff with the ESLint plugin.
 
 ```shell
-npm install -D @softarc/sheriff-core @softarc/eslint-plugin-sheriff
+npm install -D @lambda-solutions/sheriff-core @lambda-solutions/eslint-plugin-sheriff
 ```
 
 ### Flat Config (_eslint.config.js_)
 
 ```javascript
 // ...
-const sheriff = require('@softarc/eslint-plugin-sheriff');
+const sheriff = require('@lambda-solutions/eslint-plugin-sheriff');
 
 module.exports = tseslint.config(
   // ...
@@ -34,7 +34,7 @@ module.exports = tseslint.config(
 ```json
 {
   "files": ["*.ts"],
-  "extends": ["plugin:@softarc/sheriff/legacy"]
+  "extends": ["plugin:@lambda-solutions/sheriff/legacy"]
 }
 ```
 
@@ -54,7 +54,7 @@ Please note, that the legacy mode's name was changed from `default` to `legacy` 
 const eslint = require('@eslint/js');
 const tseslint = require('typescript-eslint');
 const angular = require('angular-eslint');
-const sheriff = require('@softarc/eslint-plugin-sheriff');
+const sheriff = require('@lambda-solutions/eslint-plugin-sheriff');
 
 module.exports = tseslint.config(
   {
@@ -146,7 +146,7 @@ module.exports = tseslint.config(
     },
     {
       "files": ["*.ts"],
-      "extends": ["plugin:@softarc/sheriff/legacy"]
+      "extends": ["plugin:@lambda-solutions/sheriff/legacy"]
     }
   ]
 }
@@ -162,7 +162,7 @@ module.exports = tseslint.config(
 
 ```js
 import nx from '@nx/eslint-plugin';
-import sheriff from '@softarc/eslint-plugin-sheriff' // <-- add this
+import sheriff from '@lambda-solutions/eslint-plugin-sheriff' // <-- add this
 
 export default [
   ...nx.configs['flat/base'],
@@ -188,7 +188,7 @@ export default [
     // existing rules...
     {
       "files": ["*.ts"],
-      "extends": ["plugin:@softarc/sheriff/legacy"],
+      "extends": ["plugin:@lambda-solutions/sheriff/legacy"],
     },
   ],
 }
@@ -201,7 +201,7 @@ export default [
 You can also use Sheriff without ESLint. In this case, you have to run the Sheriff CLI manually.
 
 ```shell
-npm install -D @softarc/sheriff-core
+npm install -D @lambda-solutions/sheriff-core
 ```
 
 The CLI provides you with commands to list modules, check the rules and export the dependency graph in JSON format.

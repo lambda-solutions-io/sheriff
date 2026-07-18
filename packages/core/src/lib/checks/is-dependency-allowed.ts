@@ -43,5 +43,6 @@ export const isDependencyAllowed = (
     throw new NoDependencyRuleForTagError(from);
   }
 
-  return false;
+  // first match wins; keys are OR-combined
+  return isAllowed ?? false;
 };

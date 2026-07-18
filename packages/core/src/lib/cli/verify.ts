@@ -11,15 +11,25 @@ import {
   getEntriesFromCliOrConfig,
 } from './internal/get-entries-from-cli-or-config';
 import { logInfoForMissingSheriffConfig } from './internal/log-info-for-missing-sheriff-config';
+import {
+  checkForExternalRuleViolation,
+  ExternalRuleViolation,
+} from '../checks/check-for-external-rule-violation';
+import { ProjectInfo } from '../main/init';
 
 type ValidationsMap = Record<
   string,
-  { encapsulations: string[]; dependencyRules: string[] }
+  {
+    encapsulations: string[];
+    dependencyRules: string[];
+    externalRules: string[];
+  }
 >;
 
 type ProjectValidation = {
   deepImportsCount: number;
   dependencyRulesCount: number;
+  externalRulesCount: number;
   filesCount: number;
   hasError: boolean;
   validationsMap: ValidationsMap;
@@ -45,6 +55,7 @@ export function verify(args: string[]) {
     const validation: ProjectValidation = {
       deepImportsCount: 0,
       dependencyRulesCount: 0,
+      externalRulesCount: 0,
       filesCount: 0,
       hasError: false,
       validationsMap: {},
@@ -65,27 +76,39 @@ export function verify(args: string[]) {
         fileInfo.path,
         projectEntry.projectInfo,
       );
+      const externalRuleViolations = checkForExternalRuleViolation(
+        fileInfo.path,
+        projectEntry.projectInfo,
+      );
       const projectValidation = projectValidations.get(projectName)!;
       projectValidation.encapsulations = encapsulations;
       projectValidation.dependencyRuleViolations = dependencyRuleViolations;
 
-      if (encapsulations.length > 0 || dependencyRuleViolations.length > 0) {
+      if (
+        encapsulations.length > 0 ||
+        dependencyRuleViolations.length > 0 ||
+        externalRuleViolations.length > 0
+      ) {
         projectValidation.hasError = true;
         projectValidation.filesCount++;
         projectValidation.deepImportsCount += encapsulations.length;
         projectValidation.dependencyRulesCount +=
           dependencyRuleViolations.length;
+        projectValidation.externalRulesCount += externalRuleViolations.length;
         hasAnyProjectError = true;
 
         const dependencyRules = dependencyRuleViolations.map(
-          (violation) =>
-            `from tag ${violation.fromTag} to tags ${violation.toTags.join(', ')}`,
+          formatDependencyRuleViolation,
+        );
+        const externalRules = externalRuleViolations.map(
+          formatExternalRuleViolation,
         );
 
         const relativePath = fs.relativeTo(fs.cwd(), fileInfo.path);
         projectValidation.validationsMap[relativePath] = {
           encapsulations,
           dependencyRules,
+          externalRules,
         };
       }
     }
@@ -96,11 +119,15 @@ export function verify(args: string[]) {
 
   // Process each project's validation results
   for (const [projectName, validation] of projectValidations.entries()) {
+    const projectInfo = projectEntries.find(
+      (entry) => entry.projectName === projectName,
+    )!.projectInfo;
     cli.log('');
     if (projectName !== DEFAULT_PROJECT_NAME) {
       cli.log(cli.bold(`Project: ${projectName}`));
       cli.log('');
     }
+    logAppliedConfig(projectInfo);
 
     if (validation.hasError) {
       cli.log('Issues found:');
@@ -111,13 +138,19 @@ export function verify(args: string[]) {
       cli.log(
         `  Total Dependency Rule Violations: ${validation.dependencyRulesCount}`,
       );
+      if (validation.externalRulesCount > 0) {
+        cli.log(
+          `  Total External Rule Violations: ${validation.externalRulesCount}`,
+        );
+      }
       cli.log('----------------------------------');
       cli.log('');
 
       // Display detailed validation information for this project
-      for (const [file, { encapsulations, dependencyRules }] of Object.entries(
-        validation.validationsMap,
-      )) {
+      for (const [
+        file,
+        { encapsulations, dependencyRules, externalRules },
+      ] of Object.entries(validation.validationsMap)) {
         cli.log('|-- ' + file);
         if (encapsulations.length > 0) {
           cli.log('|   |-- Encapsulation Violations');
@@ -130,6 +163,13 @@ export function verify(args: string[]) {
           cli.log('|   |-- Dependency Rule Violations');
           dependencyRules.forEach((dependencyRule) => {
             cli.log('|   |   |-- ' + dependencyRule);
+          });
+        }
+
+        if (externalRules.length > 0) {
+          cli.log('|   |-- External Rule Violations');
+          externalRules.forEach((externalRule) => {
+            cli.log('|   |   |-- ' + externalRule);
           });
         }
       }
@@ -155,4 +195,31 @@ export function verify(args: string[]) {
     }
     cli.endProcessOk();
   }
+}
+
+function logAppliedConfig(projectInfo: ProjectInfo): void {
+  if (!projectInfo.usesMultipleConfigs || !projectInfo.configFilePath) {
+    return;
+  }
+
+  const configPath = getFs().relativeTo(
+    projectInfo.rootDir,
+    projectInfo.configFilePath,
+  );
+  cli.log(`Config: ${configPath}`);
+  cli.log('');
+}
+
+function formatExternalRuleViolation(violation: ExternalRuleViolation): string {
+  return `external library ${violation.externalLibrary} is not allowed for tag ${violation.fromTag}`;
+}
+
+function formatDependencyRuleViolation(
+  violation: DependencyRuleViolation,
+): string {
+  if (violation.cause === 'deny-rule') {
+    return `denyRules denied from tag ${violation.fromTag} to tags ${violation.toTags.join(', ')}`;
+  }
+
+  return `from tag ${violation.fromTag} to tags ${violation.toTags.join(', ')}`;
 }

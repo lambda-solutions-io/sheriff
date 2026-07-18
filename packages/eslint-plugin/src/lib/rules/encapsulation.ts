@@ -1,4 +1,4 @@
-import { violatesEncapsulationRule } from '@softarc/sheriff-core';
+import { violatesEncapsulationRule } from '@lambda-solutions/sheriff-core';
 import { createRule } from './create-rule';
 
 export const encapsulation = createRule(

@@ -27,3 +27,32 @@ expected. The following steps are required to run the tests:
 1. **Build Sheriff**: `yarn build:all`
 2. **Link Sheriff**: `yarn link:sheriff`
 3. **Run the integration tests**: Execute one of the `integration-test.sh`-scripts within the tests projects or run all by executing the `run-integration-tests.sh`.
+
+# Fork maintenance (@lambda-solutions/sheriff)
+
+This repository is a fork of [softarc-consulting/sheriff](https://github.com/softarc-consulting/sheriff),
+published to npm under the `@lambda-solutions` scope (`@lambda-solutions/sheriff-core`,
+`@lambda-solutions/eslint-plugin-sheriff`).
+
+## Pulling changes from upstream (cherry-pick on demand)
+
+The original repo is configured as the `upstream` remote. We do **not** auto-merge; we cherry-pick
+the commits we want.
+
+```shell
+git fetch upstream
+git log --oneline main..upstream/main   # review what's new upstream
+git checkout -b chore/sync-upstream
+git cherry-pick <sha> [<sha> ...]       # pick the wanted commits
+```
+
+Conflicts are almost always the scope rename (`@softarc/...` → `@lambda-solutions/...`). Resolve by
+keeping the `@lambda-solutions` scope. After resolving, run `yarn build:all`, `yarn test:ci`, and
+`yarn lint:all` before opening a PR into `main`.
+
+## Releasing
+
+Releases are driven by [release-please](https://github.com/googleapis/release-please) via
+`.github/workflows/release-please.yml` (triggered on push to the `release-please` branch). Conventional
+commits drive the version bump; both packages are linked-versioned. On release the workflow builds
+`dist/` and runs `npm publish dist/packages/*` using the `NPM_TOKEN` repo secret.

@@ -1,7 +1,7 @@
 import { RuleTester } from 'eslint';
 import { afterEach, describe, expect, it, vitest } from 'vitest';
 import { deepImport } from '../deep-import';
-import * as sheriffCore from '@softarc/sheriff-core';
+import * as sheriffCore from '@lambda-solutions/sheriff-core';
 import { parser } from "typescript-eslint";
 
 const tester = new RuleTester({

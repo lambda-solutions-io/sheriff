@@ -1,8 +1,10 @@
 set -e
+export NX_DAEMON=false
+export NX_ISOLATE_PLUGINS=false
 yarn
-yalc add @softarc/sheriff-core @softarc/eslint-plugin-sheriff
+yalc add @lambda-solutions/sheriff-core @lambda-solutions/eslint-plugin-sheriff
 cd node_modules/.bin # yalc doesn't create symlink in node_modules/.bin
-ln -sf ../@softarc/sheriff-core/src/bin/main.js ./sheriff
+ln -sf ../@lambda-solutions/sheriff-core/src/bin/main.js ./sheriff
 cd ../../
 cp sheriff.config.ts sheriff.config.ts.original
 
@@ -53,6 +55,36 @@ npx ng lint --force --format json --output-file tests/actual/dependency-rule-lin
 ../remove-paths.mjs tests/actual/dependency-rule-lint.json
 diff tests/actual/dependency-rule-lint.json tests/expected/dependency-rule-lint.json
 mv src/app/customers/ui/customer/customer.component.ts.original src/app/customers/ui/customer/customer.component.ts
+
+## Deny Rule Check
+echo 'checking for deny rule error'
+cp tests/deny-rules.config.ts sheriff.config.ts
+npx sheriff verify src/app/bookings/overview/overview.component.ts > tests/actual/cli-deny-rule.txt || true
+diff tests/actual/cli-deny-rule.txt tests/expected/cli-deny-rule.txt
+cp sheriff.config.ts.original sheriff.config.ts
+
+## File-Level Exports Check
+echo 'checking for file-level exports error'
+cp tests/exports.config.ts sheriff.config.ts
+mv src/app/bookings/overview/overview.component.ts src/app/bookings/overview/overview.component.ts.original
+cp tests/overview.exports.component.ts src/app/bookings/overview/overview.component.ts
+npx ng lint --lint-file-patterns 'src/app/bookings/overview/overview.component.ts' --force --format json --output-file tests/actual/exports-lint.json
+../remove-paths.mjs tests/actual/exports-lint.json
+diff tests/actual/exports-lint.json tests/expected/exports-lint.json
+mv src/app/bookings/overview/overview.component.ts.original src/app/bookings/overview/overview.component.ts
+cp sheriff.config.ts.original sheriff.config.ts
+
+## External Rule Checks
+echo 'checking for external rule error in CLI verify'
+cp tests/external-rules.config.ts sheriff.config.ts
+npx sheriff verify src/app/customers/api/index.ts > tests/actual/cli-external-rule.txt || true
+diff tests/actual/cli-external-rule.txt tests/expected/cli-external-rule.txt
+
+echo 'checking for external rule error in ESLint'
+npx ng lint --lint-file-patterns 'src/app/customers/api/index.ts' --force --format json --output-file tests/actual/external-rule-lint.json
+../remove-paths.mjs tests/actual/external-rule-lint.json
+diff tests/actual/external-rule-lint.json tests/expected/external-rule-lint.json
+cp sheriff.config.ts.original sheriff.config.ts
 
 ## User Error Processing
 echo 'checking for user error processing'

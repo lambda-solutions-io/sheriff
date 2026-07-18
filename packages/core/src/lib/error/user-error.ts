@@ -10,7 +10,9 @@ export type UserErrorCode =
   | 'SH-009'
   | 'SH-010'
   | 'SH-011'
-  | 'SH-012';
+  | 'SH-012'
+  | 'SH-013'
+  | 'SH-014';
 
 export class UserError extends Error {
   constructor(
@@ -120,5 +122,23 @@ export class CollidingEntrySettings extends UserError {
 export class NoEntryPointsFoundError extends UserError {
   constructor() {
     super('SH-012', 'No entryPoints defined in sheriff.config.ts.');
+  }
+}
+
+export class InvalidConfigsDirectoryError extends UserError {
+  constructor(directory: string) {
+    super(
+      'SH-013',
+      `Invalid configs directory '${directory}' in sheriff.config.ts. Configs keys must be workspace-relative directories that stay inside the workspace root.`,
+    );
+  }
+}
+
+export class SheriffConfigNotFoundError extends UserError {
+  constructor(directory: string, configPath: string) {
+    super(
+      'SH-014',
+      `Cannot resolve configs entry '${directory}' to '${configPath}'. Please verify that the Sheriff config file exists.`,
+    );
   }
 }

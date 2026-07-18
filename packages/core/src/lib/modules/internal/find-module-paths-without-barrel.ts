@@ -5,8 +5,8 @@ import {
   ModulePathPatternsTree,
 } from './create-module-path-patterns-tree';
 import getFs from '../../fs/getFs';
-import { FOLDER_CHARACTERS_REGEX_STRING } from '../../tags/calc-tags-for-module';
 import { flattenModules } from './flatten-modules';
+import { matchesFolderSegmentPattern } from './segment-pattern';
 
 /**
  * The current criterion for finding modules is via
@@ -48,7 +48,7 @@ function traverseAndMatch(
 
     const patterns = Object.keys(groupedPatterns);
     const matchingPattern = patterns.find((pattern) =>
-      matchPattern(pattern, currentSegment),
+      matchesFolderSegmentPattern(pattern, currentSegment),
     );
 
     if (matchingPattern) {
@@ -64,26 +64,6 @@ function traverseAndMatch(
   }
 
   return matchedDirectories;
-}
-
-/**
- * Matches a given directory path against a pattern, allowing wildcards.
- */
-function matchPattern(pattern: string, pathSegment: string): boolean {
-  if (pattern === '*' || pattern === pathSegment) {
-    return true;
-  }
-
-  if (pattern.includes('*')) {
-    const regexPattern = pattern.replace(
-      /\*/g,
-      `${FOLDER_CHARACTERS_REGEX_STRING}*`,
-    );
-    const regex = new RegExp(`^${regexPattern}$`);
-    return regex.test(pathSegment);
-  }
-
-  return false;
 }
 
 function addAsModuleIfWithoutBarrel(

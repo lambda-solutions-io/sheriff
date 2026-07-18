@@ -5,6 +5,7 @@ displayed_sidebar: tutorialSidebar
 ---
 
 ## Introduction
+
 Dependency rules determine which modules can access each other. Since managing dependencies on a per-module basis doesn't scale well, Sheriff utilizes tags to group modules together. Dependency rules are then defined based on these tags.
 
 Each tag specifies a list of other tags it can access. To maintain clarity, it’s best practice to categorize tags into
@@ -132,7 +133,7 @@ The initial configuration from the [CLI](./cli) includes this setup.
 Here’s an example configuration in `sheriff.config.ts`:
 
 ```typescript
-import { SheriffConfig } from '@softarc/sheriff-core';
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
 
 export const sheriffConfig: SheriffConfig = {
   depRules: {
@@ -151,7 +152,7 @@ For green-field projects, the [manual tagging](#manual-tagging) is the better op
 To disable automatic tagging, set `autoTagging` to `false`:
 
 ```typescript
-import { SheriffConfig } from '@softarc/sheriff-core';
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
 
 export const sheriffConfig: SheriffConfig = {
   autoTagging: false,
@@ -225,7 +226,7 @@ The keys of `modules` represent the module directories, and the corresponding va
 The following snippet demonstrates a configuration where four directories are assigned both a domain and a module type:
 
 ```typescript
-import { SheriffConfig } from '@softarc/sheriff-core';
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
 
 export const sheriffConfig: SheriffConfig = {
   modules: {
@@ -246,7 +247,7 @@ export const sheriffConfig: SheriffConfig = {
    there is no need to include domain tags.
 
 ```typescript
-import { SheriffConfig } from '@softarc/sheriff-core';
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
 
 export const sheriffConfig: SheriffConfig = {
   modules: {
@@ -271,7 +272,7 @@ If these rules are violated, a linting error will be triggered:
 If only the modules within the director "holidays" should get tags, and the other modules should be auto-tagged, i.e. `noTag`, the configuration would look like this:
 
 ```typescript
-import { SheriffConfig } from '@softarc/sheriff-core';
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
 
 export const sheriffConfig: SheriffConfig = {
   modules: {
@@ -294,7 +295,7 @@ Note: This setup allows any module from `domain:holidays` to depend on modules w
 Nested paths simplify the configuration. Multiple levels are allowed.
 
 ```typescript
-import { SheriffConfig } from '@softarc/sheriff-core';
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
 
 export const sheriffConfig: SheriffConfig = {
   modules: {
@@ -323,7 +324,7 @@ export const sheriffConfig: SheriffConfig = {
 Placeholders help with repeating patterns. They have the syntax `<name>`, where `name` is the placeholder name.
 
 ```typescript
-import { SheriffConfig } from '@softarc/sheriff-core';
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
 
 export const sheriffConfig: SheriffConfig = {
   modules: {
@@ -348,7 +349,7 @@ export const sheriffConfig: SheriffConfig = {
 Placeholders are available on all levels. The configuration could therefore further be improved.
 
 ```typescript
-import { SheriffConfig } from '@softarc/sheriff-core';
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
 
 export const sheriffConfig: SheriffConfig = {
   modules: {
@@ -363,12 +364,102 @@ export const sheriffConfig: SheriffConfig = {
 };
 ```
 
+## `denyRules`
+
+Use `denyRules` when a tag must restrict dependencies even if `depRules` would
+otherwise allow them. Sheriff evaluates `denyRules` after `depRules`, and a
+matching deny rule always wins over an allow rule.
+
+```typescript
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const sheriffConfig: SheriffConfig = {
+  modules: {
+    'src/domain': ['domain:booking', 'type:domain'],
+    'src/shared': ['shared'],
+  },
+  depRules: {
+    '*': 'shared',
+    'domain:*': 'shared',
+    'type:domain': 'type:domain',
+  },
+  denyRules: {
+    'type:domain': ({ to }) => to !== 'type:domain',
+  },
+};
+```
+
+With this configuration, `src/domain` cannot import `src/shared`. The dependency
+first receives clearance from `depRules`, then `denyRules` rejects it because the
+importing module has `type:domain` and the target does not.
+
+`denyRules` do not grant access. If `depRules` do not allow an import,
+`denyRules` cannot make it valid. A source tag without a matching `denyRules`
+entry is normal and does not raise a missing-rule error.
+
+## `externalRules`
+
+`externalRules` restrict imports from external libraries in `node_modules`.
+The keys match the importing module's tags, while each value is an allow-list
+of library patterns:
+
+```typescript
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const sheriffConfig: SheriffConfig = {
+  modules: {
+    'src/domain': ['type:domain'],
+    'src/api': ['type:api'],
+    'src/infra': ['type:infra'],
+  },
+  depRules: {
+    '*': '*',
+  },
+  externalRules: {
+    'type:domain': [],
+    'type:api': ['@angular/core'],
+    'type:infra': ['@angular/*', 'rxjs'],
+  },
+};
+```
+
+Sheriff matches library wildcards against the full import string. An exact
+`@angular/core` pattern therefore does not allow `@angular/core/testing`, while
+`@angular/*` allows both. Rule keys are wildcard-aware as well, so `type:*`
+can govern every type tag.
+
+Every matching restriction must allow the import. This gives modules carrying
+multiple tags AND semantics: if one matching tag allows a library and another
+matching tag rejects it, Sheriff reports the vetoing tag. An empty array
+rejects all external libraries. A tag for which no key matches is unrestricted,
+so omitting `externalRules` preserves the previous behavior.
+
+If TypeScript cannot resolve a bare package import, Sheriff also checks the
+nearest `package.json` up to the project root. Packages declared in
+`dependencies`, `peerDependencies`, or `optionalDependencies` are still
+governed by `externalRules` even when they are not installed. Undeclared,
+unresolvable imports remain unresolvable and are not checked as externals.
+A tsconfig path alias that matches but fails to resolve also falls into this
+fallback; when the same name is declared in `package.json`, as with workspace
+packages, Sheriff treats it as external. Manifest reads are cached for one
+Sheriff run.
+
+A matcher function can make the decision from the full external import and the
+importing module context:
+
+```typescript
+externalRules: {
+  'type:api': ({ externalLibrary, from }) =>
+    externalLibrary === '@angular/core' && from === 'type:api',
+}
+```
+
 ## `depRules` Functions & Wildcards
 
 `depRules` allows functions instead of static values. The names of the tags can include wildcards:
 
 ```typescript
-import { SheriffConfig } from '@softarc/sheriff-core';
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
 
 export const sheriffConfig: SheriffConfig = {
   modules: {
@@ -385,7 +476,7 @@ export const sheriffConfig: SheriffConfig = {
 or use `sameTag`, which is a pre-defined function.
 
 ```typescript
-import { sameTag, SheriffConfig } from '@softarc/sheriff-core';
+import { sameTag, SheriffConfig } from '@lambda-solutions/sheriff-core';
 
 export const sheriffConfig: SheriffConfig = {
   modules: {
@@ -398,3 +489,42 @@ export const sheriffConfig: SheriffConfig = {
   },
 };
 ```
+
+### How Multiple `depRules` Match
+
+When Sheriff checks an import, every source tag of the importing module must
+have clearance. Source tags are therefore combined with AND.
+
+For a single source tag, however, multiple `depRules` keys can match. Sheriff
+evaluates all matching keys until a rule value returns `true`; those matches are
+combined with OR, and the first `true` wins. Target tags are also checked as
+alternatives: a source tag has clearance when it can access any tag of the
+imported module.
+
+This matters for modules with several tags. A permissive wildcard rule can grant
+clearance even if a more specific rule would not:
+
+```typescript
+import { noDependencies, SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const sheriffConfig: SheriffConfig = {
+  modules: {
+    'src/domain': ['domain:booking', 'type:domain'],
+    'src/shared': ['shared'],
+  },
+  depRules: {
+    '*': 'shared',
+    'domain:*': 'shared',
+    'type:domain': noDependencies,
+  },
+};
+```
+
+In this configuration, `src/domain` may import `src/shared`. The `domain:booking`
+source tag has clearance through `*` and `domain:*`. The `type:domain` source tag
+also has clearance because `*` matches it and allows `shared`; `noDependencies`
+does not make the module stricter because `depRules` only grant clearance, they
+do not subtract it.
+
+Use [`denyRules`](#denyrules) when a tag must veto dependencies that another
+matching `depRules` key would allow.

@@ -4,7 +4,7 @@ import traverseUnassignedFileInfo from '../file-info/traverse-unassigned-file-in
 import throwIfNull from '../util/throw-if-null';
 import { FsPath, toFsPath } from '../file-info/fs-path';
 import { FileInfo } from './file.info';
-import { ModulePathMap } from './find-module-paths';
+import { ModulePathInfo, ModulePathMap } from './find-module-paths';
 import {
   entries,
   fromEntries,
@@ -25,17 +25,19 @@ export function createModules(
   { entryFileInfo, rootDir, barrelFile }: CreateModulesContext,
 ): Module[] {
   const moduleMap = fromEntries(
-    entries(modulePathMap).map(([path, hasBarrel]) => [
-      path,
-      new Module(
+    entries(modulePathMap).map(([path, rawModulePathInfo]) => {
+      const modulePathInfo = normalizeModulePathInfo(rawModulePathInfo);
+      const module = new Module(
         toFsPath(path),
         fileInfoMap,
         getFileInfo,
         false,
-        hasBarrel,
+        modulePathInfo.hasBarrel,
         barrelFile,
-      ),
-    ]),
+      );
+      module.exportedFilePatterns = modulePathInfo.exports;
+      return [path, module];
+    }),
   );
   // add root module
   moduleMap[rootDir] = new Module(
@@ -55,6 +57,14 @@ export function createModules(
   }
 
   return values(moduleMap);
+}
+
+function normalizeModulePathInfo(
+  modulePathInfo: boolean | ModulePathInfo,
+): ModulePathInfo {
+  return typeof modulePathInfo === 'boolean'
+    ? { hasBarrel: modulePathInfo }
+    : modulePathInfo;
 }
 
 function findClosestModulePath(path: string, modulePaths: FsPath[]) {

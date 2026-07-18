@@ -8,7 +8,7 @@ const commonConfig: TSESLint.FlatConfig.Config = {
     sourceType: 'module',
   },
   plugins: {
-    '@softarc/sheriff': {
+    '@lambda-solutions/sheriff': {
       rules,
     },
   },
@@ -17,15 +17,15 @@ const commonConfig: TSESLint.FlatConfig.Config = {
 export const barrelModulesOnly: TSESLint.FlatConfig.Config = {
   ...commonConfig,
   rules: {
-    '@softarc/sheriff/dependency-rule': 'error',
-    '@softarc/sheriff/deep-import': 'error',
+    '@lambda-solutions/sheriff/dependency-rule': 'error',
+    '@lambda-solutions/sheriff/deep-import': 'error',
   },
 };
 
 export const all: TSESLint.FlatConfig.Config = {
   ...commonConfig,
   rules: {
-    '@softarc/sheriff/dependency-rule': 'error',
-    '@softarc/sheriff/encapsulation': 'error',
+    '@lambda-solutions/sheriff/dependency-rule': 'error',
+    '@lambda-solutions/sheriff/encapsulation': 'error',
   },
 };

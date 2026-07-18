@@ -13,7 +13,7 @@ export function init() {
   fs.writeFile(
     'sheriff.config.ts',
     `\
-import { SheriffConfig } from '@softarc/sheriff-core';
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
 
 /**
   * Minimal configuration for Sheriff

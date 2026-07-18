@@ -1,0 +1,11 @@
+Config: projects/app-i/sheriff.config.ts
+
+This project contains 1 modules:
+
+. (root)
+└── projects
+  └── app-i
+    └── src
+      └── app
+        └── compliant
+          └── [1mfeat[0m (architecture:app-i, app-i:type:feature)

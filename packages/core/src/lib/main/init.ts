@@ -9,12 +9,19 @@ import { ParsedResult, parseProject } from './parse-project';
 import { initialized } from './internal/initialized';
 import { callbacks } from './internal/callback';
 import { defaultConfig } from '../config/default-config';
+import { resolveConfigEntryForFile } from '../config/resolve-config-for-file';
+import { SheriffConfigNotFoundError } from '../error/user-error';
+import { clearDependencyUniverseCache } from '../file-info/dependency-universe';
 
 let config: Configuration | undefined;
 
 export type ProjectInfo = {
   tsData: TsData;
   config: Configuration;
+  /** The config file selected for this project's entry file. */
+  configFilePath?: FsPath;
+  /** Whether the root config declares additional per-directory configs. */
+  usesMultipleConfigs: boolean;
 } & ParsedResult;
 
 /**
@@ -64,7 +71,12 @@ export function init<Options extends { returnOnMissingConfig: true }>(
 
 export function init(entryFile: FsPath, options: InitOptions): ProjectInfo;
 
-export function init(entryFile: FsPath, options: InitOptions = {}) {
+export function init(
+  entryFile: FsPath,
+  options: InitOptions = {},
+): ProjectInfo | undefined {
+  clearDependencyUniverseCache();
+
   const fullOptions = {
     ...{ traverse: true, returnOnMissingConfig: false },
     ...options,
@@ -74,7 +86,8 @@ export function init(entryFile: FsPath, options: InitOptions = {}) {
     fs.findNearestParentFile(entryFile, 'tsconfig.json'),
   );
   const tsData = generateTsData(tsConfigPath);
-  config = getConfig(tsData.rootDir);
+  const resolvedConfig = getConfig(entryFile, tsData.rootDir);
+  config = resolvedConfig.config;
 
   initialized.status = true;
   for (const callback of callbacks) {
@@ -87,7 +100,9 @@ export function init(entryFile: FsPath, options: InitOptions = {}) {
 
   return {
     tsData,
-    config,
+    config: resolvedConfig.config,
+    configFilePath: resolvedConfig.configFilePath,
+    usesMultipleConfigs: resolvedConfig.usesMultipleConfigs,
     ...parseProject(
       entryFile,
       fullOptions.traverse,
@@ -98,11 +113,56 @@ export function init(entryFile: FsPath, options: InitOptions = {}) {
   };
 }
 
-function getConfig(rootPath: FsPath): Configuration {
+type ResolvedConfig = {
+  config: Configuration;
+  configFilePath?: FsPath;
+  usesMultipleConfigs: boolean;
+};
+
+function getConfig(entryFile: FsPath, rootPath: FsPath): ResolvedConfig {
   const configFile = findConfig(rootPath);
   if (configFile) {
-    return parseConfig(configFile);
+    const rootConfig = parseConfig(configFile);
+    const selectedConfig = resolveConfigEntryForFile(
+      entryFile,
+      rootPath,
+      rootConfig.configs,
+    );
+    const selectedConfigFile = selectedConfig
+      ? resolveSelectedConfigFile(rootPath, selectedConfig)
+      : configFile;
+
+    return {
+      config:
+        selectedConfigFile === configFile
+          ? rootConfig
+          : parseConfig(selectedConfigFile, { validateConfigs: false }),
+      configFilePath: selectedConfigFile,
+      usesMultipleConfigs: Object.keys(rootConfig.configs).length > 0,
+    };
   }
 
-  return { ...defaultConfig, isConfigFileMissing: true };
+  return {
+    config: { ...defaultConfig, isConfigFileMissing: true },
+    usesMultipleConfigs: false,
+  };
+}
+
+function resolveSelectedConfigFile(
+  rootPath: FsPath,
+  selectedConfig: { directory: string; configPath: string },
+): FsPath {
+  const fs = getFs();
+  const selectedConfigFile = fs.isAbsolute(selectedConfig.configPath)
+    ? selectedConfig.configPath
+    : fs.join(rootPath, selectedConfig.configPath);
+
+  if (!fs.exists(selectedConfigFile)) {
+    throw new SheriffConfigNotFoundError(
+      selectedConfig.directory,
+      selectedConfig.configPath,
+    );
+  }
+
+  return toFsPath(selectedConfigFile);
 }

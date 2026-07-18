@@ -1,0 +1,12 @@
+
+[1mVerification Report[0m
+
+Issues found:
+  Total Invalid Files: 1
+  Total Encapsulation Violations: 0
+  Total Dependency Rule Violations: 1
+----------------------------------
+
+|-- src/app/bookings/overview/overview.component.ts
+|   |-- Dependency Rule Violations
+|   |   |-- denyRules denied from tag domain:bookings to tags type:api, domain:customers:api
