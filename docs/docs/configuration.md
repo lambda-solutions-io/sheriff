@@ -142,6 +142,11 @@ An empty array forbids every external import for the matching tag. A tag with
 no matching key is unrestricted, which keeps configurations without
 `externalRules` unchanged.
 
+Uninstalled packages are also governed by `externalRules` when the nearest
+`package.json` declares them in `dependencies`, `peerDependencies`, or
+`optionalDependencies`. Undeclared imports that cannot be resolved remain
+unresolvable and are not treated as external libraries.
+
 ## Optional Options
 
 These options have sensible defaults and are typically only customized for specific use cases.

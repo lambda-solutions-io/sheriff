@@ -434,6 +434,12 @@ matching tag rejects it, Sheriff reports the vetoing tag. An empty array
 rejects all external libraries. A tag for which no key matches is unrestricted,
 so omitting `externalRules` preserves the previous behavior.
 
+If TypeScript cannot resolve a bare package import, Sheriff also checks the
+nearest `package.json` up to the project root. Packages declared in
+`dependencies`, `peerDependencies`, or `optionalDependencies` are still
+governed by `externalRules` even when they are not installed. Undeclared,
+unresolvable imports remain unresolvable and are not checked as externals.
+
 A matcher function can make the decision from the full external import and the
 importing module context:
 

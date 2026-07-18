@@ -24,7 +24,8 @@ In order to reach version 1, we plan to add following features
 - Mixed-config project graphs: Resolve config, module vocabulary, and rules per file when one import traversal crosses directories mapped by `configs`. Separate entry points already select separate configs.
 - UI: Visualization of the dependencies with live-tracking of the dependency rules' impact.
 - ✅ Excluding third-party libraries: Restrict third-party imports per module tag with `externalRules`.
-- External dependency discovery: Read package manifests as a known dependency universe for rule validation and future warnings about unlisted dependencies.
+- ✅ External dependency discovery: Read the nearest package manifest to classify declared but uninstalled packages for `externalRules`.
+- External dependency validation: Validate external rules against declared packages and warn about unlisted dependencies.
 - Nx Interop: Allow Sheriff to consume Nx dependency rules.
 - Quality metrics: Extend Sheriff by adding various quality metrics which run next to the dependency rules.
 - Tutorial/Playground in the Docs: Provide a tutorial with WebContainers
