@@ -14,6 +14,8 @@ export type TsConfigContext = {
   paths: Record<string, FsPath>;
   rootDir: FsPath;
   baseUrl?: FsPath;
+  /** All tsconfig files of the `extends` chain, entry config first. */
+  sourceConfigPaths: FsPath[];
 };
 
 /**
@@ -39,8 +41,10 @@ export function getTsConfigContext(tsConfigPath: FsPath): TsConfigContext {
   let currentTsConfigDir = fs.getParent(currentTsConfigPath);
   const paths: Record<string, FsPath> = {};
   let baseUrl: FsPath | undefined = undefined;
+  const sourceConfigPaths: FsPath[] = [];
 
   while (currentTsConfigPath) {
+    sourceConfigPaths.push(currentTsConfigPath);
     const configRawContent = fs.readFile(currentTsConfigPath);
     const configContent = ts.readConfigFile(
       currentTsConfigPath,
@@ -108,5 +112,6 @@ export function getTsConfigContext(tsConfigPath: FsPath): TsConfigContext {
     paths,
     rootDir: currentTsConfigDir,
     baseUrl,
+    sourceConfigPaths,
   };
 }

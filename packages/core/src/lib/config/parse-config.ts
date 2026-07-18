@@ -13,6 +13,7 @@ import {
 } from '../error/user-error';
 import { defaultConfig } from './default-config';
 import { isEmptyRecord } from '../util/is-empty-record';
+import { getOrCompute } from '../cache/project-cache';
 
 type ParseConfigOptions = {
   validateConfigs?: boolean;
@@ -22,8 +23,25 @@ export const parseConfig = (
   configFile: FsPath,
   options: ParseConfigOptions = {},
 ): Configuration => {
-  const tsCode = getFs().readFile(configFile);
   const fullOptions = { validateConfigs: true, ...options };
+
+  // transpiling + evaluating the config is expensive and ESLint triggers
+  // it once per linted file. Callers never mutate the returned
+  // `Configuration`, so a shared instance per config file is safe.
+  return getOrCompute(
+    `parse-config\0${configFile}\0${fullOptions.validateConfigs}`,
+    () => ({
+      value: computeParsedConfig(configFile, fullOptions),
+      dependencies: [configFile],
+    }),
+  );
+};
+
+const computeParsedConfig = (
+  configFile: FsPath,
+  fullOptions: Required<ParseConfigOptions>,
+): Configuration => {
+  const tsCode = getFs().readFile(configFile);
 
   const { outputText } = ts.transpileModule(tsCode, {
     compilerOptions: { module: ts.ModuleKind.NodeNext },

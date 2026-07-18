@@ -5,6 +5,7 @@ import { toFsPath } from '../fs-path';
 import { TsPaths } from '../ts-data';
 import { tsConfig } from '../../test/fixtures/ts-config';
 import { describe, it, expect, test } from 'vitest';
+import getFs from '../../fs/getFs';
 
 describe('generateTsData', () => {
   function setup(
@@ -41,6 +42,30 @@ describe('generateTsData', () => {
   it('should also work with paths and wildcards', () => {
     const paths = setup({ '@app/*': ['app'] }, 'src', { src: { app: {} } });
     expect(paths).toEqual({ '@app/*': '/project/src/app' });
+  });
+
+  describe('memoization', () => {
+    it('should reuse tsData until a config of the extends chain changes', () => {
+      createProject({
+        'tsconfig.base.json': JSON.stringify({ compilerOptions: {} }),
+        'tsconfig.json': JSON.stringify({ extends: './tsconfig.base.json' }),
+      });
+      const tsConfigPath = toFsPath('/project/tsconfig.json');
+
+      const first = generateTsData(tsConfigPath);
+      expect(first.sourceConfigPaths).toEqual([
+        '/project/tsconfig.json',
+        '/project/tsconfig.base.json',
+      ]);
+      expect(generateTsData(tsConfigPath)).toBe(first);
+
+      getFs().writeFile(
+        '/project/tsconfig.base.json',
+        JSON.stringify({ compilerOptions: { baseUrl: '.' } }),
+      );
+
+      expect(generateTsData(tsConfigPath)).not.toBe(first);
+    });
   });
 
   describe('missing or double dir separators', () => {

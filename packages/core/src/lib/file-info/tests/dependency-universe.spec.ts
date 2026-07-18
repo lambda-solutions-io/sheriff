@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { createProject } from '../../test/project-creator';
 import { toFsPath } from '../fs-path';
 import {
-  clearDependencyUniverseCache,
   extractPackageName,
   getDependencyUniverse,
 } from '../dependency-universe';
@@ -105,7 +104,7 @@ describe('dependency universe', () => {
     expect(dependencyUniverse('/project/src')).toEqual(new Set());
   });
 
-  it('should stay cached within a run and re-read package.json after cache clear', () => {
+  it('should re-read package.json when it changes', () => {
     createProject({
       package: { 'index.ts': [] },
       src: { 'main.ts': [] },
@@ -119,10 +118,6 @@ describe('dependency universe', () => {
     writePackageJson('/project', {
       dependencies: { after: '^1.0.0' },
     });
-
-    expect(dependencyUniverse('/project/src')).toEqual(new Set(['before']));
-
-    clearDependencyUniverseCache();
 
     expect(dependencyUniverse('/project/src')).toEqual(new Set(['after']));
   });

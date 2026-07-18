@@ -11,7 +11,6 @@ import { callbacks } from './internal/callback';
 import { defaultConfig } from '../config/default-config';
 import { resolveConfigEntryForFile } from '../config/resolve-config-for-file';
 import { SheriffConfigNotFoundError } from '../error/user-error';
-import { clearDependencyUniverseCache } from '../file-info/dependency-universe';
 
 let config: Configuration | undefined;
 
@@ -75,8 +74,6 @@ export function init(
   entryFile: FsPath,
   options: InitOptions = {},
 ): ProjectInfo | undefined {
-  clearDependencyUniverseCache();
-
   const fullOptions = {
     ...{ traverse: true, returnOnMissingConfig: false },
     ...options,

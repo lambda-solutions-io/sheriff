@@ -11,6 +11,7 @@ interface FsNode {
   contents: string;
   type: FsNodeType;
   name: string;
+  lastModified: number;
 }
 
 interface GetPathReturnSuccess {
@@ -34,6 +35,18 @@ export class VirtualFs extends Fs {
   root!: FsNode;
   project!: FsNode;
 
+  // monotonic write counter emulating mtime; never reset so cache
+  // entries from a previous generation can never look fresh again
+  #writeClock = 0;
+
+  /**
+   * Current value of the write counter. Lets caches detect any structural
+   * change exactly instead of relying on a time-based staleness window.
+   */
+  get writeClock(): number {
+    return this.#writeClock;
+  }
+
   constructor() {
     super();
     this.init();
@@ -46,6 +59,7 @@ export class VirtualFs extends Fs {
       contents: '',
       type: 'directory',
       name: 'root',
+      lastModified: ++this.#writeClock,
     };
 
     this.project = {
@@ -54,6 +68,7 @@ export class VirtualFs extends Fs {
       contents: '',
       type: 'directory',
       name: 'project',
+      lastModified: ++this.#writeClock,
     };
     this.root.children.set('project', this.project);
   }
@@ -101,6 +116,7 @@ export class VirtualFs extends Fs {
       throw new Error(`cannot write to file ${path} because it is a directory`);
     }
     node.contents = contents;
+    node.lastModified = ++this.#writeClock;
   };
 
   appendFile(filename: string, contents: string): void {
@@ -110,6 +126,7 @@ export class VirtualFs extends Fs {
     } else {
       node.contents = node.contents + EOL + contents;
     }
+    node.lastModified = ++this.#writeClock;
   }
 
   readFile = (path: string): string => {
@@ -235,6 +252,7 @@ export class VirtualFs extends Fs {
       contents: '',
       type,
       name,
+      lastModified: ++this.#writeClock,
     };
   }
 
@@ -304,6 +322,10 @@ export class VirtualFs extends Fs {
   override isFile(path: FsPath): boolean {
     const node = this.#getNodeOrThrow(path);
     return node.node.type === 'file';
+  }
+
+  override lastModified(path: FsPath): number {
+    return this.#getNodeOrThrow(path).node.lastModified;
   }
 }
 
