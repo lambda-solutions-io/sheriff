@@ -230,8 +230,6 @@ function assertModule(createTestParams: () => TestParameter) {
     entryFileInfo: fileInfo,
     rootDir: toFsPath('/'),
     barrelFile: 'index.ts',
-    encapsulatedFolderName: 'internals',
-    showWarningOnBarrelFileLessCollision: true,
   });
 
   const expectedModules = testParams.expectedModules.map((mi) => {
@@ -248,7 +246,6 @@ function assertModule(createTestParams: () => TestParameter) {
       mi.path === '/',
       mi.path !== '/',
       'index.ts',
-      'internals',
     );
     for (const fi of fileInfos) {
       module.addFileInfo(fi);
