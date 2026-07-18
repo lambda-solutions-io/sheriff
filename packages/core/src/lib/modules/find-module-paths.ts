@@ -9,6 +9,10 @@ import {
   matchesFolderPathPattern,
   normalizePathSeparators,
 } from './internal/segment-pattern';
+import {
+  DEFAULT_STRUCTURE_CACHE_TTL_MS,
+  getOrCompute,
+} from '../cache/project-cache';
 
 export interface ModulePathInfo {
   /**
@@ -36,12 +40,27 @@ export function findModulePaths(
   sheriffConfig: Configuration,
 ): ModulePathMap {
   const { modules, enableBarrelLess, barrelFileName } = sheriffConfig;
+
+  // both finders walk the filesystem for every `init()`. Their results
+  // depend on directory structure, which mtime stamps cannot validate,
+  // so they are cached with a staleness window (see project-cache).
   const modulesWithoutBarrel = enableBarrelLess
-    ? findModulePathsWithoutBarrel(modules, rootDir, barrelFileName)
+    ? getOrCompute(
+        `module-paths-without-barrel\0${rootDir}\0${barrelFileName}\0${JSON.stringify(modules)}`,
+        () => ({
+          value: findModulePathsWithoutBarrel(modules, rootDir, barrelFileName),
+          dependencies: [],
+        }),
+        { ttlMs: DEFAULT_STRUCTURE_CACHE_TTL_MS },
+      )
     : [];
-  const modulesWithBarrel = findModulePathsWithBarrel(
-    projectDirs,
-    barrelFileName,
+  const modulesWithBarrel = getOrCompute(
+    `module-paths-with-barrel\0${barrelFileName}\0${[...projectDirs].sort().join(',')}`,
+    () => ({
+      value: findModulePathsWithBarrel(projectDirs, barrelFileName),
+      dependencies: [],
+    }),
+    { ttlMs: DEFAULT_STRUCTURE_CACHE_TTL_MS },
   );
   const modulePaths: ModulePathMap = {};
 

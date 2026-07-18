@@ -51,4 +51,11 @@ export abstract class Fs {
   abstract isAbsolute(path: string): boolean;
 
   abstract isFile(path: FsPath): boolean
+
+  /**
+   * Modification marker for cache invalidation. `DefaultFs` returns the
+   * file's mtime in milliseconds, `VirtualFs` a monotonic write counter.
+   * The only guarantee is that a change to the file yields a new value.
+   */
+  abstract lastModified(path: FsPath): number;
 }

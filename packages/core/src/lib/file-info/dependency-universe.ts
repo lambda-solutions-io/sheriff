@@ -1,5 +1,9 @@
 import { FsPath } from './fs-path';
 import getFs from '../fs/getFs';
+import {
+  DEFAULT_STRUCTURE_CACHE_TTL_MS,
+  getOrCompute,
+} from '../cache/project-cache';
 
 type DependencyManifest = {
   dependencies?: unknown;
@@ -7,19 +11,13 @@ type DependencyManifest = {
   optionalDependencies?: unknown;
 };
 
-type DependencyUniverseCache = {
-  manifestByDirectory: Map<string, FsPath | undefined>;
-  universeByManifest: Map<FsPath, Set<string>>;
-};
-
-const cacheByFilesystemGeneration = new WeakMap<
-  object,
-  DependencyUniverseCache
->();
-
 /**
  * Finds the nearest package manifest within `rootDir` and returns the package
  * names declared as runtime, peer, or optional dependencies.
+ *
+ * Results are cached in the project cache: the manifest *location* is
+ * structure-dependent (a nearer package.json can appear) and therefore uses
+ * the staleness window, the manifest *content* is validated via its mtime.
  *
  * @param fileDir directory of the importing file
  * @param rootDir upper inclusive boundary for the manifest search
@@ -35,57 +33,23 @@ export function getDependencyUniverse(
     return new Set<string>();
   }
 
-  const cache = getCache();
-  const normalizedRootDir = normalizePath(rootDir);
-  const visitedDirectories: string[] = [];
-  let currentDirectory = fileDir;
+  const manifestPath = getOrCompute(
+    `dependency-manifest\0${normalizePath(rootDir)}\0${normalizePath(fileDir)}`,
+    () => ({
+      value: findNearestManifest(fileDir, rootDir),
+      dependencies: [],
+    }),
+    { ttlMs: DEFAULT_STRUCTURE_CACHE_TTL_MS },
+  );
 
-  while (true) {
-    const directoryCacheKey = createDirectoryCacheKey(
-      currentDirectory,
-      normalizedRootDir,
-    );
-    visitedDirectories.push(directoryCacheKey);
-
-    if (cache.manifestByDirectory.has(directoryCacheKey)) {
-      const cachedManifest = cache.manifestByDirectory.get(directoryCacheKey);
-      cacheVisitedDirectories(cache, visitedDirectories, cachedManifest);
-      return cachedManifest
-        ? getUniverseFromManifest(cachedManifest, cache)
-        : new Set<string>();
-    }
-
-    const manifestPath = fs.join(currentDirectory, 'package.json');
-    if (fs.exists(manifestPath) && fs.isFile(manifestPath)) {
-      cacheVisitedDirectories(cache, visitedDirectories, manifestPath);
-      return getUniverseFromManifest(manifestPath, cache);
-    }
-
-    if (normalizePath(currentDirectory) === normalizedRootDir) {
-      cacheVisitedDirectories(cache, visitedDirectories, undefined);
-      return new Set<string>();
-    }
-
-    const parent = fs.getParent(currentDirectory);
-    // On win32, drive-letter casing can keep the normalized root comparison
-    // from matching. Stop when the filesystem reports a self-parent root.
-    if (parent === currentDirectory) {
-      cacheVisitedDirectories(cache, visitedDirectories, undefined);
-      return new Set<string>();
-    }
-
-    currentDirectory = parent;
+  if (!manifestPath) {
+    return new Set<string>();
   }
-}
 
-/**
- * Clears cached dependency manifests for the active filesystem generation.
- *
- * Sheriff calls this at the start of every fresh run so long-lived processes
- * re-read package manifests with the same lifetime as config and tsconfig.
- */
-export function clearDependencyUniverseCache(): void {
-  cacheByFilesystemGeneration.delete(getFilesystemGeneration());
+  return getOrCompute(`dependency-universe\0${manifestPath}`, () => ({
+    value: parseDependencyUniverse(manifestPath),
+    dependencies: [manifestPath],
+  }));
 }
 
 /**
@@ -100,40 +64,33 @@ export function extractPackageName(specifier: string): string {
     : segments[0];
 }
 
-function getCache(): DependencyUniverseCache {
-  const filesystemGeneration = getFilesystemGeneration();
-  const cached = cacheByFilesystemGeneration.get(filesystemGeneration);
-
-  if (cached) {
-    return cached;
-  }
-
-  const cache: DependencyUniverseCache = {
-    manifestByDirectory: new Map(),
-    universeByManifest: new Map(),
-  };
-  cacheByFilesystemGeneration.set(filesystemGeneration, cache);
-  return cache;
-}
-
-function getFilesystemGeneration(): object {
+function findNearestManifest(
+  fileDir: FsPath,
+  rootDir: FsPath,
+): FsPath | undefined {
   const fs = getFs();
-  const virtualFsRoot = (fs as typeof fs & { root?: object }).root;
-  return virtualFsRoot ?? fs;
-}
+  const normalizedRootDir = normalizePath(rootDir);
+  let currentDirectory = fileDir;
 
-function getUniverseFromManifest(
-  manifestPath: FsPath,
-  cache: DependencyUniverseCache,
-): Set<string> {
-  const cached = cache.universeByManifest.get(manifestPath);
-  if (cached) {
-    return cached;
+  while (true) {
+    const manifestPath = fs.join(currentDirectory, 'package.json');
+    if (fs.exists(manifestPath) && fs.isFile(manifestPath)) {
+      return manifestPath;
+    }
+
+    if (normalizePath(currentDirectory) === normalizedRootDir) {
+      return undefined;
+    }
+
+    const parent = fs.getParent(currentDirectory);
+    // On win32, drive-letter casing can keep the normalized root comparison
+    // from matching. Stop when the filesystem reports a self-parent root.
+    if (parent === currentDirectory) {
+      return undefined;
+    }
+
+    currentDirectory = parent;
   }
-
-  const universe = parseDependencyUniverse(manifestPath);
-  cache.universeByManifest.set(manifestPath, universe);
-  return universe;
 }
 
 function parseDependencyUniverse(manifestPath: FsPath): Set<string> {
@@ -157,23 +114,6 @@ function getDependencyNames(section: unknown): string[] {
     !Array.isArray(section)
     ? Object.keys(section)
     : [];
-}
-
-function cacheVisitedDirectories(
-  cache: DependencyUniverseCache,
-  directoryCacheKeys: string[],
-  manifestPath: FsPath | undefined,
-): void {
-  for (const directoryCacheKey of directoryCacheKeys) {
-    cache.manifestByDirectory.set(directoryCacheKey, manifestPath);
-  }
-}
-
-function createDirectoryCacheKey(
-  directory: FsPath,
-  normalizedRootDir: string,
-): string {
-  return `${normalizedRootDir}\0${normalizePath(directory)}`;
 }
 
 function normalizePath(path: string): string {

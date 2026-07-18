@@ -107,6 +107,10 @@ export class DefaultFs extends Fs {
   override isFile(path: FsPath): boolean {
     return fs.lstatSync(path).isFile();
   }
+
+  override lastModified(path: FsPath): number {
+    return fs.statSync(path).mtimeMs;
+  }
 }
 
 const defaultFs = new DefaultFs();

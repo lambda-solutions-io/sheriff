@@ -294,4 +294,54 @@ describe('Virtual Fs', () => {
       expect(files).toEqual(['/project/sub']);
     });
   });
+
+  describe('lastModified', () => {
+    beforeEach(() => fs.reset());
+
+    it('should change on write', () => {
+      fs.writeFile('/project/main.ts', 'a');
+      const before = fs.lastModified(toFsPath('/project/main.ts'));
+      fs.writeFile('/project/main.ts', 'b');
+
+      expect(fs.lastModified(toFsPath('/project/main.ts'))).toBeGreaterThan(
+        before,
+      );
+    });
+
+    it('should change on append', () => {
+      fs.writeFile('/project/main.ts', 'a');
+      const before = fs.lastModified(toFsPath('/project/main.ts'));
+      fs.appendFile('/project/main.ts', 'b');
+
+      expect(fs.lastModified(toFsPath('/project/main.ts'))).toBeGreaterThan(
+        before,
+      );
+    });
+
+    it('should stay stable without writes', () => {
+      fs.writeFile('/project/main.ts', 'a');
+      fs.writeFile('/project/other.ts', 'b');
+
+      const first = fs.lastModified(toFsPath('/project/main.ts'));
+      expect(fs.lastModified(toFsPath('/project/main.ts'))).toBe(first);
+    });
+
+    it('should never reuse markers across resets', () => {
+      fs.writeFile('/project/main.ts', 'a');
+      const before = fs.lastModified(toFsPath('/project/main.ts'));
+
+      fs.reset();
+      fs.writeFile('/project/main.ts', 'a');
+
+      expect(fs.lastModified(toFsPath('/project/main.ts'))).toBeGreaterThan(
+        before,
+      );
+    });
+
+    it('should throw on non-existing paths', () => {
+      expect(() =>
+        fs.lastModified('/project/nope.ts' as FsPath),
+      ).toThrowError('file /project/nope.ts does not exist');
+    });
+  });
 });

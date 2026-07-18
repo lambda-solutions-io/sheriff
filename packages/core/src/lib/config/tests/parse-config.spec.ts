@@ -94,6 +94,26 @@ export const config: SheriffConfig = {
       });
     });
 
+    it('should memoize per config file until it changes', () => {
+      getFs().writeFile(
+        'sheriff.config.ts',
+        `export const config = { depRules: { noTag: 'noTag' } };`,
+      );
+      const configFile = toFsPath(getFs().cwd() + '/sheriff.config.ts');
+
+      const first = parseConfig(configFile);
+      expect(parseConfig(configFile)).toBe(first);
+
+      getFs().writeFile(
+        'sheriff.config.ts',
+        `export const config = { depRules: { changed: 'changed' } };`,
+      );
+
+      const reparsed = parseConfig(configFile);
+      expect(reparsed).not.toBe(first);
+      expect(reparsed.depRules).toEqual({ changed: 'changed' });
+    });
+
     it('should keep configured plugins', () => {
       getFs().writeFile(
         'sheriff.config.ts',

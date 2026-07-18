@@ -10,10 +10,23 @@ import {
   extractPackageName,
   getDependencyUniverse,
 } from './dependency-universe';
+import {
+  DEFAULT_STRUCTURE_CACHE_TTL_MS,
+  getOrCompute,
+} from '../cache/project-cache';
 
 export type ResolveFn = (
   moduleName: string,
 ) => ReturnType<typeof ts.resolveModuleName>;
+
+/**
+ * Outcome of resolving a single import specifier of a file. Contains only
+ * serializable data (no tree nodes), so it can be cached across runs.
+ */
+type ImportResolution =
+  | { kind: 'module'; raw: string; importPath: FsPath }
+  | { kind: 'external'; raw: string }
+  | { kind: 'unresolvable'; raw: string };
 
 // https://stackoverflow.com/questions/71815527/typescript-compiler-apihow-to-get-absolute-path-to-source-file-of-import-module
 /**
@@ -46,17 +59,93 @@ export function traverseFilesystem(
   runOnce = false,
   fileContent?: string,
 ): UnassignedFileInfo {
-  const { paths, sys, rootDir, baseUrl, configObject } = tsData;
   const fileInfo: UnassignedFileInfo = new UnassignedFileInfo(fsPath, []);
   fileInfoDict.set(fsPath, fileInfo);
+
+  for (const resolution of getImportResolutions(
+    fsPath,
+    tsData,
+    ignoreFileExtensions,
+    fileContent,
+  )) {
+    if (resolution.kind === 'external') {
+      fileInfo.addExternalLibrary(resolution.raw);
+    } else if (resolution.kind === 'unresolvable') {
+      fileInfo.addUnresolvableImport(resolution.raw);
+    } else {
+      const { importPath, raw } = resolution;
+      const existing = fileInfoDict.get(importPath);
+      if (existing) {
+        fileInfo.addImport(existing, raw);
+      } else if (runOnce) {
+        fileInfo.addImport(new UnassignedFileInfo(importPath), raw);
+      } else {
+        fileInfo.addImport(
+          traverseFilesystem(
+            importPath,
+            fileInfoDict,
+            tsData,
+            ignoreFileExtensions,
+          ),
+          raw,
+        );
+      }
+    }
+  }
+
+  return fileInfo;
+}
+
+/**
+ * Resolving imports (`ts.preProcessFile` + `ts.resolveModuleName` per
+ * import) is the most expensive part of the traversal, so results are
+ * cached per file. Unsaved editor content bypasses the cache entirely to
+ * never poison it. Resolutions can also change when *other* files appear
+ * (e.g. shadowing), which the staleness window covers.
+ */
+function getImportResolutions(
+  fsPath: FsPath,
+  tsData: TsData,
+  ignoreFileExtensions: string[],
+  fileContent?: string,
+): ImportResolution[] {
+  if (fileContent !== undefined) {
+    return resolveImports(fsPath, tsData, ignoreFileExtensions, fileContent);
+  }
+
+  // the tsconfig of the entry file governs the resolution, so it is part
+  // of the key: the same file can resolve differently per project.
+  return getOrCompute(
+    `import-resolutions\0${tsData.sourceConfigPaths[0]}\0${fsPath}`,
+    () => ({
+      value: resolveImports(
+        fsPath,
+        tsData,
+        ignoreFileExtensions,
+        getFs().readFile(fsPath),
+      ),
+      dependencies: [fsPath, ...tsData.sourceConfigPaths],
+    }),
+    { ttlMs: DEFAULT_STRUCTURE_CACHE_TTL_MS },
+  );
+}
+
+function resolveImports(
+  fsPath: FsPath,
+  tsData: TsData,
+  ignoreFileExtensions: string[],
+  fileContent: string,
+): ImportResolution[] {
+  const { paths, sys, rootDir, baseUrl, configObject } = tsData;
   const fs = getFs();
-  fileContent = fileContent ?? fs.readFile(fsPath);
   const preProcessedFile = ts.preProcessFile(fileContent);
 
   const config = { ...configObject.options, baseUrl };
 
   const resolveFn: ResolveFn = (moduleName: string) =>
     ts.resolveModuleName(moduleName, fsPath, config, sys);
+
+  const resolutions: ImportResolution[] = [];
 
   for (const importedFile of preProcessedFile.importedFiles) {
     const { fileName } = importedFile;
@@ -66,25 +155,29 @@ export function traverseFilesystem(
       continue;
     }
     const resolvedImport = resolveFn(fileName);
-    let importPath: FsPath | undefined;
 
     // alias/path resolving has priority
     const resolvedTsPath = resolvePotentialTsPath(fileName, paths, resolveFn);
 
     if (resolvedTsPath) {
-      importPath = resolvedTsPath;
+      resolutions.push({
+        kind: 'module',
+        raw: fileName,
+        importPath: resolvedTsPath,
+      });
     }
 
     // check if external library or normal file
     else if (resolvedImport.resolvedModule) {
       const { resolvedFileName } = resolvedImport.resolvedModule;
       if (!resolvedImport.resolvedModule.isExternalLibraryImport) {
-        importPath = fixPathSeparators(resolvedFileName);
+        const importPath = fixPathSeparators(resolvedFileName);
         if (!importPath.startsWith(rootDir)) {
           throw new Error(`${importPath} is outside of root ${rootDir}`);
         }
+        resolutions.push({ kind: 'module', raw: fileName, importPath });
       } else {
-        fileInfo.addExternalLibrary(fileName);
+        resolutions.push({ kind: 'external', raw: fileName });
       }
     }
 
@@ -99,32 +192,12 @@ export function traverseFilesystem(
           extractPackageName(fileName),
         );
 
-      if (isDeclaredExternal) {
-        fileInfo.addExternalLibrary(fileName);
-      } else {
-        fileInfo.addUnresolvableImport(fileName);
-      }
-    }
-
-    if (importPath) {
-      const existing = fileInfoDict.get(importPath);
-      if (existing) {
-        fileInfo.addImport(existing, fileName);
-      } else if (runOnce) {
-        fileInfo.addImport(new UnassignedFileInfo(importPath), fileName);
-      } else {
-        fileInfo.addImport(
-          traverseFilesystem(
-            importPath,
-            fileInfoDict,
-            tsData,
-            ignoreFileExtensions,
-          ),
-          fileName,
-        );
-      }
+      resolutions.push({
+        kind: isDeclaredExternal ? 'external' : 'unresolvable',
+        raw: fileName,
+      });
     }
   }
 
-  return fileInfo;
+  return resolutions;
 }
