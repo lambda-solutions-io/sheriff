@@ -3,6 +3,7 @@ import {
   DependencyRulesConfig,
   ExternalRulesConfig,
 } from './dependency-rules-config';
+import { SheriffPlugin } from '../plugin/plugin';
 
 /**
  * Exported by **sheriff.config.ts**. It is optional and should be located
@@ -343,4 +344,13 @@ export interface UserSheriffConfig {
    * ```
    */
   ignoreFileExtensions?: string[] | ((defaults: string[]) => string[]);
+
+  /**
+   * Optional Sheriff plugins that extend the CLI with additional commands.
+   *
+   * Plugins are instantiated directly in `sheriff.config.ts`. Only the root
+   * config's plugins are loaded; `plugins` in a sub-config referenced via
+   * {@link configs} is ignored.
+   */
+  plugins?: SheriffPlugin[];
 }

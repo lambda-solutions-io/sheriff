@@ -32,6 +32,10 @@ echo "Testing multiple configs in an Angular workspace"
 cd ../angular-v-multi
 bash ./integration-test.sh
 
+echo "Testing plugin system"
+cd ../plugin-i
+bash ./integration-test.sh
+
 cd ../..
 
 echo "Tests finished successfully"

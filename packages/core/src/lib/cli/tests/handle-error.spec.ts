@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { InvalidPathError } from '../../error/user-error';
 import { mockCli } from './helpers/mock-cli';
-import { handleError } from '../internal/handle-error';
+import {
+  handleError,
+  handleErrorAsync,
+  handleErrorOutput,
+} from '../internal/handle-error';
 
 describe('with error handling', () => {
   it('should execute the function', () => {
@@ -41,5 +45,34 @@ describe('with error handling', () => {
     });
 
     expect(allErrorLogs()).toBe('nix geht');
+  });
+
+  it('should print out the message with handleErrorOutput', () => {
+    const { allErrorLogs } = mockCli();
+
+    handleErrorOutput(new Error('output only'));
+
+    expect(allErrorLogs()).toBe('output only');
+  });
+
+  it('should execute async functions', async () => {
+    mockCli();
+    let a = 1;
+
+    await handleErrorAsync(async () => {
+      a++;
+    });
+
+    expect(a).toBe(2);
+  });
+
+  it('should print async errors', async () => {
+    const { allErrorLogs } = mockCli();
+
+    await handleErrorAsync(async () => {
+      throw new Error('async nix geht');
+    });
+
+    expect(allErrorLogs()).toBe('async nix geht');
   });
 });

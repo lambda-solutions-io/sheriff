@@ -18,5 +18,5 @@ export function mockCli() {
   const allErrorLogs = () =>
     mockedCli.logError.mock.calls.map(([message]) => message).join('\n');
 
-  return { allLogs, allErrorLogs };
+  return { allLogs, allErrorLogs, mockedCli };
 }

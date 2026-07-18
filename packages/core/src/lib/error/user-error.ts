@@ -12,7 +12,11 @@ export type UserErrorCode =
   | 'SH-011'
   | 'SH-012'
   | 'SH-013'
-  | 'SH-014';
+  | 'SH-014'
+  | 'SH-015'
+  | 'SH-016'
+  | 'SH-017'
+  | 'SH-018';
 
 export class UserError extends Error {
   constructor(
@@ -139,6 +143,41 @@ export class SheriffConfigNotFoundError extends UserError {
     super(
       'SH-014',
       `Cannot resolve configs entry '${directory}' to '${configPath}'. Please verify that the Sheriff config file exists.`,
+    );
+  }
+}
+
+export class PluginNotFoundError extends UserError {
+  constructor(pluginName: string) {
+    super(
+      'SH-015',
+      `Plugin '${pluginName}' not found. Make sure to register it in sheriff.config.ts.`,
+    );
+  }
+}
+
+export class PluginInvalidError extends UserError {
+  constructor(details: string, index?: number) {
+    const pluginReference =
+      index === undefined ? 'plugin' : `plugin at index ${index}`;
+    super('SH-016', `Invalid ${pluginReference}: ${details}.`);
+  }
+}
+
+export class PluginExecutionError extends UserError {
+  constructor(pluginName: string, errorMessage: string) {
+    super(
+      'SH-017',
+      `Plugin '${pluginName}' failed during execution: ${errorMessage}`,
+    );
+  }
+}
+
+export class DuplicatePluginNameError extends UserError {
+  constructor(pluginName: string) {
+    super(
+      'SH-018',
+      `Plugin '${pluginName}' is registered more than once. Plugin names must be unique.`,
     );
   }
 }

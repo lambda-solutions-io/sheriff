@@ -94,6 +94,32 @@ export const config: SheriffConfig = {
       });
     });
 
+    it('should keep configured plugins', () => {
+      getFs().writeFile(
+        'sheriff.config.ts',
+        `
+export const config = {
+  depRules: {},
+  entryFile: 'src/main.ts',
+  plugins: [
+    {
+      name: 'junit',
+      async execute() {},
+    },
+  ],
+};
+      `,
+      );
+
+      const config = parseConfig(
+        toFsPath(getFs().cwd() + '/sheriff.config.ts'),
+      );
+
+      expect(config.plugins).toHaveLength(1);
+      expect(config.plugins?.[0].name).toBe('junit');
+      expect(typeof config.plugins?.[0].execute).toBe('function');
+    });
+
     it('should throw if modules is missing and autoTagging is disabled', () => {
       getFs().writeFile(
         'sheriff.config.ts',

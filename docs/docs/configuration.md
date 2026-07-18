@@ -243,6 +243,39 @@ tracked on the roadmap.
 
 ### Other Options
 
+#### `plugins` {#plugins}
+
+- **Type**: `SheriffPlugin[]`
+- **Default**: `undefined`
+- **Description**: Registers additional Sheriff CLI commands by instantiating plugins directly in `sheriff.config.ts`.
+
+:::note
+Plugins are only loaded from the root `sheriff.config.ts`. A `plugins` entry in a sub-config referenced via [`configs`](#configs) is ignored.
+:::
+
+**Example:**
+
+```typescript
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+import { JunitReporterPlugin } from 'mberger-junit-sheriff';
+import { SheriffUiPlugin } from '@lambda-solutions/sheriff-ui';
+
+export const config: SheriffConfig = {
+  version: 1,
+  modules: {
+    'src/feature': 'feature',
+    'src/shared': 'shared',
+  },
+  depRules: {
+    feature: 'shared',
+  },
+  plugins: [
+    new SheriffUiPlugin(),
+    new JunitReporterPlugin({ junitVersion: 1, reporters: ['html'] }),
+  ],
+};
+```
+
 #### `autoTagging` {#autotagging}
 
 - **Type**: `boolean`
