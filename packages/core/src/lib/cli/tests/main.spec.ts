@@ -19,6 +19,26 @@ const createMockPlugin = (
   execute: executeFn ?? (async () => {}),
 });
 
+const testConfig = (plugin: SheriffPlugin) => ({
+  version: 1,
+  autoTagging: true,
+  modules: {},
+  depRules: {},
+  enableBarrelLess: false,
+  encapsulationPattern: 'internal',
+  excludeRoot: false,
+  log: false,
+  isConfigFileMissing: false,
+  denyRules: {},
+  externalRules: {},
+  configs: {},
+  entryFile: 'src/main.ts',
+  barrelFileName: 'index.ts',
+  entryPoints: undefined,
+  ignoreFileExtensions: [],
+  plugins: [plugin],
+});
+
 describe('main', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -107,22 +127,7 @@ describe('main', () => {
       (args: string[], api: SheriffPluginAPI) => Promise<void>
     >();
     const plugin = createMockPlugin('reporter', executeMock);
-    const config = {
-      version: 1,
-      autoTagging: true,
-      modules: {},
-      depRules: {},
-      enableBarrelLess: false,
-      encapsulationPattern: 'internal',
-      excludeRoot: false,
-      log: false,
-      isConfigFileMissing: false,
-      entryFile: 'src/main.ts',
-      barrelFileName: 'index.ts',
-      entryPoints: undefined,
-      ignoreFileExtensions: [],
-      plugins: [plugin],
-    };
+    const config = testConfig(plugin);
 
     mockCli();
     vi.spyOn(getPluginsModule, 'getPlugins').mockReturnValue({
@@ -180,8 +185,8 @@ describe('main', () => {
     expect(allLogs()).toContain('No issues found');
   });
 
-  it('should show help for unknown commands', () => {
-    const { allLogs } = mockCli();
+  it('should fail with an error for unknown commands', async () => {
+    const { allErrorLogs, mockedCli } = mockCli();
 
     vi.spyOn(getPluginsModule, 'getPlugins').mockReturnValue({
       config: undefined,
@@ -195,9 +200,61 @@ describe('main', () => {
       },
     });
 
-    main('unknown-command');
+    await main('unknown-command');
+
+    expect(allErrorLogs()).toContain("Plugin 'unknown-command' not found");
+    expect(mockedCli.endProcessError).toHaveBeenCalled();
+    expect(mockedCli.endProcessOk).not.toHaveBeenCalled();
+  });
+
+  it('should show help even when the config cannot be parsed', async () => {
+    const { allLogs } = mockCli();
+
+    vi.spyOn(getPluginsModule, 'getPlugins').mockImplementation(() => {
+      throw new Error('broken config');
+    });
+
+    createProject({
+      'tsconfig.json': tsConfig(),
+      src: {
+        'main.ts': [],
+      },
+    });
+
+    await main();
 
     expect(allLogs()).toContain('Commands:');
+    expect(allLogs()).not.toContain('Plugins:');
+  });
+
+  it('should exit with an error when a plugin fails', async () => {
+    const { allErrorLogs, mockedCli } = mockCli();
+    const plugin = createMockPlugin('reporter', async () => {
+      throw new Error('report generation failed');
+    });
+
+    vi.spyOn(getPluginsModule, 'getPlugins').mockReturnValue({
+      config: testConfig(plugin),
+      plugins: [plugin],
+    });
+
+    createProject({
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': sheriffConfig({
+        depRules: {},
+        entryFile: 'src/main.ts',
+      }),
+      src: {
+        'main.ts': [],
+      },
+    });
+
+    await main('reporter');
+
+    expect(allErrorLogs()).toContain(
+      "Plugin 'reporter' failed during execution: report generation failed",
+    );
+    expect(mockedCli.endProcessError).toHaveBeenCalled();
   });
 
   it('should surface plugin-loading errors', async () => {

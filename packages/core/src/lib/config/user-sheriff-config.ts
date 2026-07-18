@@ -322,7 +322,7 @@ export interface UserSheriffConfig {
    * @note
    * For single-project setups, rather use the `entryFile` property instead.
    * Either `entryFile` or `entryPoints` can be set, but not both.
-  */
+   */
   entryPoints?: Record<string, string>;
 
   /**
@@ -348,7 +348,9 @@ export interface UserSheriffConfig {
   /**
    * Optional Sheriff plugins that extend the CLI with additional commands.
    *
-   * Plugins are instantiated directly in `sheriff.config.ts`.
+   * Plugins are instantiated directly in `sheriff.config.ts`. Only the root
+   * config's plugins are loaded; `plugins` in a sub-config referenced via
+   * {@link configs} is ignored.
    */
   plugins?: SheriffPlugin[];
 }

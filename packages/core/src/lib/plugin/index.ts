@@ -1,6 +1,7 @@
 export { SheriffPlugin } from './plugin';
 export {
   DependencyViolationInfo,
+  ExternalRuleViolationInfo,
   FileViolations,
   ProjectDataOptions,
   SheriffPluginAPI,

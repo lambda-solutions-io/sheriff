@@ -26,7 +26,7 @@ export function getEntriesFromCliOrConfig(
   /**
    * the CLI forwards either the entry file e.g. "src/main.ts" or
    * the entry point(s) e.g. app-i,app-ii
-  */
+   */
   entryFileOrEntryPoints = '',
   runInit = true,
   providedConfig?: Configuration,

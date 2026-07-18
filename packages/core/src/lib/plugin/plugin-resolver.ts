@@ -3,7 +3,11 @@ import {
   PluginInvalidError,
   PluginNotFoundError,
 } from '../error/user-error';
+import { BUILTIN_COMMANDS } from '../cli/internal/builtin-commands';
 import { SheriffPlugin } from './plugin';
+
+// no whitespace or leading dashes: the name must be dispatchable as `sheriff <name>`
+const VALID_PLUGIN_NAME = /^[a-zA-Z0-9][a-zA-Z0-9:_-]*$/;
 
 export function validatePlugin(
   plugin: unknown,
@@ -14,13 +18,25 @@ export function validatePlugin(
   }
 
   const pluginObject = plugin as Record<string, unknown>;
+  const name = pluginObject['name'];
 
-  if (
-    typeof pluginObject['name'] !== 'string' ||
-    pluginObject['name'].trim() === ''
-  ) {
+  if (typeof name !== 'string' || name.trim() === '') {
     throw new PluginInvalidError(
       "Plugin is missing a valid 'name' property",
+      index,
+    );
+  }
+
+  if (!VALID_PLUGIN_NAME.test(name)) {
+    throw new PluginInvalidError(
+      `Plugin name '${name}' must not contain whitespace or start with a dash`,
+      index,
+    );
+  }
+
+  if (BUILTIN_COMMANDS.has(name)) {
+    throw new PluginInvalidError(
+      `Plugin name '${name}' conflicts with a built-in command`,
       index,
     );
   }

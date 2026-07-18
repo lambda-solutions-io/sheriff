@@ -1,5 +1,6 @@
 import { ProjectData, getProjectData as getProjectDataFn } from '../api/get-project-data';
 import { checkForDependencyRuleViolation } from '../checks/check-for-dependency-rule-violation';
+import { checkForExternalRuleViolation } from '../checks/check-for-external-rule-violation';
 import { hasEncapsulationViolations } from '../checks/has-encapsulation-violations';
 import { cli } from '../cli/cli';
 import { Entry, EntryWithProjectInfo } from '../cli/internal/entry';
@@ -37,6 +38,7 @@ function verifyForPlugin(
   const projectEntries = getEntries(config, entryFile);
   let encapsulationViolationCount = 0;
   let dependencyRuleViolationCount = 0;
+  let externalRuleViolationCount = 0;
   let filesWithViolationsCount = 0;
   const violations: Record<string, FileViolations> = {};
 
@@ -51,10 +53,15 @@ function verifyForPlugin(
         fileInfo.path,
         projectEntry.projectInfo,
       );
+      const externalRuleViolations = checkForExternalRuleViolation(
+        fileInfo.path,
+        projectEntry.projectInfo,
+      );
 
       if (
         encapsulationViolations.length === 0 &&
-        dependencyRuleViolations.length === 0
+        dependencyRuleViolations.length === 0 &&
+        externalRuleViolations.length === 0
       ) {
         continue;
       }
@@ -62,6 +69,7 @@ function verifyForPlugin(
       filesWithViolationsCount++;
       encapsulationViolationCount += encapsulationViolations.length;
       dependencyRuleViolationCount += dependencyRuleViolations.length;
+      externalRuleViolationCount += externalRuleViolations.length;
 
       const relativePath = fs.relativeTo(fs.cwd(), fileInfo.path);
       const dependencyViolations: DependencyViolationInfo[] =
@@ -74,15 +82,22 @@ function verifyForPlugin(
       violations[relativePath] = {
         encapsulationViolations,
         dependencyRuleViolations: dependencyViolations,
+        externalRuleViolations: externalRuleViolations.map((violation) => ({
+          fromTag: violation.fromTag,
+          externalLibrary: violation.externalLibrary,
+        })),
       };
     }
   }
 
   return {
     success:
-      encapsulationViolationCount === 0 && dependencyRuleViolationCount === 0,
+      encapsulationViolationCount === 0 &&
+      dependencyRuleViolationCount === 0 &&
+      externalRuleViolationCount === 0,
     encapsulationViolationCount,
     dependencyRuleViolationCount,
+    externalRuleViolationCount,
     filesWithViolationsCount,
     violations,
   };
@@ -109,7 +124,8 @@ export function createPluginAPI(config: Configuration): SheriffPluginAPI {
     verify: (entryFile?: string) => verifyForPlugin(config, entryFile),
     getProjectData: (entryFile?: string, options?: ProjectDataOptions) =>
       getProjectDataForPlugin(config, entryFile, options),
-    getConfig: () => config,
+    // shallow copy so plugins cannot replace config fields seen by verify()
+    getConfig: () => ({ ...config }),
     log: (message: string) => cli.log(message),
     logError: (message: string) => cli.logError(message),
   };

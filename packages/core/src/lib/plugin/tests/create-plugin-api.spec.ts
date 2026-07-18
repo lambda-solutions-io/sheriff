@@ -16,6 +16,9 @@ const config = {
   excludeRoot: false,
   log: false,
   isConfigFileMissing: false,
+  denyRules: {},
+  externalRules: {},
+  configs: {},
   entryFile: 'src/main.ts',
   barrelFileName: 'index.ts',
   entryPoints: undefined,
@@ -43,6 +46,7 @@ describe('createPluginAPI', () => {
       success: true,
       encapsulationViolationCount: 0,
       dependencyRuleViolationCount: 0,
+      externalRuleViolationCount: 0,
       filesWithViolationsCount: 0,
       violations: {},
     });
@@ -95,6 +99,57 @@ describe('createPluginAPI', () => {
     expect(Object.keys(result.violations)).toEqual([
       'src/holidays/holidays.component.ts',
     ]);
+  });
+
+  it('should report external rule violations', () => {
+    createProject({
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': sheriffConfig({
+        modules: {
+          'src/customers': ['customers'],
+        },
+        depRules: {
+          root: ['customers'],
+          customers: [],
+        },
+        externalRules: {
+          customers: [],
+        },
+        entryFile: 'src/main.ts',
+      }),
+      node_modules: {
+        rxjs: {
+          'index.js': '',
+        },
+      },
+      src: {
+        'main.ts': ['./customers'],
+        customers: {
+          'index.ts': ['rxjs'],
+        },
+      },
+    });
+
+    const api = createPluginAPI({
+      ...config,
+      modules: {
+        'src/customers': ['customers'],
+      },
+      depRules: {
+        root: ['customers'],
+        customers: [],
+      },
+      externalRules: {
+        customers: [],
+      },
+    });
+    const result = api.verify();
+
+    expect(result.success).toBe(false);
+    expect(result.externalRuleViolationCount).toBe(1);
+    expect(
+      result.violations['src/customers/index.ts'].externalRuleViolations,
+    ).toEqual([{ fromTag: 'customers', externalLibrary: 'rxjs' }]);
   });
 
   it('should return project data', () => {
@@ -160,7 +215,9 @@ describe('createPluginAPI', () => {
 
     const api = createPluginAPI(config);
 
-    expect(api.getConfig()).toBe(config);
+    expect(api.getConfig()).toEqual(config);
+    // shallow copy: plugins must not mutate the config used by verify()
+    expect(api.getConfig()).not.toBe(config);
   });
 
   it('should log to stdout and stderr', () => {

@@ -29,6 +29,9 @@ const pluginConfig = (plugins: SheriffPlugin[]) => ({
   excludeRoot: false,
   log: false,
   isConfigFileMissing: false,
+  denyRules: {},
+  externalRules: {},
+  configs: {},
   entryFile: 'src/main.ts',
   barrelFileName: 'index.ts',
   entryPoints: undefined,
@@ -84,5 +87,50 @@ describe('executePlugin', () => {
     await expect(
       executePlugin('reporter', [], [plugin], pluginConfig([plugin])),
     ).rejects.toThrow(PluginExecutionError);
+  });
+
+  it('should wrap non-Error throw values', async () => {
+    const plugin = createMockPlugin('reporter', async () => {
+      throw 'string failure';
+    });
+
+    createProject({
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': sheriffConfig({
+        depRules: {},
+        entryFile: 'src/main.ts',
+      }),
+      src: {
+        'main.ts': [],
+      },
+    });
+
+    await expect(
+      executePlugin('reporter', [], [plugin], pluginConfig([plugin])),
+    ).rejects.toThrow(
+      "Plugin 'reporter' failed during execution: string failure",
+    );
+  });
+
+  it('should rethrow UserErrors from plugins unchanged', async () => {
+    const userError = new PluginNotFoundError('nested');
+    const plugin = createMockPlugin('reporter', async () => {
+      throw userError;
+    });
+
+    createProject({
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': sheriffConfig({
+        depRules: {},
+        entryFile: 'src/main.ts',
+      }),
+      src: {
+        'main.ts': [],
+      },
+    });
+
+    await expect(
+      executePlugin('reporter', [], [plugin], pluginConfig([plugin])),
+    ).rejects.toBe(userError);
   });
 });

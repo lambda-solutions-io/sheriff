@@ -249,6 +249,10 @@ tracked on the roadmap.
 - **Default**: `undefined`
 - **Description**: Registers additional Sheriff CLI commands by instantiating plugins directly in `sheriff.config.ts`.
 
+:::note
+Plugins are only loaded from the root `sheriff.config.ts`. A `plugins` entry in a sub-config referenced via [`configs`](#configs) is ignored.
+:::
+
 **Example:**
 
 ```typescript

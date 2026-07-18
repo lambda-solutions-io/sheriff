@@ -1,5 +1,5 @@
 import { Configuration } from '../config/configuration';
-import { PluginExecutionError } from '../error/user-error';
+import { PluginExecutionError, UserError } from '../error/user-error';
 import { createPluginAPI } from '../plugin/create-plugin-api';
 import { SheriffPlugin } from '../plugin/plugin';
 import { findPluginByName } from '../plugin/plugin-resolver';
@@ -16,9 +16,15 @@ export async function executePlugin(
   try {
     await plugin.execute(args, api);
   } catch (error) {
-    throw new PluginExecutionError(
+    // UserErrors carry their own SH-xxx code and message
+    if (error instanceof UserError) {
+      throw error;
+    }
+    const executionError = new PluginExecutionError(
       pluginName,
       error instanceof Error ? error.message : String(error),
     );
+    executionError.cause = error;
+    throw executionError;
   }
 }

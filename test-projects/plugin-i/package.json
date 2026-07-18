@@ -5,5 +5,8 @@
   "dependencies": {
     "@lambda-solutions/sheriff-ui": "file:./plugins/sheriff-ui",
     "mberger-junit-sheriff": "file:./plugins/mberger-junit-sheriff"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
   }
 }

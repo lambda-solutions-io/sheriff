@@ -42,6 +42,40 @@ describe('plugin resolver', () => {
     );
   });
 
+  it('should reject whitespace-only names', () => {
+    expect(() =>
+      validatePlugin({ name: '   ', execute: async () => {} }),
+    ).toThrowUserError(
+      new PluginInvalidError("Plugin is missing a valid 'name' property"),
+    );
+  });
+
+  it.each(['--help', 'my plugin', '-v'])(
+    "should reject non-dispatchable name '%s'",
+    (name) => {
+      expect(() =>
+        validatePlugin({ name, execute: async () => {} }),
+      ).toThrowUserError(
+        new PluginInvalidError(
+          `Plugin name '${name}' must not contain whitespace or start with a dash`,
+        ),
+      );
+    },
+  );
+
+  it.each(['init', 'verify', 'list', 'export', 'version'])(
+    "should reject built-in command name '%s'",
+    (name) => {
+      expect(() =>
+        validatePlugin({ name, execute: async () => {} }),
+      ).toThrowUserError(
+        new PluginInvalidError(
+          `Plugin name '${name}' conflicts with a built-in command`,
+        ),
+      );
+    },
+  );
+
   it('should validate plugin arrays and reject duplicates', () => {
     expect(() =>
       validatePlugins([plugin, { ...plugin }]),

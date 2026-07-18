@@ -11,8 +11,8 @@ import {version as packageVersion} from '../../../package.json';
 import { getPlugins } from './internal/get-plugins';
 import { executePlugin } from './plugin-command';
 import { SheriffPlugin } from '../plugin/plugin';
-
-const BUILTIN_COMMANDS = new Set(['init', 'verify', 'list', 'export', 'version']);
+import { BUILTIN_COMMANDS } from './internal/builtin-commands';
+import { PluginNotFoundError } from '../error/user-error';
 
 function isBuiltinCommand(cmd: string | undefined): boolean {
   return cmd !== undefined && BUILTIN_COMMANDS.has(cmd);
@@ -52,7 +52,7 @@ function showHelp(plugins: SheriffPlugin[]): void {
     '[main.ts] is optional if a sheriff.config.ts with an entryFile property is in the current path.',
   );
   cli.log(
-    'For more information, visit: https://github.com/softarc-consulting/sheriff',
+    'For more information, visit: https://github.com/michaelbe812/sheriff',
   );
 }
 
@@ -60,18 +60,23 @@ async function handlePluginOrHelp(
   cmd: string | undefined,
   args: string[],
 ): Promise<void> {
-  const { config, plugins } = getPlugins();
-
   if (cmd === undefined) {
+    // help must stay reachable even with a broken sheriff.config.ts
+    let plugins: SheriffPlugin[] = [];
+    try {
+      plugins = getPlugins().plugins;
+    } catch {
+      // ignore config errors, show plugin-less help
+    }
     showHelp(plugins);
     return;
   }
 
+  const { config, plugins } = getPlugins();
   const plugin = plugins.find((candidate) => candidate.name === cmd);
 
   if (!plugin || !config) {
-    showHelp(plugins);
-    return;
+    throw new PluginNotFoundError(cmd);
   }
 
   await executePlugin(cmd, args, plugins, config);
@@ -101,5 +106,5 @@ export function main(...argv: string[]) {
     return;
   }
 
-  handleErrorAsync(() => handlePluginOrHelp(cmd, args));
+  return handleErrorAsync(() => handlePluginOrHelp(cmd, args));
 }

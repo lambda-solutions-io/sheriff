@@ -1,7 +1,5 @@
 set -e
 
-export NODE_PATH="$(pwd)/node_modules"
-
 # We copy the test projects to a temporary directory to avoid any potential
 # issues with the dependencies from the root project.
 
