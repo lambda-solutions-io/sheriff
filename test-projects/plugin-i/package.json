@@ -4,6 +4,7 @@
   "private": true,
   "dependencies": {
     "@lambda-solutions/sheriff-ui": "file:./plugins/sheriff-ui",
+    "@lambda-solutions/sheriff-watch": "file:./plugins/sheriff-watch",
     "mberger-junit-sheriff": "file:./plugins/mberger-junit-sheriff"
   },
   "devDependencies": {

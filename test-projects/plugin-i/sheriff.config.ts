@@ -1,6 +1,7 @@
 import { SheriffConfig } from '@lambda-solutions/sheriff-core';
 import { JunitReporterPlugin } from 'mberger-junit-sheriff';
 import { SheriffUiPlugin } from '@lambda-solutions/sheriff-ui';
+import { SheriffWatchPlugin } from '@lambda-solutions/sheriff-watch';
 
 export const config: SheriffConfig = {
   version: 1,
@@ -17,5 +18,6 @@ export const config: SheriffConfig = {
   plugins: [
     new SheriffUiPlugin(),
     new JunitReporterPlugin({ junitVersion: 1, reporters: ['html'] }),
+    new SheriffWatchPlugin(),
   ],
 };
