@@ -16,6 +16,45 @@ Run `npx sheriff verify main.ts` to check if your project violates any of your r
 
 See [Entry Files and Entry Points](#entry-files-and-entry-points) for configuration options.
 
+## `verify [main.ts] --files <files>`
+
+Use `npx sheriff verify --files <files>` for one-shot pre-commit and lint-staged hooks. Sheriff checks only the listed changed files against the full project graph, so it skips the per-file check loop over the rest of the project.
+
+A cold one-shot `verify --files` still builds the full project graph (via `init()`) on every run. The sub-second speed-up applies to the warm daemon / `verify --watch` path, where the already-built graph is reused; a cold run mainly saves the per-file checks, not the parse.
+
+It exits with a non-zero status when a listed file violates a rule.
+
+Path handling:
+
+- Requested paths are canonicalized (symlinks resolved, on-disk casing applied) before they are matched against the project graph, so equivalent-but-differently-spelled paths from git or lint-staged still match.
+- A file that **does not exist** (deleted/renamed) is skipped with a warning.
+- A file that **exists on disk but is not in the project graph** is treated as an **error** (non-zero exit), not a silent skip. In a pre-commit gate this usually signals a resolution problem or a brand-new file that should be wired into the graph.
+- Supplying `--files` with an empty list (a bare `--files`, or a substitution matching zero TypeScript files) is a successful no-op — it does **not** fall through to a full-project verification.
+
+Argument order: the optional entry file must come **before** `--files`. Everything after `--files` is treated as a file:
+
+```bash
+npx sheriff verify main.ts --files src/app.ts src/shared.ts
+```
+
+The file list accepts multiple arguments as well as comma- or space-separated values, and an `--files=` equals form:
+
+```bash
+npx sheriff verify --files src/app.ts src/shared.ts
+npx sheriff verify --files "src/app.ts,src/shared.ts"
+npx sheriff verify --files=src/app.ts,src/shared.ts
+```
+
+For example, `.lintstagedrc` can pass lint-staged's changed TypeScript files directly to Sheriff:
+
+```json
+{
+  "*.ts": "sheriff verify --files"
+}
+```
+
+`--files` is intended for one-shot hooks. Use `verify --watch` for a long-running process; watch mode already re-analyzes only changed files.
+
 ## `list [main.ts]`
 
 Run `npx sheriff list main.ts` to print out all your modules along their tags.

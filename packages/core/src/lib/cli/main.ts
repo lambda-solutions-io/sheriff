@@ -98,14 +98,16 @@ export function main(...argv: string[]) {
       case 'init':
         handleError(() => init());
         break;
-      case 'verify':
-        if (args.includes('--watch')) {
+      case 'verify': {
+        const { args: verifyArgs, files } = parseVerifyFilesOption(args);
+        if (verifyArgs.includes('--watch')) {
           // watch mode keeps the process alive; no endProcess handling
-          verifyWatch(args.filter((arg) => arg !== '--watch'));
+          verifyWatch(verifyArgs.filter((arg) => arg !== '--watch'));
           break;
         }
-        handleError(() => verify(args));
+        handleError(() => verify(verifyArgs, { files }));
         break;
+      }
       case 'list':
         handleError(() => list(args));
         break;
@@ -129,4 +131,66 @@ export function main(...argv: string[]) {
   }
 
   return handleErrorAsync(() => handlePluginOrHelp(cmd, args));
+}
+
+function splitFileValues(values: string[]): string[] {
+  return values
+    .flatMap((value) => value.split(/[,\s]+/))
+    .map((file) => file.trim())
+    .filter((file) => file.length > 0);
+}
+
+/**
+ * Parses the `--files` option for `verify`.
+ *
+ * Convention: the optional entry file must come BEFORE `--files`
+ * (`sheriff verify main.ts --files a.ts b.ts`). Every token after `--files`
+ * is treated as a file; the entry is never swallowed into the file list.
+ *
+ * Both forms are accepted:
+ *   `--files a.ts b.ts`   (space-separated)
+ *   `--files a.ts,b.ts`   (comma-separated)
+ *   `--files=a.ts,b.ts`   (equals form)
+ *
+ * A bare `--files` (or one resolving to zero files) yields an empty list,
+ * which the verify command short-circuits to a successful no-op.
+ */
+function parseVerifyFilesOption(args: string[]): {
+  args: string[];
+  files: string[] | undefined;
+} {
+  const equalsFlagIndex = args.findIndex((arg) => arg.startsWith('--files='));
+  if (equalsFlagIndex !== -1) {
+    const files = splitFileValues([
+      args[equalsFlagIndex].slice('--files='.length),
+    ]);
+    return {
+      args: [
+        ...args.slice(0, equalsFlagIndex),
+        ...args.slice(equalsFlagIndex + 1),
+      ],
+      files,
+    };
+  }
+
+  const filesFlagIndex = args.indexOf('--files');
+  if (filesFlagIndex === -1) {
+    return { args, files: undefined };
+  }
+
+  // Everything after `--files` up to the next `--` flag is a file value.
+  let valuesEndIndex = filesFlagIndex + 1;
+  while (
+    valuesEndIndex < args.length &&
+    !args[valuesEndIndex].startsWith('--')
+  ) {
+    valuesEndIndex++;
+  }
+
+  const files = splitFileValues(args.slice(filesFlagIndex + 1, valuesEndIndex));
+
+  return {
+    args: [...args.slice(0, filesFlagIndex), ...args.slice(valuesEndIndex)],
+    files,
+  };
 }

@@ -53,6 +53,15 @@ export abstract class Fs {
   abstract isFile(path: FsPath): boolean
 
   /**
+   * Canonicalizes a path: resolves symlinks and, on case-insensitive
+   * filesystems, returns the on-disk casing. Used to compare a requested
+   * file path against the paths in the project graph by identity rather
+   * than by raw byte-string equality. Must fall back to the input path
+   * when the target cannot be canonicalized (e.g. it does not exist).
+   */
+  abstract realpath(path: string): string;
+
+  /**
    * Modification marker for cache invalidation. `DefaultFs` returns the
    * file's mtime in milliseconds, `VirtualFs` a monotonic write counter.
    * The only guarantee is that a change to the file yields a new value.
