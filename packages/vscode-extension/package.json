@@ -1,0 +1,51 @@
+{
+  "name": "sheriff-vscode",
+  "publisher": "lambda-solutions",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "commonjs",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "main": "./dist/extension.js",
+  "scripts": {
+    "compile": "tsc -p tsconfig.lib.json",
+    "vscode:prepublish": "npm run compile"
+  },
+  "activationEvents": [
+    "onLanguage:typescript",
+    "onLanguage:typescriptreact"
+  ],
+  "categories": [
+    "Linters"
+  ],
+  "displayName": "Sheriff",
+  "description": "Sheriff module-boundary diagnostics + module/tags hover, powered by the sheriff daemon.",
+  "contributes": {
+    "configuration": {
+      "title": "Sheriff",
+      "properties": {
+        "sheriff.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Sheriff diagnostics and hover."
+        },
+        "sheriff.debounceMs": {
+          "type": "number",
+          "default": 150,
+          "description": "Debounce (ms) before linting on edit."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "@lambda-solutions/sheriff-core": "1.0.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0",
+    "@types/node": "^24.0.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "5.9.3"
+  }
+}

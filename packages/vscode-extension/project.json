@@ -1,0 +1,23 @@
+{
+  "name": "vscode-extension",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/vscode-extension/src",
+  "projectType": "library",
+  "targets": {
+    "build:ext": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "packages/vscode-extension/dist",
+        "main": "packages/vscode-extension/src/extension.ts",
+        "tsConfig": "packages/vscode-extension/tsconfig.lib.json",
+        "assets": ["packages/vscode-extension/*.md"]
+      }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint",
+      "outputs": ["{options.outputFile}"]
+    }
+  },
+  "tags": []
+}
