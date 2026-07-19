@@ -16,6 +16,8 @@ import {
   ExternalRuleViolation,
 } from '../checks/check-for-external-rule-violation';
 import { ProjectInfo } from '../main/init';
+import { FsPath } from '../file-info/fs-path';
+import { Fs } from '../fs/fs';
 
 type ValidationsMap = Record<
   string,
@@ -37,7 +39,7 @@ type ProjectValidation = {
   dependencyRuleViolations: DependencyRuleViolation[];
 };
 
-export function verify(args: string[]) {
+export function verify(args: string[], options: { files?: string[] } = {}) {
   const fs = getFs();
   const projectEntries = getEntriesFromCliOrConfig(args[0]);
   logInfoForMissingSheriffConfig(projectEntries[0].projectInfo);
@@ -49,8 +51,6 @@ export function verify(args: string[]) {
   const projectValidations = new Map<string, ProjectValidation>();
 
   for (const projectEntry of projectEntries) {
-    const projectName = projectEntry.projectName;
-
     // Initialize validation data for this project
     const validation: ProjectValidation = {
       deepImportsCount: 0,
@@ -63,53 +63,110 @@ export function verify(args: string[]) {
       dependencyRuleViolations: [],
     };
 
-    projectValidations.set(projectName, validation);
+    projectValidations.set(projectEntry.projectName, validation);
+  }
 
-    for (const { fileInfo } of traverseFileInfo(
-      projectEntry.projectInfo.fileInfo,
-    )) {
-      const encapsulations = Object.keys(
-        hasEncapsulationViolations(fileInfo.path, projectEntry.projectInfo),
-      );
+  if (options.files) {
+    if (options.files.length === 0) {
+      // `--files` was supplied but resolved to zero files (e.g. no changed
+      // TS files in a hook). Short-circuit to a successful no-op instead of
+      // falling through to a full-project verification.
+      cli.log('No files to verify.');
+      cli.endProcessOk();
+      return;
+    }
 
-      const dependencyRuleViolations = checkForDependencyRuleViolation(
-        fileInfo.path,
-        projectEntry.projectInfo,
-      );
-      const externalRuleViolations = checkForExternalRuleViolation(
-        fileInfo.path,
-        projectEntry.projectInfo,
-      );
-      const projectValidation = projectValidations.get(projectName)!;
-      projectValidation.encapsulations = encapsulations;
-      projectValidation.dependencyRuleViolations = dependencyRuleViolations;
+    // Canonicalize each requested path so membership is compared by file
+    // identity, not raw byte-string equality. Without this, an
+    // equivalent-but-different string (macOS /tmp vs /private/tmp symlink,
+    // a symlinked workspace, or case-insensitive-FS casing) would miss the
+    // graph and be silently skipped -> false pass in a pre-commit gate.
+    const requestedFilePaths = Array.from(
+      new Set(options.files.map((file) => canonicalize(resolveFilePath(file, fs), fs))),
+    );
+    const projectFilePaths = new Map<string, Map<string, FsPath>>();
+    const allKnownFilePaths = new Set<string>();
 
-      if (
-        encapsulations.length > 0 ||
-        dependencyRuleViolations.length > 0 ||
-        externalRuleViolations.length > 0
-      ) {
-        projectValidation.hasError = true;
-        projectValidation.filesCount++;
-        projectValidation.deepImportsCount += encapsulations.length;
-        projectValidation.dependencyRulesCount +=
-          dependencyRuleViolations.length;
-        projectValidation.externalRulesCount += externalRuleViolations.length;
-        hasAnyProjectError = true;
+    for (const projectEntry of projectEntries) {
+      const knownFilePaths = new Map<string, FsPath>();
+      for (const { fileInfo } of traverseFileInfo(
+        projectEntry.projectInfo.fileInfo,
+      )) {
+        // Canonicalize graph paths too, so both sides of the comparison
+        // are in the same canonical form.
+        const canonicalPath = canonicalize(fileInfo.path, fs);
+        knownFilePaths.set(canonicalPath, fileInfo.path);
+        allKnownFilePaths.add(canonicalPath);
+      }
+      projectFilePaths.set(projectEntry.projectName, knownFilePaths);
+    }
 
-        const dependencyRules = dependencyRuleViolations.map(
-          formatDependencyRuleViolation,
-        );
-        const externalRules = externalRuleViolations.map(
-          formatExternalRuleViolation,
-        );
+    const validRequestedFilePaths = requestedFilePaths.filter(
+      (requestedFilePath) => {
+        if (allKnownFilePaths.has(requestedFilePath)) {
+          return true;
+        }
 
-        const relativePath = fs.relativeTo(fs.cwd(), fileInfo.path);
-        projectValidation.validationsMap[relativePath] = {
-          encapsulations,
-          dependencyRules,
-          externalRules,
-        };
+        const relativePath = fs.relativeTo(fs.cwd(), requestedFilePath);
+        if (fs.exists(requestedFilePath)) {
+          // The file exists on disk but is not in the project graph. In a
+          // pre-commit gate this almost always means a resolution bug or a
+          // brand-new file the user expects to be checked. Silently passing
+          // is dangerous, so treat it as an error rather than a skip.
+          cli.log(
+            `Error: ${relativePath} exists on disk but is not part of the project graph.`,
+          );
+          hasAnyProjectError = true;
+        } else {
+          // The file does not exist (deleted/renamed). Skipping is benign.
+          cli.log(
+            `Warning: ${relativePath} does not exist; skipping.`,
+          );
+        }
+        return false;
+      },
+    );
+
+    for (const projectEntry of projectEntries) {
+      const projectValidation = projectValidations.get(
+        projectEntry.projectName,
+      )!;
+      const knownFilePaths = projectFilePaths.get(projectEntry.projectName)!;
+
+      for (const requestedFilePath of validRequestedFilePaths) {
+        const fileInfoPath = knownFilePaths.get(requestedFilePath);
+        if (
+          fileInfoPath &&
+          runChecksForFile(
+            fileInfoPath,
+            projectEntry.projectInfo,
+            projectValidation,
+            fs,
+          )
+        ) {
+          hasAnyProjectError = true;
+        }
+      }
+    }
+  } else {
+    for (const projectEntry of projectEntries) {
+      const projectValidation = projectValidations.get(
+        projectEntry.projectName,
+      )!;
+
+      for (const { fileInfo } of traverseFileInfo(
+        projectEntry.projectInfo.fileInfo,
+      )) {
+        if (
+          runChecksForFile(
+            fileInfo.path,
+            projectEntry.projectInfo,
+            projectValidation,
+            fs,
+          )
+        ) {
+          hasAnyProjectError = true;
+        }
       }
     }
   }
@@ -195,6 +252,71 @@ export function verify(args: string[]) {
     }
     cli.endProcessOk();
   }
+}
+
+function resolveFilePath(file: string, fs: Fs): string {
+  const absolutePath = fs.isAbsolute(file) ? file : fs.join(fs.cwd(), file);
+  return fs.join(absolutePath);
+}
+
+/**
+ * Canonicalizes an absolute path so that two equivalent-but-different path
+ * strings (symlink vs. real target, differing casing on a case-insensitive
+ * filesystem) compare equal. Falls back to the input when the path cannot be
+ * resolved (e.g. it does not exist on disk).
+ */
+function canonicalize(absolutePath: string, fs: Fs): string {
+  return fs.realpath(absolutePath);
+}
+
+function runChecksForFile(
+  fileInfoPath: FsPath,
+  projectInfo: ProjectInfo,
+  projectValidation: ProjectValidation,
+  fs: Fs,
+): boolean {
+  const encapsulations = Object.keys(
+    hasEncapsulationViolations(fileInfoPath, projectInfo),
+  );
+  const dependencyRuleViolations = checkForDependencyRuleViolation(
+    fileInfoPath,
+    projectInfo,
+  );
+  const externalRuleViolations = checkForExternalRuleViolation(
+    fileInfoPath,
+    projectInfo,
+  );
+  projectValidation.encapsulations = encapsulations;
+  projectValidation.dependencyRuleViolations = dependencyRuleViolations;
+
+  if (
+    encapsulations.length === 0 &&
+    dependencyRuleViolations.length === 0 &&
+    externalRuleViolations.length === 0
+  ) {
+    return false;
+  }
+
+  projectValidation.hasError = true;
+  projectValidation.filesCount++;
+  projectValidation.deepImportsCount += encapsulations.length;
+  projectValidation.dependencyRulesCount += dependencyRuleViolations.length;
+  projectValidation.externalRulesCount += externalRuleViolations.length;
+
+  const dependencyRules = dependencyRuleViolations.map(
+    formatDependencyRuleViolation,
+  );
+  const externalRules = externalRuleViolations.map(
+    formatExternalRuleViolation,
+  );
+  const relativePath = fs.relativeTo(fs.cwd(), fileInfoPath);
+  projectValidation.validationsMap[relativePath] = {
+    encapsulations,
+    dependencyRules,
+    externalRules,
+  };
+
+  return true;
 }
 
 function logAppliedConfig(projectInfo: ProjectInfo): void {

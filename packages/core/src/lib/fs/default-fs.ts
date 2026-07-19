@@ -108,6 +108,16 @@ export class DefaultFs extends Fs {
     return fs.lstatSync(path).isFile();
   }
 
+  override realpath(p: string): string {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      // File may not exist (deleted/renamed); keep the caller's path so
+      // the "does not exist" branch handles it instead of throwing here.
+      return p;
+    }
+  }
+
   override lastModified(path: FsPath): number {
     return fs.statSync(path).mtimeMs;
   }

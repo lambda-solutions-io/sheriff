@@ -327,6 +327,15 @@ export class VirtualFs extends Fs {
   override lastModified(path: FsPath): number {
     return this.#getNodeOrThrow(path).node.lastModified;
   }
+
+  /**
+   * The VirtualFs cannot model symlinks or case-insensitive folding, so its
+   * paths are already canonical. Returns the input unchanged. Real symlink
+   * and casing canonicalization is exercised through `DefaultFs`.
+   */
+  override realpath(path: string): string {
+    return path;
+  }
 }
 
 const virtualFs = new VirtualFs();
