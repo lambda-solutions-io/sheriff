@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
-    "@lambda-solutions/sheriff-ui": "file:./plugins/sheriff-ui",
     "mberger-junit-sheriff": "file:./plugins/mberger-junit-sheriff"
   },
   "devDependencies": {
