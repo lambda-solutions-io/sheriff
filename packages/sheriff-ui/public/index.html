@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sheriff — Module Graph</title>
+    <link rel="stylesheet" href="./style.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">Sheriff — Module Graph</div>
+      <div id="summary" class="summary" aria-live="polite"></div>
+      <div class="controls">
+        <button id="pauseBtn" type="button">Pause</button>
+        <button id="fitBtn" type="button">Fit</button>
+        <label class="check">
+          <input id="externalsToggle" type="checkbox">
+          <span>show externals</span>
+        </label>
+        <input id="searchInput" type="search" placeholder="Search modules" aria-label="Search modules">
+      </div>
+    </header>
+
+    <main class="shell">
+      <section class="graph-wrap" aria-label="Module dependency graph">
+        <div id="banner" class="banner" hidden>
+          <span>sheriff daemon unreachable — retrying</span>
+          <button id="dismissBanner" type="button" aria-label="Dismiss warning">x</button>
+        </div>
+        <div id="cy"></div>
+        <div id="emptyHint" class="empty" hidden>no modules found</div>
+        <div class="legend" aria-label="Graph legend">
+          <div><span class="swatch module"></span>module</div>
+          <div><span class="swatch external"></span>external</div>
+          <div><span class="swatch violation"></span>violation</div>
+        </div>
+      </section>
+
+      <aside id="details" class="details" aria-live="polite">
+        <h2>Selection</h2>
+        <p class="muted">Select a module, file, or edge.</p>
+      </aside>
+    </main>
+
+    <script src="./vendor/cytoscape.min.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

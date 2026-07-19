@@ -82,6 +82,20 @@ npx sheriff ui
 npx sheriff junit report.json
 ```
 
+### Sheriff UI
+
+`@lambda-solutions/sheriff-ui` serves a live module-graph UI at `http://localhost:7654`. The
+page polls the sheriff daemon, whose filesystem watcher keeps the graph current while you edit.
+Modules are colored by tag, violations from `verify` are highlighted in red, modules expand to
+their files, and external libraries can be toggled in.
+
+```bash
+npx sheriff ui                       # serve and open the browser
+npx sheriff ui --port 8080 --no-open
+npx sheriff ui --entry-file src/main.ts
+npx sheriff ui --json                # print one graph snapshot as JSON and exit
+```
+
 ## Entry Files and Entry Points
 
 Sheriff needs to know where to start traversing your project's imports. You can specify this using either an `entryFile` **or** `entryPoints`.

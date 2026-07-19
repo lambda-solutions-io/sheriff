@@ -15,6 +15,7 @@ export default defineConfig({
         './packages/eslint-plugin/src/index.ts',
       ),
       '@lambda-solutions/sheriff-core': resolve('./packages/core/src/index.ts'),
+      '@lambda-solutions/sheriff-ui': resolve('./packages/sheriff-ui/src/index.ts'),
     },
   },
 });

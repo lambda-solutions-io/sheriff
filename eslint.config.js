@@ -26,6 +26,6 @@ module.exports = tseslint.config(
     },
   },
   {
-    ignores: ['**/nodes_modules/'],
+    ignores: ['**/nodes_modules/', 'packages/sheriff-ui/public/'],
   },
 );
