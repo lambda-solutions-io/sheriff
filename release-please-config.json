@@ -7,6 +7,9 @@
     },
     "packages/eslint-plugin": {
       "component": "eslint-plugin"
+    },
+    "packages/mcp-server": {
+      "component": "mcp-server"
     }
   },
   "plugins": [
@@ -15,7 +18,8 @@
       "groupName": "sheriff",
       "components": [
         "core",
-        "eslint-plugin"
+        "eslint-plugin",
+        "mcp-server"
       ]
     }
   ]
