@@ -32,6 +32,7 @@ export type DaemonClientOptions = {
 export class DaemonClient {
   #socket: net.Socket;
   #nextRequestId = 1;
+  #closed = false;
   #pending = new Map<
     number,
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
@@ -43,10 +44,22 @@ export class DaemonClient {
     socket.setEncoding('utf-8');
     const decode = createLineDecoder((line) => this.#handleResponseLine(line));
     socket.on('data', decode);
-    socket.on('error', (error) => this.#rejectAllPending(error));
-    socket.on('close', () =>
-      this.#rejectAllPending(new Error('daemon connection closed')),
-    );
+    socket.on('error', (error) => {
+      this.#closed = true;
+      this.#rejectAllPending(error);
+    });
+    socket.on('close', () => {
+      this.#closed = true;
+      this.#rejectAllPending(new Error('daemon connection closed'));
+    });
+  }
+
+  /**
+   * True once the socket has closed or been destroyed. A closed client
+   * cannot serve requests and must be replaced by a fresh `connect`.
+   */
+  get closed(): boolean {
+    return this.#closed;
   }
 
   static async connect(
@@ -94,6 +107,13 @@ export class DaemonClient {
     method: string,
     params: Record<string, unknown> = {},
   ): Promise<unknown> {
+    // A write on a destroyed socket does not throw synchronously, so a
+    // request on a closed client would register in #pending and never
+    // settle. Reject up front instead of hanging.
+    if (this.#closed) {
+      return Promise.reject(new Error('daemon connection closed'));
+    }
+
     const id = this.#nextRequestId++;
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { resolve, reject });
@@ -102,6 +122,7 @@ export class DaemonClient {
   }
 
   close(): void {
+    this.#closed = true;
     this.#socket.destroy();
   }
 
