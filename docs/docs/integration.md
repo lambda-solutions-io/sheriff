@@ -87,3 +87,28 @@ flowchart LR
 ---
 
 Please note that the `excludeRoot` property only makes sense with `enableBarrelLess: false`.
+
+## ESLint daemon bridge (experimental, opt-in)
+
+The ESLint plugin can route its checks through a running Sheriff daemon. Start
+the daemon and opt in when invoking ESLint:
+
+```bash
+sheriff daemon start
+SHERIFF_DAEMON=1 eslint .
+```
+
+The bridge uses two distinct timeouts:
+
+- A short **connection timeout** of approximately 200 ms decides whether a
+  daemon is available. If none can be reached, the plugin permanently falls
+  back to its in-process checks for the rest of that ESLint process and does
+  not retry on later files. This keeps CI behavior deterministic when no daemon
+  is available.
+- A separate, larger **per-call timeout** (default 5000 ms, configurable via
+  `SHERIFF_DAEMON_TIMEOUT_MS`) bounds each individual lint round-trip, which
+  includes the daemon's cold initialization on the first request. A single slow
+  call falls back in-process for that file only; the bridge stays enabled so
+  later files still use the daemon. It is disabled permanently only after
+  several consecutive per-call failures, which indicates a genuinely broken
+  daemon rather than one slow file.

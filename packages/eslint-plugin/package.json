@@ -20,7 +20,9 @@
     "url": "https://github.com/michaelbe812/sheriff"
   },
   "type": "commonjs",
-  "dependencies": {},
+  "dependencies": {
+    "synckit": ">=0.8.8 <1"
+  },
   "peerDependencies": {
     "@lambda-solutions/sheriff-core": "1.0.0",
     "eslint": "^8.0.0 || ^9.0.0",
