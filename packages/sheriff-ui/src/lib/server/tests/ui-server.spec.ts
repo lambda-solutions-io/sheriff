@@ -31,11 +31,16 @@ function fakeSnapshot(): GraphSnapshot {
 class FakeProvider implements GraphDataProvider {
   calls = 0;
   failing = false;
+  /** When set, fetchSnapshot resolves only once released (to force concurrency). */
+  gate: Promise<void> | null = null;
 
   fetchSnapshot(): Promise<GraphSnapshot> {
     this.calls++;
     if (this.failing) {
       return Promise.reject(new Error('sheriff daemon unreachable'));
+    }
+    if (this.gate) {
+      return this.gate.then(() => fakeSnapshot());
     }
     return Promise.resolve(fakeSnapshot());
   }
@@ -77,6 +82,37 @@ describe('startUiServer', () => {
     const first = await (await get('/api/graph')).json();
     const second = await (await get(`/api/graph?hash=${first.hash}`)).json();
     expect(second).toEqual({ hash: first.hash, changed: false });
+  });
+
+  it('coalesces concurrent builds into a single snapshot fetch', async () => {
+    let release: () => void = () => undefined;
+    provider.gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const inFlight = [get('/api/graph'), get('/api/graph'), get('/api/graph')];
+    // let the requests reach the shared in-flight build before releasing
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    release();
+    const payloads = await Promise.all(
+      (await Promise.all(inFlight)).map((r) => r.json()),
+    );
+    expect(provider.calls).toBe(1);
+    payloads.forEach((p) => expect(p.changed).toBe(true));
+  });
+
+  it('serves rapid sequential polls from the short-lived cache', async () => {
+    await (await get('/api/graph')).json();
+    await (await get('/api/graph')).json();
+    // both within the 250ms TTL -> only one real build
+    expect(provider.calls).toBe(1);
+  });
+
+  it('does not cache failures', async () => {
+    provider.failing = true;
+    expect((await get('/api/graph')).status).toBe(503);
+    provider.failing = false;
+    const ok = await (await get('/api/graph')).json();
+    expect(ok.changed).toBe(true);
   });
 
   it('responds 503 when the provider fails', async () => {

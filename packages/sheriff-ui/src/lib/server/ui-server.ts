@@ -28,13 +28,61 @@ export type UiServer = {
   close: () => Promise<void>;
 };
 
+/** A freshly built graph plus its content hash. */
+type BuiltGraph = { hash: string; body: string };
+
+/**
+ * Coalesce concurrent/rapid `/api/graph` builds. Every request otherwise runs
+ * `fetchSnapshot` + `buildGraph` + stringify + sha256; a burst of 2s polls (and
+ * multiple open tabs) would each pay that cost. We share ONE in-flight build and
+ * cache its result for a sub-second TTL, so freshness cannot meaningfully
+ * regress (the daemon watcher still drives real changes).
+ */
+class GraphBuildCache {
+  private inFlight: Promise<BuiltGraph> | null = null;
+  private cached: BuiltGraph | null = null;
+  private cachedAt = 0;
+
+  constructor(
+    private readonly build: () => Promise<BuiltGraph>,
+    private readonly ttlMs = 250,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  get(): Promise<BuiltGraph> {
+    if (this.cached && this.now() - this.cachedAt < this.ttlMs) {
+      return Promise.resolve(this.cached);
+    }
+    if (this.inFlight) {
+      return this.inFlight;
+    }
+    const pending = this.build().then(
+      (result) => {
+        this.cached = result;
+        this.cachedAt = this.now();
+        this.inFlight = null;
+        return result;
+      },
+      (error) => {
+        // Never cache failures: a 503 must not stick for the whole TTL.
+        this.inFlight = null;
+        throw error;
+      },
+    );
+    this.inFlight = pending;
+    return pending;
+  }
+}
+
 export function startUiServer(options: UiServerOptions): Promise<UiServer> {
   const publicDir = path.resolve(
     options.publicDir ?? path.join(__dirname, '../../../public'),
   );
 
+  const cache = new GraphBuildCache(() => buildSnapshotGraph(options));
+
   const server = http.createServer((request, response) => {
-    void handleRequest(request, response, options, publicDir);
+    void handleRequest(request, response, options, publicDir, cache);
   });
   // Node's default 5s keep-alive close races the browser's 2s polling and
   // surfaces as sporadic connection resets; keep sockets open far longer.
@@ -64,37 +112,49 @@ async function handleRequest(
   response: http.ServerResponse,
   options: UiServerOptions,
   publicDir: string,
+  cache: GraphBuildCache,
 ): Promise<void> {
   const url = new URL(request.url ?? '/', 'http://localhost');
 
   if (url.pathname === '/api/graph') {
-    await serveGraph(url, response, options);
+    await serveGraph(url, response, cache);
     return;
   }
 
   serveStatic(url.pathname, response, publicDir);
 }
 
+async function buildSnapshotGraph(
+  options: UiServerOptions,
+): Promise<BuiltGraph> {
+  const snapshot = await options.provider.fetchSnapshot(options.entryFile);
+  const graph = buildGraph(
+    snapshot.entries,
+    snapshot.verification,
+    snapshot.rootDir,
+  );
+  const body = JSON.stringify(graph);
+  const hash = createHash('sha256').update(body).digest('hex');
+  return { hash, body };
+}
+
 async function serveGraph(
   url: URL,
   response: http.ServerResponse,
-  options: UiServerOptions,
+  cache: GraphBuildCache,
 ): Promise<void> {
   try {
-    const snapshot = await options.provider.fetchSnapshot(options.entryFile);
-    const graph = buildGraph(
-      snapshot.entries,
-      snapshot.verification,
-      snapshot.rootDir,
-    );
-    const body = JSON.stringify(graph);
-    const hash = createHash('sha256').update(body).digest('hex');
-
+    const { hash, body } = await cache.get();
+    // Splice the pre-built graph body into the envelope without re-parsing it.
     const payload =
       url.searchParams.get('hash') === hash
-        ? { hash, changed: false }
-        : { hash, changed: true, graph };
-    sendJson(response, 200, JSON.stringify(payload));
+        ? JSON.stringify({ hash, changed: false })
+        : '{"hash":' +
+          JSON.stringify(hash) +
+          ',"changed":true,"graph":' +
+          body +
+          '}';
+    sendJson(response, 200, payload);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     sendJson(response, 503, JSON.stringify({ error: message }));

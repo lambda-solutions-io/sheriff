@@ -70,6 +70,7 @@ export function buildGraph(
       filesWithViolations: verification?.filesWithViolationsCount ?? 0,
     },
     unassignedViolations,
+    rootDir: normalizeRootDir(rootDir),
   };
 }
 

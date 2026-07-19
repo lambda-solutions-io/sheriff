@@ -78,6 +78,26 @@ describe('buildGraph', () => {
     ]);
   });
 
+  it('emits the normalized rootDir in the graph model', () => {
+    const graph = buildGraph(
+      [{ projectName: 'app', projectData: projectData() }],
+      emptyVerification(),
+      ROOT,
+    );
+
+    expect(graph.rootDir).toBe(ROOT);
+  });
+
+  it('normalizes rootDir (trailing slash and backslashes) in the model', () => {
+    const graph = buildGraph(
+      [{ projectName: 'app', projectData: projectData() }],
+      emptyVerification(),
+      `${ROOT}/`,
+    );
+
+    expect(graph.rootDir).toBe(ROOT);
+  });
+
   it('aggregates files into modules with counts and tags', () => {
     const graph = buildGraph(
       [{ projectName: 'app', projectData: projectData() }],

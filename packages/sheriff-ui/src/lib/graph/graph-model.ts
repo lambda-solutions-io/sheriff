@@ -69,6 +69,11 @@ export type GraphModel = {
   violationSummary: ViolationSummary;
   /** Violations that could not be attached to a node or edge. */
   unassignedViolations: GraphViolation[];
+  /**
+   * Normalized project root that all paths in this model are relative to.
+   * Lets the UI scope per-project client state (e.g. pinned-node storage).
+   */
+  rootDir: string;
 };
 
 export const EXTERNAL_NODE_PREFIX = 'ext:';
