@@ -16,6 +16,11 @@ import {
   ExternalRuleViolation,
 } from '../checks/check-for-external-rule-violation';
 import { ProjectInfo } from '../main/init';
+import { reporterFactory } from './internal/reporter/reporter-factory';
+import { ProjectViolation } from './project-violation';
+import { EntryWithProjectInfo } from './internal/entry';
+
+type ReporterCliOptions = { formats: string[]; outputDir: string };
 
 type ValidationsMap = Record<
   string,
@@ -23,6 +28,7 @@ type ValidationsMap = Record<
     encapsulations: string[];
     dependencyRules: string[];
     externalRules: string[];
+    dependencyRuleViolations: DependencyRuleViolation[];
   }
 >;
 
@@ -39,7 +45,8 @@ type ProjectValidation = {
 
 export function verify(args: string[]) {
   const fs = getFs();
-  const projectEntries = getEntriesFromCliOrConfig(args[0]);
+  const { positional, reporter } = parseReporterOptions(args);
+  const projectEntries = getEntriesFromCliOrConfig(positional[0]);
   logInfoForMissingSheriffConfig(projectEntries[0].projectInfo);
 
   // Keep track of overall status to determine final process exit code
@@ -109,6 +116,7 @@ export function verify(args: string[]) {
           encapsulations,
           dependencyRules,
           externalRules,
+          dependencyRuleViolations,
         };
       }
     }
@@ -185,6 +193,8 @@ export function verify(args: string[]) {
     }
   }
 
+  createReports(reporter, projectEntries, projectValidations);
+
   // End process based on overall status
   if (hasAnyProjectError) {
     cli.endProcessError();
@@ -194,6 +204,74 @@ export function verify(args: string[]) {
       cli.log('\u001b[32mAll projects validated successfully!\u001b[0m');
     }
     cli.endProcessOk();
+  }
+}
+
+function parseReporterOptions(args: string[]): {
+  positional: string[];
+  reporter: ReporterCliOptions;
+} {
+  const positional: string[] = [];
+  let formats: string[] = [];
+  let outputDir = 'reports';
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--format') {
+      formats = (args[++i] ?? '')
+        .split(',')
+        .map((format) => format.trim())
+        .filter(Boolean);
+    } else if (arg.startsWith('--format=')) {
+      formats = arg
+        .slice('--format='.length)
+        .split(',')
+        .map((format) => format.trim())
+        .filter(Boolean);
+    } else if (arg === '--output') {
+      outputDir = args[++i] ?? outputDir;
+    } else if (arg.startsWith('--output=')) {
+      outputDir = arg.slice('--output='.length);
+    } else {
+      positional.push(arg);
+    }
+  }
+  return { positional, reporter: { formats, outputDir } };
+}
+
+function createReports(
+  reporter: ReporterCliOptions,
+  projectEntries: EntryWithProjectInfo[],
+  projectValidations: Map<string, ProjectValidation>,
+): void {
+  if (reporter.formats.length === 0) return;
+  for (const projectEntry of projectEntries) {
+    const projectName = projectEntry.projectName;
+    const validation = projectValidations.get(projectName);
+    if (!validation) continue;
+    const reporters = reporterFactory({
+      reporterFormats: reporter.formats,
+      outputDir: reporter.outputDir,
+      projectName,
+    });
+    const violations: ProjectViolation = {
+      hasError: validation.hasError,
+      totalDependencyRuleViolations: validation.dependencyRulesCount,
+      totalEncapsulationViolations: validation.deepImportsCount,
+      totalExternalRuleViolations: validation.externalRulesCount,
+      totalViolatedFiles: validation.filesCount,
+      violations: Object.entries(validation.validationsMap).map(
+        ([filePath, violation]) => ({
+          filePath,
+          encapsulations: violation.encapsulations,
+          dependencyRules: violation.dependencyRules,
+          externalRules: violation.externalRules,
+          dependencyRuleViolations: violation.dependencyRuleViolations,
+        }),
+      ),
+    };
+    reporters.forEach((registeredReporter) =>
+      registeredReporter.createReport(violations),
+    );
   }
 }
 

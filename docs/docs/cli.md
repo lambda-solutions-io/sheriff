@@ -32,6 +32,25 @@ See [Entry Files and Entry Points](#entry-files-and-entry-points) for configurat
 
 Run `npx sheriff verify --watch main.ts` to keep the verification running. Sheriff watches the project for file changes, invalidates only the affected parts of its internal cache, and re-runs the verification — subsequent runs only re-analyze changed files.
 
+## Violation reports (`--format` / `--output`)
+
+`sheriff verify` can write machine-readable violation reports in addition to the console output:
+
+```bash
+npx sheriff verify src/main.ts --format json,junit --output reports
+```
+
+- `--format <formats>` — comma-separated list of report formats. Supported: `json`, `junit`.
+- `--output <dir>` — directory the reports are written to (default: `reports`). Files are named `violations.json` / `violations.xml`.
+
+Reports cover encapsulation, dependency-rule and external-rule violations. See [Creating violation reports](./reports) for details.
+
+Combined with `--watch`, the reports are regenerated (overwritten in place) on every file-change-triggered re-verification, so they always reflect the latest result:
+
+```bash
+npx sheriff verify src/main.ts --watch --format junit --output reports
+```
+
 ## `daemon <start|stop|status>`
 
 Sheriff can run as a background daemon that keeps the parsed project in memory and watches for file changes. Clients (e.g. editor integrations or custom tooling) talk to it over a local socket using newline-delimited JSON-RPC and get instant results because tsconfig parsing, config evaluation, and import resolution stay warm.
