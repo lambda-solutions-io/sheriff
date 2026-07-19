@@ -108,6 +108,19 @@ describe('daemon integration', () => {
     client!.close();
   });
 
+  it('should surface unresolvable relative imports', async () => {
+    const client = await DaemonClient.connect(rootDir);
+
+    const result = (await client!.request('lintFile', {
+      filename: path.join(rootDir, 'src', 'feature', 'index.ts'),
+      // a typo'd relative import the resolved-import checks never surface
+      fileContent: "import { x } from './does-not-exist';\nexport const y = x;",
+    })) as { unresolvableImports: string[] };
+
+    expect(result.unresolvableImports).toContain('./does-not-exist');
+    client!.close();
+  });
+
   it('should reject unknown methods', async () => {
     const client = await DaemonClient.connect(rootDir);
 

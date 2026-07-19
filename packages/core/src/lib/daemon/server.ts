@@ -6,6 +6,7 @@ import { init } from '../main/init';
 import { checkForDependencyRuleViolation } from '../checks/check-for-dependency-rule-violation';
 import { checkForExternalRuleViolation } from '../checks/check-for-external-rule-violation';
 import { hasEncapsulationViolations } from '../checks/has-encapsulation-violations';
+import { isRelativeImport } from '../eslint/is-relative-import';
 import { getPlugins } from '../cli/internal/get-plugins';
 import { createPluginAPI } from '../plugin/create-plugin-api';
 import { ProjectDataOptions } from '../plugin/plugin-api';
@@ -213,6 +214,7 @@ function lintFile(filename: string, fileContent?: string) {
       dependencyRuleViolations: [],
       encapsulationViolations: [],
       externalRuleViolations: [],
+      unresolvableImports: [],
     };
   }
 
@@ -235,6 +237,11 @@ function lintFile(filename: string, fileContent?: string) {
       fromTag: violation.fromTag,
       externalLibrary: violation.externalLibrary,
     })),
+    // Mirror the in-process rules, which report unresolvable relative imports
+    // (e.g. a typo'd './foo') that the resolved-import checks never surface.
+    unresolvableImports: projectInfo.fileInfo.unresolvableImports.filter(
+      (importCommand) => isRelativeImport(importCommand),
+    ),
   };
 }
 
