@@ -1,4 +1,5 @@
 {
   "packages/core": "1.0.0",
-  "packages/eslint-plugin": "1.0.0"
+  "packages/eslint-plugin": "1.0.0",
+  "packages/mcp-server": "1.0.0"
 }

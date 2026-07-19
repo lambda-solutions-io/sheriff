@@ -14,6 +14,9 @@ export default defineConfig({
       '@lambda-solutions/eslint-plugin-sheriff': resolve(
         './packages/eslint-plugin/src/index.ts',
       ),
+      '@lambda-solutions/mcp-server-sheriff': resolve(
+        './packages/mcp-server/src/index.ts',
+      ),
       '@lambda-solutions/sheriff-core': resolve('./packages/core/src/index.ts'),
     },
   },
