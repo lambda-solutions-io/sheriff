@@ -37,6 +37,30 @@ const cacheByFilesystemGeneration = new WeakMap<
   Map<string, CacheEntry<unknown>>
 >();
 
+/**
+ * Test-only instrumentation for the multi-entry benchmark spec. The
+ * counters are OFF by default: they only increment when
+ * `SHERIFF_CACHE_STATS=1`, so the production hot path does zero extra
+ * work. This is global state deliberately independent of
+ * `clearProjectCache` (which drops cache entries, not measurements);
+ * a test resets it explicitly via `resetCacheStats`. Not part of the
+ * public API and not re-exported from `packages/core/src/index.ts`.
+ */
+const cacheStats = { computes: 0, hits: 0 };
+
+function isStatsEnabled(): boolean {
+  return process.env['SHERIFF_CACHE_STATS'] === '1';
+}
+
+export function getCacheStats(): { computes: number; hits: number } {
+  return { ...cacheStats };
+}
+
+export function resetCacheStats(): void {
+  cacheStats.computes = 0;
+  cacheStats.hits = 0;
+}
+
 export const DEFAULT_STRUCTURE_CACHE_TTL_MS = 2_000;
 
 export type ComputedWithDependencies<T> = {
@@ -54,16 +78,21 @@ export function getOrCompute<T>(
   compute: () => ComputedWithDependencies<T>,
   options: GetOrComputeOptions = {},
 ): T {
+  const countStats = isStatsEnabled();
+
   if (isCachingDisabled()) {
+    if (countStats) cacheStats.computes++;
     return compute().value;
   }
 
   const entries = getEntriesForActiveGeneration();
   const cached = entries.get(key) as CacheEntry<T> | undefined;
   if (cached && isFresh(cached)) {
+    if (countStats) cacheStats.hits++;
     return cached.value;
   }
 
+  if (countStats) cacheStats.computes++;
   const { value, dependencies } = compute();
   entries.set(key, createEntry(value, dependencies, options.ttlMs));
   return value;
