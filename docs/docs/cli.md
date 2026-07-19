@@ -82,6 +82,71 @@ npx sheriff ui
 npx sheriff junit report.json
 ```
 
+### Plugin API and cache reuse
+
+Each plugin's `execute(args, api)` method receives a `SheriffPluginAPI`:
+
+- `api.verify(entryFile?)` — runs the architecture checks and returns a `VerificationResult`.
+- `api.getProjectData(entryFile?, options?)` — returns the resolved module/dependency data.
+- `api.getConfig()` — the effective Sheriff configuration.
+- `api.log(message)` / `api.logError(message)` — write to Sheriff's output.
+
+Both `verify()` and `getProjectData()` memoize Sheriff's expensive analysis in a process-level cache. The costly inner steps — parsing the config and `tsconfig`, building the TypeScript data, resolving imports, scanning module paths, and computing the dependency universe — run **once** and are reused across calls. A plugin that calls **both** in the same run therefore does **not** redo that parsing and resolution work twice. (The filesystem traversal and module-graph reconstruction still run per call; it's the expensive parsing/resolution underneath that is cached.)
+
+The cache stays valid until the underlying source changes:
+
+- Entries carry per-file modification-time (mtime) stamps. When a file they depend on changes or is removed, those entries are dropped and recomputed on the next call.
+- Directory-structure changes (files or directories added/removed) cannot be detected by mtimes alone, so structure-dependent entries use a short staleness window (default 2000ms, overridable with `SHERIFF_CACHE_TTL`; see the [caching env vars](#caching) above). `SHERIFF_NO_CACHE=1` disables the cache entirely.
+
+This makes **long-running plugins and repeated in-process API calls cheap**. A plugin (or any process) that re-runs `verify()` / `getProjectData()` repeatedly only pays the full parsing/resolution cost when files actually change; the expensive work behind unchanged re-runs is served from the cache. The Sheriff daemon keeps this cache warm across RPC calls, and its file watcher proactively invalidates changed paths and conservatively drops structure-dependent entries on any change, so daemon-backed re-runs stay correct without waiting on the mtime/TTL checks. (Configured plugins are not themselves executed by the daemon or by `sheriff verify --watch` — those run Sheriff's built-in verifier — but any flow that repeatedly hits the same in-process API benefits from the shared cache.)
+
+The cache is **in-memory and process-scoped**: it lives only for the duration of a single CLI process, is lost on exit, and is **not** shared across separate `npx sheriff …` invocations. The daemon is what keeps it warm across RPC calls within one long-lived process; there is no on-disk or cross-process cache.
+
+```typescript
+import { SheriffPlugin, SheriffPluginAPI } from '@lambda-solutions/sheriff-core';
+
+// Illustrative: a plugin that stays alive and re-verifies on demand,
+// measuring the elapsed time per call so the warm-cache speed-up is
+// observable. Each re-run reuses the project cache, so it only pays the
+// full analysis cost when a source file has actually changed.
+export class WatchPlugin implements SheriffPlugin {
+  readonly name = 'watch';
+  readonly description = 'Interactive re-verify, reusing the project cache';
+
+  async execute(args: string[], api: SheriffPluginAPI): Promise<void> {
+    const timed = <T>(fn: () => T): { result: T; ms: string } => {
+      const start = process.hrtime.bigint();
+      const result = fn();
+      const ms = (Number(process.hrtime.bigint() - start) / 1e6).toFixed(1);
+      return { result, ms };
+    };
+
+    const runOnce = () => {
+      // First call pays the cold cost; later calls hit the warm cache.
+      const { result, ms: verifyMs } = timed(() => api.verify());
+      const { result: projectData, ms: dataMs } = timed(() =>
+        api.getProjectData(),
+      );
+      // ProjectData is keyed by file path (one node per file), so this is
+      // a file/node count — not a module count.
+      api.log(
+        `success=${result.success} files=${Object.keys(projectData).length} ` +
+          `verify=${verifyMs}ms data=${dataMs}ms`,
+      );
+    };
+
+    // A real interactive plugin loops on stdin/a REPL or a file watcher;
+    // see the sheriff-watch fixture for a readline-driven example. Between
+    // runs the cache keeps each call cheap, so the printed timings shrink
+    // after the first (cold) run.
+    for (let run = 1; run <= 3; run++) {
+      api.log(`run ${run}`);
+      runOnce();
+    }
+  }
+}
+```
+
 ## Entry Files and Entry Points
 
 Sheriff needs to know where to start traversing your project's imports. You can specify this using either an `entryFile` **or** `entryPoints`.
