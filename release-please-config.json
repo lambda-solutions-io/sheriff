@@ -10,17 +10,16 @@
     },
     "packages/mcp-server": {
       "component": "mcp-server"
+    },
+    "packages/lsp-server": {
+      "component": "lsp-server"
     }
   },
   "plugins": [
     {
       "type": "linked-versions",
       "groupName": "sheriff",
-      "components": [
-        "core",
-        "eslint-plugin",
-        "mcp-server"
-      ]
+      "components": ["core", "eslint-plugin", "mcp-server", "lsp-server"]
     }
   ]
 }

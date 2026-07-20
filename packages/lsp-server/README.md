@@ -77,7 +77,7 @@ The initialize response advertises full text document sync:
 Diagnostics are published with `textDocument/publishDiagnostics`, severity
 `Error`, and source `sheriff`. The range covers the module specifier inside the
 import or export statement. If the file is outside a TypeScript project or no
-`sheriff.config.ts` is present beside the nearest `tsconfig.json`, the server
+`sheriff.config.ts` is found by Sheriff's core project discovery, the server
 publishes an empty diagnostics array.
 
 Messages use standard LSP stdio framing:
@@ -91,3 +91,9 @@ Content-Length: <utf8-byte-length>\r\n
 The current implementation uses the same in-process core API as the ESLint
 plugin. A daemon-backed implementation can be added behind the diagnostics
 creation function later without changing the LSP transport.
+
+## Known limitations
+
+- Files that use lone carriage returns (`\r`) as line endings are unsupported.
+  Use LF (`\n`) or CRLF (`\r\n`) so diagnostic line and character positions
+  match the editor document.

@@ -66,9 +66,47 @@ describe('message codec', () => {
     ).toEqual([valid]);
   });
 
+  it('skips the body of a frame with malformed headers', () => {
+    const reader = new JsonRpcMessageReader();
+    const malformed = Buffer.from(
+      'Content-Length: 4\r\nBroken-Header\r\n\r\njunk',
+      'utf8',
+    );
+    const valid = { jsonrpc: '2.0', id: 3, method: 'shutdown' };
+
+    expect(reader.push(malformed.subarray(0, malformed.length - 2))).toEqual(
+      [],
+    );
+    expect(
+      reader.push(
+        Buffer.concat([
+          malformed.subarray(malformed.length - 2),
+          encodeJsonRpcMessage(valid),
+        ]),
+      ),
+    ).toEqual([valid]);
+  });
+
+  it('scans past an unknown malformed body to the next valid frame', () => {
+    const reader = new JsonRpcMessageReader();
+    const malformed = Buffer.from(
+      'Broken-Header\r\n\r\nunknown body bytes',
+      'utf8',
+    );
+    const valid = { jsonrpc: '2.0', method: 'initialized', params: {} };
+
+    expect(
+      reader.push(Buffer.concat([malformed, encodeJsonRpcMessage(valid)])),
+    ).toEqual([valid]);
+  });
+
   it('frames multibyte UTF-8 payloads by byte length', () => {
     const reader = new JsonRpcMessageReader();
-    const message = { jsonrpc: '2.0', method: 'x', params: { text: '日本語🙂' } };
+    const message = {
+      jsonrpc: '2.0',
+      method: 'x',
+      params: { text: '日本語🙂' },
+    };
     const encoded = encodeJsonRpcMessage(message);
 
     expect(reader.push(encoded.subarray(0, encoded.length - 1))).toEqual([]);

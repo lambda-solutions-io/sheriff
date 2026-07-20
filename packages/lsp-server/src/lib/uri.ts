@@ -25,5 +25,5 @@ export function uriToFilePath(uri: string): string {
     return pathname.slice(1).replaceAll('/', '\\');
   }
 
-  return pathname;
+  return url.hostname ? `//${url.hostname}${pathname}` : pathname;
 }

@@ -1,9 +1,10 @@
-import { existsSync } from 'fs';
-import { dirname, join, parse } from 'path';
 import {
+  init,
+  toFsPath,
   violatesDependencyRule,
   violatesEncapsulationRule,
 } from '@lambda-solutions/sheriff-core';
+import * as ts from 'typescript';
 import { uriToFilePath } from './uri';
 
 export interface Position {
@@ -60,11 +61,20 @@ export function createSheriffDiagnostics(
 ): Diagnostic[] {
   const filename = uriToFilePath(uri);
   const imports = extractImportSpecifiers(text);
-  if (imports.length === 0 || !hasSheriffConfig(filename)) {
+  if (imports.length === 0) {
     return [];
   }
 
   try {
+    const projectInfo = init(toFsPath(filename), {
+      traverse: false,
+      entryFileContent: text,
+      returnOnMissingConfig: true,
+    });
+    if (!projectInfo) {
+      return [];
+    }
+
     return imports.flatMap((importSpecifier, index) => {
       const isFirstRun = index === 0;
       return [
@@ -97,85 +107,31 @@ export function createSheriffDiagnostics(
 
 export function extractImportSpecifiers(text: string): ImportSpecifier[] {
   const lineStarts = createLineStarts(text);
-  const matches = [
-    ...extractMatches(
-      /\bimport\s+(?:type\s+)?(?:[^'";]*?\s+from\s*)?(['"])([^'"\r\n]+)\1/g,
-      text,
-      lineStarts,
-    ),
-    ...extractMatches(
-      /\bexport\s+(?:type\s+)?(?:\*\s+from|[^'";]*?\s+from)\s*(['"])([^'"\r\n]+)\1/g,
-      text,
-      lineStarts,
-    ),
-    ...extractMatches(
-      /\bimport\s*\(\s*(['"])([^'"\r\n]+)\1\s*\)/g,
-      text,
-      lineStarts,
-    ),
-  ];
-
-  return matches.sort(
-    (left, right) =>
-      positionToSortKey(left.range.start) -
-      positionToSortKey(right.range.start),
-  );
+  return ts.preProcessFile(text).importedFiles.map((importedFile) => ({
+    value: importedFile.fileName,
+    range:
+      typeof importedFile.pos === 'number' &&
+      typeof importedFile.end === 'number'
+        ? {
+            // TypeScript's preprocessor offsets span from the opening quote
+            // through the last specifier character; LSP ranges exclude quotes.
+            start: offsetToPosition(importedFile.pos + 1, lineStarts),
+            end: offsetToPosition(importedFile.end + 1, lineStarts),
+          }
+        : fallbackRange(text, importedFile.fileName, lineStarts),
+  }));
 }
 
-function extractMatches(
-  expression: RegExp,
+function fallbackRange(
   text: string,
+  specifier: string,
   lineStarts: number[],
-): ImportSpecifier[] {
-  const imports: ImportSpecifier[] = [];
-  for (const match of text.matchAll(expression)) {
-    const quote = match[1];
-    const value = match[2];
-    if (!quote || !value || match.index === undefined) {
-      continue;
-    }
-
-    const quotedSpecifier = `${quote}${value}${quote}`;
-    const specifierStart =
-      match.index + match[0].lastIndexOf(quotedSpecifier) + 1;
-    imports.push({
-      value,
-      range: {
-        start: offsetToPosition(specifierStart, lineStarts),
-        end: offsetToPosition(specifierStart + value.length, lineStarts),
-      },
-    });
-  }
-
-  return imports;
-}
-
-function hasSheriffConfig(filename: string): boolean {
-  const tsconfigDir = findNearestParentFileDir(filename, 'tsconfig.json');
-  return (
-    tsconfigDir !== undefined &&
-    existsSync(join(tsconfigDir, 'sheriff.config.ts'))
-  );
-}
-
-function findNearestParentFileDir(
-  filename: string,
-  basename: string,
-): string | undefined {
-  let current = dirname(filename);
-  const root = parse(current).root;
-
-  while (true) {
-    if (existsSync(join(current, basename))) {
-      return current;
-    }
-
-    if (current === root) {
-      return undefined;
-    }
-
-    current = dirname(current);
-  }
+): Range {
+  const offset = Math.max(0, text.indexOf(specifier));
+  return {
+    start: offsetToPosition(offset, lineStarts),
+    end: offsetToPosition(offset + specifier.length, lineStarts),
+  };
 }
 
 function createLineStarts(text: string): number[] {
@@ -211,8 +167,4 @@ function offsetToPosition(offset: number, lineStarts: number[]): Position {
   }
 
   return { line: 0, character: 0 };
-}
-
-function positionToSortKey(position: Position): number {
-  return position.line * 1_000_000 + position.character;
 }
