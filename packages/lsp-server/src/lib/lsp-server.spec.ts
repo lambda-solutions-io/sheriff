@@ -62,6 +62,37 @@ describe('Sheriff LSP server', () => {
     expect(harness.diagnostics).toEqual([]);
   });
 
+  it('waits for the initialized notification before diagnosing eager documents', async () => {
+    const createDiagnostics = vi.fn(() => [testDiagnostic]);
+    const harness = await createServer({
+      createDiagnostics,
+      sendInitialized: false,
+    });
+    const uri = 'file:///eager.ts';
+
+    await harness.client.sendNotification('textDocument/didOpen', {
+      textDocument: {
+        uri,
+        languageId: 'typescript',
+        version: 1,
+        text: 'opened eagerly',
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(createDiagnostics).not.toHaveBeenCalled();
+    expect(harness.diagnostics).toEqual([]);
+
+    const published = harness.nextDiagnostics();
+    await harness.client.sendNotification('initialized', {});
+
+    expect(await published).toEqual({
+      uri,
+      version: 1,
+      diagnostics: [testDiagnostic],
+    });
+  });
+
   it('advertises incremental sync and diagnoses unsaved ranged changes', async () => {
     const project = createFixtureProject({ withConfig: true });
     const uri = filePathToUri(join(project, 'src/app/main.ts'));
@@ -300,6 +331,70 @@ describe('Sheriff LSP server', () => {
     expect(harness.diagnostics).toEqual([{ uri, diagnostics: [] }]);
   });
 
+  it('releases document generations on close without reviving in-flight analysis', async () => {
+    const analysis = deferred<Diagnostic[]>();
+    const createDiagnostics = vi.fn(() => analysis.promise);
+    const harness = await createServer({ createDiagnostics });
+    const uris = Array.from(
+      { length: 5 },
+      (_, index) => `file:///closed-${index}.ts`,
+    );
+    const generationMaps = new Set<Map<unknown, unknown>>();
+    const originalDelete = Map.prototype.delete;
+    const deleteSpy = vi
+      .spyOn(Map.prototype, 'delete')
+      .mockImplementation(function (
+        this: Map<unknown, unknown>,
+        key: unknown,
+      ) {
+        if (
+          typeof key === 'string' &&
+          uris.includes(key) &&
+          typeof this.get(key) === 'number'
+        ) {
+          generationMaps.add(this);
+        }
+        return originalDelete.call(this, key);
+      });
+
+    try {
+      for (const uri of uris) {
+        await harness.client.sendNotification('textDocument/didOpen', {
+          textDocument: {
+            uri,
+            languageId: 'typescript',
+            version: 1,
+            text: 'opened',
+          },
+        });
+        await harness.client.sendNotification('textDocument/didChange', {
+          textDocument: { uri, version: 2 },
+          contentChanges: [{ text: 'changed' }],
+        });
+        await harness.client.sendNotification('textDocument/didClose', {
+          textDocument: { uri },
+        });
+      }
+
+      await vi.waitFor(() =>
+        expect(harness.diagnostics).toHaveLength(uris.length),
+      );
+      expect(generationMaps).toHaveLength(1);
+      expect([...generationMaps][0]).toHaveLength(0);
+
+      analysis.resolve([testDiagnostic]);
+      await analysis.promise;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(harness.diagnostics).toHaveLength(uris.length);
+      expect(harness.diagnostics).toEqual(
+        uris.map((uri) => ({ uri, diagnostics: [] })),
+      );
+    } finally {
+      deleteSpy.mockRestore();
+    }
+  });
+
   it('ignores changes for documents that were never opened', async () => {
     const createDiagnostics = vi.fn(() => []);
     const harness = await createServer({ createDiagnostics });
@@ -354,6 +449,7 @@ describe('Sheriff LSP server', () => {
       ) => Diagnostic[] | Promise<Diagnostic[]>;
       changeDebounceMs?: number;
       initialize?: boolean;
+      sendInitialized?: boolean;
     } = {},
   ): Promise<ServerHarness> {
     const clientToServer = new PassThrough();
@@ -366,7 +462,11 @@ describe('Sheriff LSP server', () => {
       new StreamMessageReader(serverToClient),
       new StreamMessageWriter(clientToServer),
     );
-    const { initialize = true, ...serverOptions } = options;
+    const {
+      initialize = true,
+      sendInitialized = initialize,
+      ...serverOptions
+    } = options;
     const sheriffServer = createSheriffLspServer({
       connection: serverConnection,
       ...serverOptions,
@@ -389,7 +489,7 @@ describe('Sheriff LSP server', () => {
           capabilities: {},
         })
       : undefined;
-    if (initialize) {
+    if (sendInitialized) {
       await client.sendNotification('initialized', {});
     }
 
