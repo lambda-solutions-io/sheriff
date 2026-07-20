@@ -4,13 +4,14 @@ import { createRule } from './create-rule';
 
 export const dependencyRule = createRule(
   'Dependency Rule',
-  (context, node, isFirstRun, filename, sourceCode) => {
+  (context, node, isFirstRun, filename, sourceCode, lintRun) => {
     const importValue = (node.source as { value: string }).value;
     const daemonMessage = daemonDependencyMessage(
       filename,
       importValue,
       isFirstRun,
       sourceCode,
+      lintRun,
     );
     if (daemonMessage !== undefined) {
       if (daemonMessage) {

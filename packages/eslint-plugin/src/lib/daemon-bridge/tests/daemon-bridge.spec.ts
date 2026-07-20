@@ -6,8 +6,10 @@ import {
 } from '../daemon-bridge';
 import type { DaemonLintResult } from '../daemon-bridge';
 import {
+  daemonDeepImportMessage,
   daemonDependencyMessage,
   daemonEncapsulationMessage,
+  resetDaemonLintCacheForTests,
 } from '../daemon-lint-cache';
 
 const synckitMocks = vi.hoisted(() => ({
@@ -32,6 +34,7 @@ describe('daemon bridge', () => {
     synckitMocks.createSyncFn.mockReset();
     synckitMocks.runAsWorker.mockReset();
     resetDaemonBridgeForTests();
+    resetDaemonLintCacheForTests();
   });
 
   afterEach(() => {
@@ -41,6 +44,7 @@ describe('daemon bridge', () => {
       process.env['SHERIFF_DAEMON'] = originalSheriffDaemon;
     }
     resetDaemonBridgeForTests();
+    resetDaemonLintCacheForTests();
   });
 
   it('reads the opt-in environment variable at call time', () => {
@@ -149,6 +153,7 @@ describe('daemon bridge', () => {
     };
     const syncLintFile = vi.fn(() => lintResult);
     synckitMocks.createSyncFn.mockReturnValue(syncLintFile);
+    const lintRun = {};
 
     expect(
       daemonEncapsulationMessage(
@@ -156,14 +161,16 @@ describe('daemon bridge', () => {
         '@app/internal',
         true,
         'source code',
+        lintRun,
       ),
     ).toBe("'@app/internal' cannot be imported. It is encapsulated.");
     expect(
       daemonDependencyMessage(
         '/project/file.ts',
         '@app/data',
-        false,
+        true,
         'source code',
+        lintRun,
       ),
     ).toBe(
       "module import '@app/data' violates the dependency rule. Tag feature has no clearance for tags data, shared",
@@ -187,6 +194,15 @@ describe('daemon bridge', () => {
       ),
     ).toBe('');
     expect(
+      daemonDeepImportMessage(
+        '/project/file.ts',
+        '@app/internal',
+        true,
+        'source code',
+        lintRun,
+      ),
+    ).toBe("Deep import is not allowed. Use the module's index.ts or path.");
+    expect(
       daemonDependencyMessage(
         '/project/file.ts',
         '@app/clean',
@@ -195,6 +211,42 @@ describe('daemon bridge', () => {
       ),
     ).toBe('');
     expect(syncLintFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes when the same rule starts another lint pass', () => {
+    process.env['SHERIFF_DAEMON'] = '1';
+    const syncLintFile = vi.fn(() => emptyLintResult);
+    synckitMocks.createSyncFn.mockReturnValue(syncLintFile);
+
+    daemonDependencyMessage('/project/file.ts', '@app/a', true, 'source');
+    daemonEncapsulationMessage('/project/file.ts', '@app/a', true, 'source');
+    expect(syncLintFile).toHaveBeenCalledTimes(1);
+
+    daemonDependencyMessage('/project/file.ts', '@app/a', true, 'source');
+    expect(syncLintFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reuse a result across different ESLint lint runs', () => {
+    process.env['SHERIFF_DAEMON'] = '1';
+    const syncLintFile = vi.fn(() => emptyLintResult);
+    synckitMocks.createSyncFn.mockReturnValue(syncLintFile);
+
+    daemonDependencyMessage(
+      '/project/file.ts',
+      '@app/a',
+      true,
+      'source',
+      {},
+    );
+    daemonEncapsulationMessage(
+      '/project/file.ts',
+      '@app/a',
+      true,
+      'source',
+      {},
+    );
+
+    expect(syncLintFile).toHaveBeenCalledTimes(2);
   });
 
   it('reports unresolvable relative imports with the in-process wording', () => {

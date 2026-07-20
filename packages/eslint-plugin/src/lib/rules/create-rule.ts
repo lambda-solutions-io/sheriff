@@ -20,6 +20,7 @@ export const createRule: (
   create: (context) => {
     let isFirstRun = true;
     let hasInternalError = false;
+    const lintRun = context.sourceCode ?? context.getSourceCode();
     const executeRuleWithContext = (
       node: ExecutorNode,
     ) => {
@@ -34,7 +35,7 @@ export const createRule: (
             return;
           }
 
-          executor(context, node, isFirstRun, filename, sourceCode);
+          executor(context, node, isFirstRun, filename, sourceCode, lintRun);
         } catch (error) {
           hasInternalError = true;
           const message =

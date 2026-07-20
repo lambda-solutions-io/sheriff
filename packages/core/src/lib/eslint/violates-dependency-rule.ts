@@ -1,23 +1,9 @@
-import { FsPath, toFsPath } from '../file-info/fs-path';
-import throwIfNull from '../util/throw-if-null';
+import { FsPath } from '../file-info/fs-path';
 import { logger } from '../log';
-import { init } from '../main/init';
-import {
-  checkForDependencyRuleViolation,
-  DependencyRuleViolation,
-} from '../checks/check-for-dependency-rule-violation';
-import { FileInfo } from '../modules/file.info';
-import { isRelativeImport } from './is-relative-import';
-import { getSharedProjectInfoOrUndefined } from './shared-project-info';
-import {
-  checkForExternalRuleViolation,
-  ExternalRuleViolation,
-} from '../checks/check-for-external-rule-violation';
+import { DependencyRuleViolation } from '../checks/check-for-dependency-rule-violation';
+import { ExternalRuleViolation } from '../checks/check-for-external-rule-violation';
+import { getDocumentLintAnalysis } from './lint-document';
 
-let cache: Record<string, string> = {};
-let cacheActive = false;
-let fileInfo: FileInfo | undefined;
-let configFileIsMissing = false;
 const log = logger('core.eslint.dependency-rules');
 
 export const violatesDependencyRule = (
@@ -26,65 +12,37 @@ export const violatesDependencyRule = (
   isFirstRun: boolean,
   fileContent: string,
 ): string => {
-  if (isFirstRun) {
-    cache = {};
-    fileInfo = undefined;
-    cacheActive = false;
-    configFileIsMissing = false;
-  }
+  const {
+    rootDir,
+    configFileIsMissing,
+    getDependencyRuleViolation,
+    getExternalRuleViolation,
+    isUnresolvableImport,
+  } = getDocumentLintAnalysis(filename, fileContent, true);
   if (configFileIsMissing) {
+    if (isFirstRun) {
+      log.info('no sheriff.config.ts present');
+    }
     return '';
   }
-
-  if (!cacheActive) {
-    cacheActive = true;
-    const projectInfo = getSharedProjectInfoOrUndefined(
-      toFsPath(filename),
-      fileContent,
-      () =>
-        init(toFsPath(filename), {
-          traverse: false,
-          entryFileContent: fileContent,
-          returnOnMissingConfig: true,
-        }),
-    );
-
-    if (!projectInfo) {
-      log.info('no sheriff.config.ts present');
-      configFileIsMissing = true;
-      return '';
-    }
-
-    fileInfo = projectInfo.fileInfo;
-    const violations = checkForDependencyRuleViolation(
-      toFsPath(filename),
-      projectInfo,
-    );
-    const { rootDir } = projectInfo;
-    for (const violation of violations) {
-      cache[violation.rawImport] = formatViolation(violation, rootDir);
-    }
-
-    const externalRuleViolations = checkForExternalRuleViolation(
-      toFsPath(filename),
-      projectInfo,
-    );
-    for (const violation of externalRuleViolations) {
-      cache[violation.externalLibrary] = formatExternalViolation(
-        violation,
-        rootDir,
-      );
-    }
+  if (!rootDir) {
+    throw new Error('document lint analysis is missing its root directory');
   }
 
-  if (
-    throwIfNull(fileInfo).isUnresolvableImport(importCommand) &&
-    isRelativeImport(importCommand)
-  ) {
+  if (isUnresolvableImport(importCommand)) {
     return `import ${importCommand} cannot be resolved`;
   }
 
-  return cache[importCommand] ?? '';
+  const dependencyRuleViolation = getDependencyRuleViolation(importCommand);
+  if (dependencyRuleViolation) {
+    return formatViolation(dependencyRuleViolation, rootDir);
+  }
+  const externalRuleViolation = getExternalRuleViolation(importCommand);
+  if (externalRuleViolation) {
+    return formatExternalViolation(externalRuleViolation, rootDir);
+  }
+
+  return '';
 };
 
 function formatViolation(
