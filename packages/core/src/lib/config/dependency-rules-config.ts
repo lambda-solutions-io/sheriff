@@ -1,9 +1,13 @@
 import { FsPath } from '../file-info/fs-path';
 
 export interface DependencyCheckContext {
+  /** Path of the importing module. */
   fromModulePath: FsPath;
+  /** Path of the imported module. */
   toModulePath: FsPath;
+  /** Path of the importing file. */
   fromFilePath: FsPath;
+  /** Path of the resolved imported file. */
   toFilePath: FsPath;
   fromTags: string[];
   toTags: string[];

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { sheriffConfig } from '../../test/project-configurator';
 import { sameTag } from '../same-tag';
 import { noDependencies } from '../no-dependencies';
@@ -11,6 +11,7 @@ import { FsPath, toFsPath } from '../../file-info/fs-path';
 import { traverseProject } from '../../test/traverse-project';
 import { tsConfig } from '../../test/fixtures/ts-config';
 import { NoDependencyRuleForTagError } from '../../error/user-error';
+import { RuleMatcherFn } from '../../config/dependency-rules-config';
 
 describe('check for dependency rule violation', () => {
   describe('standard checks', () => {
@@ -242,6 +243,37 @@ describe('check for dependency rule violation', () => {
     );
 
     expect(violations).toEqual([]);
+  });
+
+  it('should pass the resolved imported file path to rule matchers', () => {
+    const projectInfo = testInit('src/main.ts', {
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': sheriffConfig({
+        modules: { 'src/target': 'target' },
+        depRules: { root: '*' },
+      }),
+      src: {
+        'main.ts': ['./target/internal.ts'],
+        target: {
+          'index.ts': [],
+          'internal.ts': [],
+        },
+      },
+    });
+    const matcher = vi.fn<RuleMatcherFn>(() => true);
+    projectInfo.config.depRules.root = matcher;
+
+    checkForDependencyRuleViolation(
+      toFsPath('/project/src/main.ts'),
+      projectInfo,
+    );
+
+    expect(matcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toFilePath: '/project/src/target/internal.ts',
+        toModulePath: '/project/src/target',
+      }),
+    );
   });
 
   it('should require that each existing tag has clearance', () => {

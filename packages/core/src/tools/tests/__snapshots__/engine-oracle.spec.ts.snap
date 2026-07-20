@@ -1,0 +1,330 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`generateOracle > captures barrel modules and deep imports 1`] = `
+{
+  "files": [
+    {
+      "imports": [
+        {
+          "kind": "module",
+          "raw": "./public.ts",
+          "resolvedPath": "src/feature/public.ts",
+        },
+      ],
+      "module": "src/feature",
+      "path": "src/feature/index.ts",
+    },
+    {
+      "imports": [],
+      "module": "src/feature",
+      "path": "src/feature/internal.ts",
+    },
+    {
+      "imports": [],
+      "module": "src/feature",
+      "path": "src/feature/public.ts",
+    },
+    {
+      "imports": [
+        {
+          "kind": "module",
+          "raw": "./feature",
+          "resolvedPath": "src/feature/index.ts",
+        },
+        {
+          "kind": "module",
+          "raw": "./feature/internal.ts",
+          "resolvedPath": "src/feature/internal.ts",
+        },
+      ],
+      "module": ".",
+      "path": "src/main.ts",
+    },
+  ],
+  "modules": [
+    {
+      "isBarrel": false,
+      "path": ".",
+      "tags": [
+        "root",
+      ],
+    },
+    {
+      "isBarrel": true,
+      "path": "src/feature",
+      "tags": [
+        "type:feature",
+      ],
+    },
+  ],
+  "rootDir": ".",
+  "version": 1,
+  "violations": {
+    "dependency": [],
+    "encapsulation": [
+      {
+        "file": "src/main.ts",
+        "rawImport": "./feature/internal.ts",
+      },
+    ],
+    "external": [],
+  },
+}
+`;
+
+exports[`generateOracle > captures barrel-less encapsulation 1`] = `
+{
+  "files": [
+    {
+      "imports": [],
+      "module": "src/customer/data",
+      "path": "src/customer/data/internal/secret.ts",
+    },
+    {
+      "imports": [],
+      "module": "src/customer/data",
+      "path": "src/customer/data/public.ts",
+    },
+    {
+      "imports": [
+        {
+          "kind": "module",
+          "raw": "../data/public.ts",
+          "resolvedPath": "src/customer/data/public.ts",
+        },
+      ],
+      "module": "src/customer/feature",
+      "path": "src/customer/feature/customer.ts",
+    },
+    {
+      "imports": [
+        {
+          "kind": "module",
+          "raw": "./customer/data/internal/secret.ts",
+          "resolvedPath": "src/customer/data/internal/secret.ts",
+        },
+        {
+          "kind": "module",
+          "raw": "./customer/feature/customer.ts",
+          "resolvedPath": "src/customer/feature/customer.ts",
+        },
+      ],
+      "module": ".",
+      "path": "src/main.ts",
+    },
+  ],
+  "modules": [
+    {
+      "isBarrel": false,
+      "path": ".",
+      "tags": [
+        "root",
+      ],
+    },
+    {
+      "isBarrel": false,
+      "path": "src/customer/data",
+      "tags": [
+        "domain:customer",
+        "type:data",
+      ],
+    },
+    {
+      "isBarrel": false,
+      "path": "src/customer/feature",
+      "tags": [
+        "domain:customer",
+        "type:feature",
+      ],
+    },
+  ],
+  "rootDir": ".",
+  "version": 1,
+  "violations": {
+    "dependency": [],
+    "encapsulation": [
+      {
+        "file": "src/main.ts",
+        "rawImport": "./customer/data/internal/secret.ts",
+      },
+    ],
+    "external": [],
+  },
+}
+`;
+
+exports[`generateOracle > captures external and unresolvable imports 1`] = `
+{
+  "files": [
+    {
+      "imports": [
+        {
+          "kind": "unresolvable",
+          "raw": "./missing.ts",
+          "resolvedPath": null,
+        },
+        {
+          "kind": "external",
+          "raw": "@angular/core",
+          "resolvedPath": null,
+        },
+        {
+          "kind": "external",
+          "raw": "rxjs",
+          "resolvedPath": null,
+        },
+      ],
+      "module": "src/domain",
+      "path": "src/domain/booking.ts",
+    },
+    {
+      "imports": [
+        {
+          "kind": "module",
+          "raw": "./domain/booking.ts",
+          "resolvedPath": "src/domain/booking.ts",
+        },
+      ],
+      "module": ".",
+      "path": "src/main.ts",
+    },
+  ],
+  "modules": [
+    {
+      "isBarrel": false,
+      "path": ".",
+      "tags": [
+        "root",
+      ],
+    },
+    {
+      "isBarrel": false,
+      "path": "src/domain",
+      "tags": [
+        "type:domain",
+      ],
+    },
+  ],
+  "rootDir": ".",
+  "version": 1,
+  "violations": {
+    "dependency": [],
+    "encapsulation": [],
+    "external": [
+      {
+        "externalLibrary": "rxjs",
+        "file": "src/domain/booking.ts",
+        "fromTag": "type:domain",
+      },
+    ],
+  },
+}
+`;
+
+exports[`generateOracle > captures placeholder tags and dependency violations 1`] = `
+{
+  "files": [
+    {
+      "imports": [],
+      "module": "src/customers/data",
+      "path": "src/customers/data/index.ts",
+    },
+    {
+      "imports": [
+        {
+          "kind": "module",
+          "raw": "../../holidays/data",
+          "resolvedPath": "src/holidays/data/index.ts",
+        },
+        {
+          "kind": "module",
+          "raw": "../data",
+          "resolvedPath": "src/customers/data/index.ts",
+        },
+      ],
+      "module": "src/customers/feature",
+      "path": "src/customers/feature/index.ts",
+    },
+    {
+      "imports": [],
+      "module": "src/holidays/data",
+      "path": "src/holidays/data/index.ts",
+    },
+    {
+      "imports": [
+        {
+          "kind": "module",
+          "raw": "./customers/feature",
+          "resolvedPath": "src/customers/feature/index.ts",
+        },
+      ],
+      "module": ".",
+      "path": "src/main.ts",
+    },
+  ],
+  "modules": [
+    {
+      "isBarrel": false,
+      "path": ".",
+      "tags": [
+        "root",
+      ],
+    },
+    {
+      "isBarrel": true,
+      "path": "src/customers/data",
+      "tags": [
+        "domain:customers",
+        "type:data",
+      ],
+    },
+    {
+      "isBarrel": true,
+      "path": "src/customers/feature",
+      "tags": [
+        "domain:customers",
+        "type:feature",
+      ],
+    },
+    {
+      "isBarrel": true,
+      "path": "src/holidays/data",
+      "tags": [
+        "domain:holidays",
+        "type:data",
+      ],
+    },
+  ],
+  "rootDir": ".",
+  "version": 1,
+  "violations": {
+    "dependency": [
+      {
+        "file": "src/customers/feature/index.ts",
+        "fromModulePath": "src/customers/feature",
+        "fromTag": "domain:customers",
+        "rawImport": "../../holidays/data",
+        "toModulePath": "src/holidays/data",
+        "toTags": [
+          "domain:holidays",
+          "type:data",
+        ],
+      },
+      {
+        "cause": "deny-rule",
+        "file": "src/customers/feature/index.ts",
+        "fromModulePath": "src/customers/feature",
+        "fromTag": "type:feature",
+        "rawImport": "../data",
+        "toModulePath": "src/customers/data",
+        "toTags": [
+          "domain:customers",
+          "type:data",
+        ],
+      },
+    ],
+    "encapsulation": [],
+    "external": [],
+  },
+}
+`;
