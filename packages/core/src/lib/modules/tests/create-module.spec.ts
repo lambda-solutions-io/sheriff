@@ -2,13 +2,7 @@ import { UnassignedFileInfo } from '../../file-info/unassigned-file-info';
 import { createModules } from '../create-modules';
 import findFileInfo from '../../test/find-file-info';
 import { Module } from '../module';
-import {
-  afterEach,
-  beforeAll,
-  describe,
-  expect,
-  it,
-} from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import throwIfNull from '../../util/throw-if-null';
 import getFs, { useVirtualFs } from '../../fs/getFs';
 import { FsPath, toFsPath } from '../../file-info/fs-path';
@@ -204,6 +198,29 @@ describe('createModule', () => {
           path: '/',
           fileInfoPaths: ['/src/app/main.ts', '/src/app/app.component.ts'],
         },
+      ],
+    }));
+  });
+
+  it('should only match module paths at a segment boundary', () => {
+    assertModule(() => ({
+      fileInfo: buildFileInfo('/a/bc/file.ts'),
+      barrelFiles: ['/a/b/index.ts'],
+      expectedModules: [
+        { path: '/a/b', fileInfoPaths: [] },
+        { path: '/', fileInfoPaths: ['/a/bc/file.ts'] },
+      ],
+    }));
+  });
+
+  it('should assign files to the deepest matching module', () => {
+    assertModule(() => ({
+      fileInfo: buildFileInfo('/a/b/c/file.ts'),
+      barrelFiles: ['/a/b/index.ts', '/a/b/c/index.ts'],
+      expectedModules: [
+        { path: '/a/b', fileInfoPaths: [] },
+        { path: '/a/b/c', fileInfoPaths: ['/a/b/c/file.ts'] },
+        { path: '/', fileInfoPaths: [] },
       ],
     }));
   });

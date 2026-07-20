@@ -15,5 +15,5 @@ export const fillFileInfoMap = (
     }
   }
 
-  log.info(Array.from(fileInfoMap).join(', '));
+  log.info(() => Array.from(fileInfoMap).join(', '));
 };

@@ -35,7 +35,7 @@ export function generateUnassignedFileInfo(
     fileContent,
   );
 
-  log.info(formatFileInfo(fileInfo));
+  log.info(() => formatFileInfo(fileInfo));
 
   return fileInfo;
 }

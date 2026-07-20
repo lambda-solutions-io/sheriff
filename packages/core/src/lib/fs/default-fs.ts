@@ -21,13 +21,9 @@ export class DefaultFs extends Fs {
     filter?: 'none' | 'directory',
   ): FsPath[] {
     return fs
-      .readdirSync(directory)
-      .map((child) => toFsPath(path.join(directory, child)))
-      .filter((path) =>
-        filter === 'none'
-          ? true
-          : fs.lstatSync(path).isDirectory(),
-      )
+      .readdirSync(directory, { withFileTypes: true })
+      .filter((child) => filter === 'none' || child.isDirectory())
+      .map((child) => toFsPath(path.join(directory, child.name)));
   }
 
   removeDir = (path: string) => {
@@ -54,16 +50,15 @@ export class DefaultFs extends Fs {
     found: FsPath[] = [],
     referencePath = '',
   ): FsPath[] => {
-    const files = fs.readdirSync(directory);
+    const files = fs.readdirSync(directory, { withFileTypes: true });
     referencePath = referencePath || directory;
 
     for (const file of files) {
-      const filePath = toFsPath(path.join(directory, file));
-      const info = fs.lstatSync(filePath);
-      if (info.isFile() && file.toLowerCase() === filename.toLowerCase()) {
+      const filePath = toFsPath(path.join(directory, file.name));
+      if (file.isFile() && file.name.toLowerCase() === filename.toLowerCase()) {
         found.push(toFsPath(filePath));
       }
-      if (info.isDirectory()) {
+      if (file.isDirectory()) {
         this.findFiles(filePath, filename, found, referencePath);
       }
     }
@@ -77,15 +72,15 @@ export class DefaultFs extends Fs {
   findNearestParentFile = (referenceFile: FsPath, filename: string): FsPath => {
     let current = path.dirname(referenceFile);
     while (current) {
-      const files = fs.readdirSync(current);
-
-      for (const file of files) {
-        const filePath = path.join(current, file);
-        const info = fs.lstatSync(filePath);
-
-        if (info.isFile() && file === filename) {
-          return toFsPath(filePath);
-        }
+      const filePath = path.join(current, filename);
+      if (
+        fs.existsSync(filePath) &&
+        fs.lstatSync(filePath).isFile() &&
+        // existsSync follows filesystem case rules; realpath preserves the
+        // previous exact filename match on case-insensitive filesystems.
+        path.basename(fs.realpathSync.native(filePath)) === filename
+      ) {
+        return toFsPath(filePath);
       }
 
       const parent = path.dirname(current);

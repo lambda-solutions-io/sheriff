@@ -3,7 +3,9 @@ import { LogLevel } from './log-level';
 import { afterInit } from '../main/after-init';
 import getFs from '../fs/getFs';
 
-let logQueue: string[] = [];
+export type LogMessage = string | (() => string);
+
+let logQueue: (() => string)[] = [];
 let initialized = false;
 let enabled = false;
 
@@ -19,24 +21,33 @@ export const reset = () => {
 afterInit((config) => {
   enabled = Boolean(config?.log);
   if (enabled) {
-    for (const element of logQueue) {
-      doLog(element);
+    for (const getData of logQueue) {
+      doLog(getData());
     }
   }
   logQueue = [];
   initialized = true;
 });
 
-export function log(message: string, scope = '', level: LogLevel) {
-  const data = [scope, new Date().toISOString(), level, pid, message].join(
-    ' - ',
-  );
+export function log(message: LogMessage, scope = '', level: LogLevel) {
+  if (initialized && !enabled) {
+    return;
+  }
+
+  const timestamp = new Date().toISOString();
+  const getData = () =>
+    [
+      scope,
+      timestamp,
+      level,
+      pid,
+      typeof message === 'function' ? message() : message,
+    ].join(' - ');
+
   if (initialized) {
-    if (enabled) {
-      doLog(data);
-    }
+    doLog(getData());
   } else {
-    logQueue.push(data);
+    logQueue.push(getData);
   }
 }
 
