@@ -108,6 +108,20 @@ describe('Default Fs', () => {
         ),
       ).toThrowError('cannot find a file that does not exist');
     });
+
+    it('should match filenames case-sensitively', () => {
+      expect(() =>
+        fs.findNearestParentFile(
+          toFsPath(
+            path.join(
+              __dirname,
+              './find-nearest/test1/customers/admin/core/feature/index.ts',
+            ),
+          ),
+          'TSCONFIG.JSON',
+        ),
+      ).toThrowError('cannot find TSCONFIG.JSON');
+    });
   });
 
   it('should only find directories', () => {

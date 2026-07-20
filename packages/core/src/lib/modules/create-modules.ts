@@ -49,10 +49,14 @@ export function createModules(
     barrelFile,
   );
 
-  const modulePaths = keys(moduleMap);
+  const modulePaths = new Set(keys(moduleMap));
 
   for (const { fileInfo } of traverseUnassignedFileInfo(entryFileInfo)) {
-    const modulePath = findClosestModulePath(fileInfo.path, modulePaths);
+    const modulePath = findClosestModulePath(
+      fileInfo.path,
+      modulePaths,
+      rootDir,
+    );
     moduleMap[modulePath].addFileInfo(fileInfo);
   }
 
@@ -67,12 +71,36 @@ function normalizeModulePathInfo(
     : modulePathInfo;
 }
 
-function findClosestModulePath(path: string, modulePaths: FsPath[]) {
-  return throwIfNull(
-    modulePaths
-      .filter((modulePath) => path.startsWith(modulePath))
-      .sort((p1, p2) => (p1.length > p2.length ? -1 : 1))
-      .at(0),
-    `findClosestModule for ${path}`,
-  );
+function findClosestModulePath(
+  path: string,
+  modulePaths: Set<FsPath>,
+  rootDir: FsPath,
+) {
+  let currentPath = path;
+  const pathSeparator = path.startsWith('/') ? '/' : '\\';
+  const rootPrefix = rootDir.endsWith(pathSeparator)
+    ? rootDir
+    : `${rootDir}${pathSeparator}`;
+
+  if (!path.startsWith(rootPrefix)) {
+    return throwIfNull(undefined, `findClosestModule for ${path}`);
+  }
+
+  while (currentPath) {
+    if (modulePaths.has(currentPath as FsPath)) {
+      return currentPath as FsPath;
+    }
+
+    if (currentPath === rootDir) {
+      break;
+    }
+
+    const separatorIndex = currentPath.lastIndexOf(pathSeparator);
+    currentPath =
+      separatorIndex < rootDir.length
+        ? rootDir
+        : currentPath.substring(0, separatorIndex);
+  }
+
+  return throwIfNull(undefined, `findClosestModule for ${path}`);
 }

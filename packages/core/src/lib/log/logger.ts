@@ -1,14 +1,14 @@
-import { log } from './log';
+import { LogMessage, log } from './log';
 
 export function logger(scope: string) {
   return {
-    info(message: string) {
+    info(message: LogMessage) {
       log(message, scope, 'info');
     },
-    debug(message: string) {
+    debug(message: LogMessage) {
       log(message, scope, 'debug');
     },
-    level(message: string) {
+    level(message: LogMessage) {
       log(message, scope, 'warn');
     },
   };

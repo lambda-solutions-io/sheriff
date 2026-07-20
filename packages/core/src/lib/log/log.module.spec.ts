@@ -7,7 +7,15 @@ import { sheriffConfig } from '../test/project-configurator';
 import { reset } from './log';
 import { Fs } from '../fs/fs';
 import { tsConfig } from '../test/fixtures/ts-config';
-import { MockInstance, describe, it, expect, beforeAll, afterEach, vitest } from "vitest";
+import {
+  MockInstance,
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterEach,
+  vitest,
+} from 'vitest';
 
 describe('log', () => {
   let fs: Fs;
@@ -63,5 +71,29 @@ describe('log', () => {
 
     expect(appendSpy).toHaveBeenCalled();
     expect(fs.readFile(toFsPath('/project/sheriff.log'))).toContain('Hallo');
+  });
+
+  it('should not format lazy messages when logging is disabled', () => {
+    const log = logger('test');
+    const formatMessage = vitest.fn(() => 'message');
+    log.info(formatMessage);
+    setup(false);
+    init(toFsPath('/project/log/app.component.ts'));
+    log.info(formatMessage);
+
+    expect(formatMessage).not.toHaveBeenCalled();
+  });
+
+  it('should format queued lazy messages when logging is enabled', () => {
+    const log = logger('test');
+    const formatMessage = vitest.fn(() => 'lazy message');
+    log.info(formatMessage);
+    setup(true);
+    init(toFsPath('/project/log/app.component.ts'));
+
+    expect(formatMessage).toHaveBeenCalledOnce();
+    expect(fs.readFile(toFsPath('/project/sheriff.log'))).toContain(
+      'lazy message',
+    );
   });
 });
