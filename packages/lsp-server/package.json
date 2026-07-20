@@ -17,6 +17,8 @@
   },
   "type": "commonjs",
   "dependencies": {
-    "@lambda-solutions/sheriff-core": "^1.0.0"
+    "@lambda-solutions/sheriff-core": "^1.0.0",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.12"
   }
 }
