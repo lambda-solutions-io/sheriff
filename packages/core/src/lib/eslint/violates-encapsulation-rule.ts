@@ -3,6 +3,7 @@ import { init } from '../main/init';
 import { hasEncapsulationViolations } from '../checks/has-encapsulation-violations';
 import { FileInfo } from '../modules/file.info';
 import { isRelativeImport } from './is-relative-import';
+import { getSharedProjectInfo } from './shared-project-info';
 
 let cache: Record<string, FileInfo> = {};
 let cachedFileInfo: FileInfo | undefined;
@@ -40,10 +41,12 @@ export const violatesEncapsulationRule = (
 
   if (!cachedFileInfo) {
     const fsPath = toFsPath(filename);
-    const projectInfo = init(fsPath, {
-      traverse: false,
-      entryFileContent: fileContent,
-    });
+    const projectInfo = getSharedProjectInfo(fsPath, fileContent, () =>
+      init(fsPath, {
+        traverse: false,
+        entryFileContent: fileContent,
+      }),
+    );
 
     cachedFileInfo = projectInfo.fileInfo;
     cache = hasEncapsulationViolations(fsPath, projectInfo);
