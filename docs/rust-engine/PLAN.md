@@ -131,7 +131,8 @@ node tools/perf/run-bench.mjs
 | R0: contract freeze | done | `4cd0b24`, `b55d719` |
 | R1: crate + napi boundary | **done** | `60cf45c`, `eafb213`, `90eaf8e` |
 | R2: oxc extraction + resolution | **done** | `df7319d`, `8ff89c9`, `bd266d3`, `694dc52` |
-| R3: function-rule materialisation | **next** | |
+| R2.1: narrow `typesVersions` fallback | **next** | |
+| R3: function-rule materialisation | not started | |
 | R4: incremental ProjectHandle | not started | |
 | R5: consumer cutover + packaging | not started | |
 
@@ -314,12 +315,12 @@ depth heuristic, so deep-but-valid chains are unaffected.
 
 **Known limitations carried into R4/R5** — do not mistake these for done:
 
-1. **The `typesVersions` fallback is too conservative to ship.** `@types/node`
-   declares `typesVersions`, so effectively *any* project with real
-   `node_modules` falls back to TS wholesale — both installed fixtures now do.
-   Correct, but it means the R5 cutover would deliver no speedup. R5 must either
-   implement `typesVersions` resolution or detect whether it actually affects
-   the specifiers in play.
+1. **The `typesVersions` fallback is scoped too broadly.** The audit checks every
+   *installed* package rather than every *resolved* one, and `@types/node`
+   declares `typesVersions`, so both installed fixtures fall back. Measured: in
+   neither fixture is any triggering package actually imported, so this is an
+   over-broad check rather than a missing capability. **Fixed in R2.1** — see
+   that phase for the evidence table and steps.
 2. **Graph-discovery parity is untested.** The harness enumerates files from
    disk; production starts at an entry file and follows resolved imports.
    Per-file coverage is a *superset* (production reached 10 files where the
@@ -369,6 +370,57 @@ documented; TS remains the default path.
 especially alias priority, extension substitution, and external classification;
 (B) shadow-harness honesty — does it actually cover what it claims, and does the
 fallback truly trigger?
+
+---
+
+## R2.1 (next) — narrow the `typesVersions` fallback
+
+**Goal**: stop falling back to TS for projects that merely *have* a
+`typesVersions`-declaring package installed. Small, self-contained, and it must
+land before any benchmark is believed — see "Why this is sequenced first".
+
+**The problem.** R2 closed a real silent divergence (a devDependency's
+`typesVersions` affected resolution while escaping the whitelist audit) with the
+conservative fix: if *any installed package* declares `typesVersions`, fall the
+whole project back to TS. That check is scoped wrong. Measured triggers:
+
+| Fixture | Fallback triggers | Externals actually imported by source | Overlap |
+| --- | --- | --- | --- |
+| `nextjs-i` | `@types/node`, `@types/react`, `eslint`, `jiti`, `@rushstack/eslint-patch` | `next/image`, `class-variance-authority`, `tailwind-merge` | **none** |
+| `angular-v-multi` | 14 packages incl. `@types/node`, `@babel/types`, `@typescript-eslint/*` | `@angular/{core,common,router,platform-browser}` | **none** |
+
+In both fixtures **zero** triggering packages are ever imported. The audit
+bails on the contents of `node_modules` rather than on what the code resolves,
+and since `@types/node` is in essentially every TS project, the fallback fires
+almost always.
+
+**Steps**
+
+1. Scope the audit to packages actually reached during resolution, not every
+   installed package. Both fixtures should stop falling back on this alone.
+2. If a project genuinely imports a `typesVersions`-declaring package, decide
+   between implementing the mapping (it is a bounded, documented rule:
+   version-range match, then the `*` path-mapping table) or keeping a fallback
+   for that narrower case. Implement only with a differential test proving
+   parity with `ts.resolveModuleName`.
+3. **Report the fallback rate** as a first-class harness metric: percentage of
+   fixtures falling back, and why. A silent regression here quietly turns the
+   engine off, which is exactly the failure this phase exists to prevent.
+
+**Why this is sequenced first**: R4 and R5 both end in benchmarks. With the
+current check, a benchmark would measure the TS path while appearing to measure
+Rust — a number that looks like a result but means nothing. Fix the gate before
+trusting any measurement through it.
+
+**Exit criteria**: `nextjs-i` and `angular-v-multi` resolve through Rust with
+zero divergences instead of falling back; the harness reports a fallback rate;
+no new silent divergence (the R2 devDependency `typesVersions` fixture must
+still be caught, by fallback or by correct resolution).
+
+**Reviewer lens**: does the narrowed audit still catch every case where
+`typesVersions` changes a resolved path? Construct a project that imports a
+`typesVersions`-declaring package and verify it is either resolved correctly or
+declared.
 
 ---
 
@@ -448,17 +500,14 @@ engines.
   map when publishing starts.
 - Freeze result shapes, traversal order, and message text **before** flipping the
   default; the daemon's lint DTO is already lossier than the in-process one.
-- **Narrow the `typesVersions` fallback (blocker for any speedup).** R2 made the
-  audit conservative to close a silent divergence: any installed package
-  declaring `typesVersions` falls the whole project back to TS. `@types/node`
-  declares it, so in practice every real project falls back and the engine never
-  runs. Either implement `typesVersions` resolution, or determine whether it
-  affects the specifiers actually in play. Benchmarks are meaningless until this
-  is fixed — measure the fallback rate on real projects first.
+- **Confirm the fallback rate on real projects** before benchmarking. R2.1
+  narrows the `typesVersions` audit; verify here that real-world projects
+  actually resolve through Rust rather than silently falling back, and that a
+  benchmark is therefore measuring the engine and not the TS path.
 
 **Exit criteria**: benchmarks for cold verify / ESLint / watch on 2.1k and 10.5k
 projects; all `test-projects` goldens byte-identical; documented rollback;
-**fallback rate on real projects measured and acceptable** (see above).
+**fallback rate measured and acceptable** (R2.1 is the fix; this is the check).
 
 ---
 
