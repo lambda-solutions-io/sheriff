@@ -29,6 +29,14 @@ export interface SheriffLspServer {
   dispose(): void;
 }
 
+type ServerState = 'uninitialized' | 'initialized' | 'shutdown';
+
+interface DiagnosticsRun {
+  readonly uri: string;
+  readonly version: number;
+  readonly documentGeneration: number;
+}
+
 /**
  * Registers Sheriff diagnostics and incremental document synchronization on an
  * LSP connection. The caller remains responsible for calling `connection.listen()`.
@@ -42,8 +50,11 @@ export function createSheriffLspServer(
   const changeDebounceMs = options.changeDebounceMs ?? 0;
   const documents = new TextDocuments(TextDocument);
   const openDocuments = new Set<string>();
+  const documentGenerations = new Map<string, number>();
   const pendingDiagnostics = new Map<string, ReturnType<typeof setTimeout>>();
+  const inFlightDiagnostics = new Set<DiagnosticsRun>();
   const disposables: Disposable[] = [];
+  let state: ServerState = 'uninitialized';
 
   function sendDiagnosticsSafely(
     uri: string,
@@ -59,24 +70,60 @@ export function createSheriffLspServer(
     }
   }
 
+  function isCurrentDiagnosticsRun(run: DiagnosticsRun): boolean {
+    return (
+      state === 'initialized' &&
+      inFlightDiagnostics.has(run) &&
+      openDocuments.has(run.uri) &&
+      documentGenerations.get(run.uri) === run.documentGeneration &&
+      documents.get(run.uri)?.version === run.version
+    );
+  }
+
+  function finishDiagnosticsRun(
+    run: DiagnosticsRun,
+    diagnostics: Diagnostic[],
+  ): void {
+    const shouldPublish = isCurrentDiagnosticsRun(run);
+    inFlightDiagnostics.delete(run);
+    if (shouldPublish) {
+      sendDiagnosticsSafely(run.uri, diagnostics, run.version);
+    }
+  }
+
   function publishDiagnostics(document: TextDocument): void {
+    const uri = document.uri;
+    const text = document.getText();
+    const version = document.version;
+    const run: DiagnosticsRun = {
+      uri,
+      version,
+      documentGeneration: documentGenerations.get(uri) ?? 0,
+    };
+    inFlightDiagnostics.add(run);
+
     try {
-      const diagnostics = createDiagnostics(document.uri, document.getText());
+      const diagnostics = createDiagnostics(uri, text);
       if (diagnostics instanceof Promise) {
         void diagnostics.then(
           (resolvedDiagnostics) =>
-            sendDiagnosticsSafely(
-              document.uri,
-              resolvedDiagnostics,
-              document.version,
-            ),
-          () => sendDiagnosticsSafely(document.uri, [], document.version),
+            finishDiagnosticsRun(run, resolvedDiagnostics),
+          () => finishDiagnosticsRun(run, []),
         );
       } else {
-        sendDiagnosticsSafely(document.uri, diagnostics, document.version);
+        finishDiagnosticsRun(run, diagnostics);
       }
     } catch {
-      sendDiagnosticsSafely(document.uri, [], document.version);
+      finishDiagnosticsRun(run, []);
+    }
+  }
+
+  function invalidateDocumentDiagnostics(uri: string): void {
+    documentGenerations.set(uri, (documentGenerations.get(uri) ?? 0) + 1);
+    for (const run of inFlightDiagnostics) {
+      if (run.uri === uri) {
+        inFlightDiagnostics.delete(run);
+      }
     }
   }
 
@@ -106,15 +153,39 @@ export function createSheriffLspServer(
     pendingDiagnostics.set(document.uri, timer);
   }
 
+  function cancelAllDiagnostics(): void {
+    for (const pending of pendingDiagnostics.values()) {
+      clearTimeout(pending);
+    }
+    pendingDiagnostics.clear();
+    inFlightDiagnostics.clear();
+    openDocuments.clear();
+    documentGenerations.clear();
+  }
+
   disposables.push(
-    connection.onInitialize(() => ({
-      capabilities: {},
-      serverInfo: {
-        name: 'sheriff-lsp',
-        version: '1.0.0',
-      },
-    })),
+    connection.onInitialize(() => {
+      if (state === 'uninitialized') {
+        state = 'initialized';
+      }
+      return {
+        capabilities: {},
+        serverInfo: {
+          name: 'sheriff-lsp',
+          version: '1.0.0',
+        },
+      };
+    }),
+    connection.onShutdown(() => {
+      state = 'shutdown';
+      cancelAllDiagnostics();
+    }),
     documents.onDidChangeContent(({ document }) => {
+      if (state !== 'initialized') {
+        return;
+      }
+
+      invalidateDocumentDiagnostics(document.uri);
       if (openDocuments.has(document.uri)) {
         scheduleDiagnostics(document);
       } else {
@@ -123,8 +194,13 @@ export function createSheriffLspServer(
       }
     }),
     documents.onDidClose(({ document }) => {
+      if (state !== 'initialized') {
+        return;
+      }
+
       cancelPendingDiagnostics(document.uri);
       openDocuments.delete(document.uri);
+      invalidateDocumentDiagnostics(document.uri);
       sendDiagnosticsSafely(document.uri, []);
     }),
     documents.listen(connection),
@@ -133,9 +209,8 @@ export function createSheriffLspServer(
   return {
     documents,
     dispose: () => {
-      for (const uri of pendingDiagnostics.keys()) {
-        cancelPendingDiagnostics(uri);
-      }
+      state = 'shutdown';
+      cancelAllDiagnostics();
       for (const disposable of disposables) {
         disposable.dispose();
       }
