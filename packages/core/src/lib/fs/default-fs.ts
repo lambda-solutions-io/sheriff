@@ -2,7 +2,11 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Fs } from './fs';
-import { FsPath, toFsPath } from '../file-info/fs-path';
+import {
+  FsPath,
+  toFsPath,
+  toFsPathFromDirent,
+} from '../file-info/fs-path';
 
 export class DefaultFs extends Fs {
   override appendFile(filename: string, contents: string): void {
@@ -54,9 +58,14 @@ export class DefaultFs extends Fs {
     referencePath = referencePath || directory;
 
     for (const file of files) {
-      const filePath = toFsPath(path.join(directory, file.name));
+      const joinedPath = path.join(directory, file.name);
+      // Dirent does not follow symlinks. Keep validating them so an uncached
+      // broken symlink still throws, as it did when every entry used toFsPath.
+      const filePath = file.isSymbolicLink()
+        ? toFsPath(joinedPath)
+        : toFsPathFromDirent(joinedPath);
       if (file.isFile() && file.name.toLowerCase() === filename.toLowerCase()) {
-        found.push(toFsPath(filePath));
+        found.push(filePath);
       }
       if (file.isDirectory()) {
         this.findFiles(filePath, filename, found, referencePath);
