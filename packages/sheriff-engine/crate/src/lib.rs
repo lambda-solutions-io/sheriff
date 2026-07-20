@@ -22,6 +22,14 @@ struct ErrorOutput {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ResolveErrorOutput {
+    schema_version: u32,
+    error: StructuredError,
+    fallback: bool,
+}
+
+#[derive(Serialize)]
 struct StructuredError {
     code: &'static str,
     message: String,
@@ -51,7 +59,7 @@ pub fn analyze_project(input_json: String) -> String {
 #[napi(js_name = "resolveProjectImports")]
 pub fn resolve_project_imports(input_json: String) -> String {
     if input_json.len() > input::MAX_INPUT_JSON_BYTES {
-        return error_json(
+        return resolve_error_json(
             "SHERIFF_ENGINE_LIMIT_EXCEEDED",
             format!(
                 "input JSON exceeds the {} byte limit",
@@ -63,15 +71,15 @@ pub fn resolve_project_imports(input_json: String) -> String {
     match result {
         Ok(Ok(output)) => output,
         Ok(Err(resolve::ResolveProjectError::Resolution(message))) => {
-            error_json("SHERIFF_ENGINE_RESOLUTION_ERROR", message)
+            resolve_error_json("SHERIFF_ENGINE_RESOLUTION_ERROR", message)
         }
         Ok(Err(resolve::ResolveProjectError::LimitExceeded(message))) => {
-            error_json("SHERIFF_ENGINE_LIMIT_EXCEEDED", message)
+            resolve_error_json("SHERIFF_ENGINE_LIMIT_EXCEEDED", message)
         }
         Ok(Err(resolve::ResolveProjectError::CyclicTsConfigExtends(message))) => {
-            error_json("SH-019", message)
+            resolve_error_json("SH-019", message)
         }
-        Err(payload) => error_json("SHERIFF_ENGINE_PANIC", panic_message(payload)),
+        Err(payload) => resolve_error_json("SHERIFF_ENGINE_PANIC", panic_message(payload)),
     }
 }
 
@@ -128,6 +136,17 @@ fn error_json(code: &'static str, message: String) -> String {
     })
     .unwrap_or_else(|_| {
         "{\"schemaVersion\":1,\"error\":{\"code\":\"SHERIFF_ENGINE_ERROR\",\"message\":\"failed to serialize engine error\"}}".to_owned()
+    })
+}
+
+fn resolve_error_json(code: &'static str, message: String) -> String {
+    serde_json::to_string(&ResolveErrorOutput {
+        schema_version: 1,
+        error: StructuredError { code, message },
+        fallback: true,
+    })
+    .unwrap_or_else(|_| {
+        "{\"schemaVersion\":1,\"error\":{\"code\":\"SHERIFF_ENGINE_ERROR\",\"message\":\"failed to serialize engine error\"},\"fallback\":true}".to_owned()
     })
 }
 
@@ -220,7 +239,7 @@ mod tests {
             let value: serde_json::Value = serde_json::from_str(&output).unwrap();
             assert_eq!(value["error"]["code"], "SHERIFF_ENGINE_LIMIT_EXCEEDED");
             assert!(value.get("files").is_none(), "shadowMode={shadow_mode}");
-            assert!(value.get("fallback").is_none(), "shadowMode={shadow_mode}");
+            assert_eq!(value["fallback"], true, "shadowMode={shadow_mode}");
         }
 
         fs::remove_dir_all(directory).unwrap();

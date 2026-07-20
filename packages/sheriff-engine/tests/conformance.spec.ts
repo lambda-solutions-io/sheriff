@@ -11,14 +11,11 @@ import {
   createOracleFixture,
   oracleFixtures,
 } from '../../core/src/tools/tests/oracle-fixtures';
-import type {
-  EngineErrorOutput,
-  EngineInput,
-  EngineOutput,
-} from '../index.js';
+import type { EngineErrorOutput, EngineInput, EngineOutput } from '../index.js';
 
 const require = createRequire(import.meta.url);
-const { analyzeProject } = require('../index.js') as typeof import('../index.js');
+const { analyzeProject, EngineImpureCallbackError } =
+  require('../index.js') as typeof import('../index.js');
 const { nativeBinaryName } = require('../platform.js') as {
   nativeBinaryName: () => string;
 };
@@ -42,15 +39,6 @@ describe
     `sheriff Rust engine conformance${nativeEnabled ? '' : ` — ${nativeSkipReason}`}`,
     () => {
       for (const fixture of oracleFixtures) {
-        const functionPaths = findFunctionPaths(fixture.config);
-        if (functionPaths.length > 0) {
-          it.skip(
-            `${fixture.name} — requires R3 function-rule materialisation (${functionPaths.join(', ')})`,
-            () => {},
-          );
-          continue;
-        }
-
         it(fixture.name, () => {
           createOracleFixture(fixture);
           const oracle = generateOracle(fixture.entry);
@@ -73,6 +61,171 @@ describe
       }
     },
   );
+
+describe.skipIf(!nativeEnabled)('function materialisation protocol', () => {
+  it('AND-combines matching external rule keys and passes the narrow context', () => {
+    const output = analyze({
+      ...baseInput(),
+      files: [
+        {
+          path: 'src/source/entry.ts',
+          imports: [{ raw: 'library', kind: 'external' }],
+        },
+      ],
+      modulePaths: [{ path: 'src/source', isBarrel: false }],
+      moduleConfig: { 'src/source': 'source' },
+      depRules: { source: '*' },
+      externalRules: {
+        's*': (context) =>
+          !('to' in context) &&
+          context.fromModulePath === 'src/source' &&
+          context.fromFilePath === 'src/source/entry.ts',
+        source: () => false,
+      },
+    });
+
+    expect(output).not.toHaveProperty('error');
+    if ('error' in output) return;
+    expect(output.violations.external).toEqual([
+      {
+        file: 'src/source/entry.ts',
+        externalLibrary: 'library',
+        fromTag: 'source',
+      },
+    ]);
+  });
+
+  it('materialises per-file decisions for different files in one module', () => {
+    const output = analyze({
+      ...baseInput(),
+      files: [
+        {
+          path: 'src/source/allowed.ts',
+          imports: [
+            {
+              raw: '../target/entry.ts',
+              kind: 'module',
+              resolvedPath: 'src/target/entry.ts',
+            },
+          ],
+        },
+        {
+          path: 'src/source/blocked.ts',
+          imports: [
+            {
+              raw: '../target/entry.ts',
+              kind: 'module',
+              resolvedPath: 'src/target/entry.ts',
+            },
+          ],
+        },
+        { path: 'src/target/entry.ts', imports: [] },
+      ],
+      modulePaths: [
+        { path: 'src/source', isBarrel: false },
+        { path: 'src/target', isBarrel: false },
+      ],
+      moduleConfig: { 'src/source': 'source', 'src/target': 'target' },
+      depRules: {
+        source: ({ fromFilePath }) => fromFilePath.endsWith('/allowed.ts'),
+        target: [],
+      },
+    });
+
+    expect(output).not.toHaveProperty('error');
+    if ('error' in output) return;
+    expect(output.violations.dependency).toHaveLength(1);
+    expect(output.violations.dependency[0]?.file).toBe('src/source/blocked.ts');
+  });
+
+  it('passes accumulated placeholders and the final regex matcher context to tag functions', () => {
+    const output = analyze({
+      ...baseInput(),
+      files: [{ path: 'src/customers/feature/entry.ts', imports: [] }],
+      modulePaths: [{ path: 'src/customers/feature', isBarrel: false }],
+      moduleConfig: {
+        'src/<domain>': {
+          '/(feature)/': (placeholders, { segment, regexMatch }) => [
+            `domain:${placeholders.domain}`,
+            `segment:${segment}`,
+            `capture:${regexMatch?.[1]}`,
+          ],
+        },
+      },
+      depRules: { '*': '*' },
+    });
+
+    expect(output).not.toHaveProperty('error');
+    if ('error' in output) return;
+    expect(output.modules).toContainEqual({
+      path: 'src/customers/feature',
+      tags: ['capture:feature', 'domain:customers', 'segment:feature'],
+      isBarrel: false,
+    });
+  });
+
+  it('rejects an obviously stateful callback before it can be batched', () => {
+    let calls = 0;
+    const input: EngineInput = {
+      ...baseInput(),
+      depRules: { root: () => calls++ % 2 === 0 },
+    };
+
+    expect(() => analyzeProject(input)).toThrow(EngineImpureCallbackError);
+    expect(calls).toBe(0);
+  });
+
+  it('still reports SH-002 when no from key matches', () => {
+    const output = analyze({
+      ...baseInput(),
+      files: [
+        {
+          path: 'src/source/entry.ts',
+          imports: [
+            {
+              raw: '../target/entry.ts',
+              kind: 'module',
+              resolvedPath: 'src/target/entry.ts',
+            },
+          ],
+        },
+        { path: 'src/target/entry.ts', imports: [] },
+      ],
+      modulePaths: [
+        { path: 'src/source', isBarrel: false },
+        { path: 'src/target', isBarrel: false },
+      ],
+      moduleConfig: { 'src/source': 'source', 'src/target': 'target' },
+      depRules: { other: () => true },
+    });
+
+    expect(output).toHaveProperty('error.message');
+    if (!('error' in output)) return;
+    expect(output.error.message).toContain('SH-002');
+  });
+});
+
+function baseInput(): EngineInput {
+  return {
+    schemaVersion: 1,
+    rootDir: '.',
+    files: [],
+    modulePaths: [],
+    moduleConfig: {},
+    autoTagging: true,
+    depRules: {},
+    denyRules: {},
+    externalRules: {},
+    encapsulationPattern: 'internal',
+    enableBarrelLess: true,
+    excludeRoot: false,
+    barrelFileName: 'index.ts',
+  };
+}
+
+function analyze(input: EngineInput): EngineOutput | EngineErrorOutput {
+  return JSON.parse(analyzeProject(input)) as EngineOutput | EngineErrorOutput;
+}
 
 function createEngineInput(
   oracle: EngineOracle,
@@ -100,35 +253,9 @@ function createEngineInput(
   };
 }
 
-function findFunctionPaths(
-  value: unknown,
-  currentPath = 'config',
-  seen = new Set<object>(),
-): string[] {
-  if (typeof value === 'function') return [currentPath];
-  if (value === null || typeof value !== 'object' || seen.has(value)) return [];
-
-  seen.add(value);
-  if (Array.isArray(value)) {
-    return value.flatMap((entry, index) =>
-      findFunctionPaths(entry, `${currentPath}[${index}]`, seen),
-    );
-  }
-
-  return Object.entries(value).flatMap(([key, entry]) =>
-    findFunctionPaths(entry, `${currentPath}.${key}`, seen),
-  );
-}
-
 function reportScenarioPlan(): void {
   for (const fixture of oracleFixtures) {
-    const functionPaths = findFunctionPaths(fixture.config);
-    const status =
-      functionPaths.length > 0
-        ? `SKIPPED — requires R3 function-rule materialisation (${functionPaths.join(', ')})`
-        : nativeEnabled
-          ? 'RUN'
-          : `SKIPPED — ${nativeSkipReason}`;
+    const status = nativeEnabled ? 'RUN' : `SKIPPED — ${nativeSkipReason}`;
     console.info(`[sheriff-engine conformance] ${status}: ${fixture.name}`);
   }
 }

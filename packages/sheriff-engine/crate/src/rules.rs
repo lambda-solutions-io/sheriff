@@ -1,4 +1,4 @@
-use crate::input::{OrderedMap, RuleValue};
+use crate::input::{OrderedMap, RuleMatcher, RuleValue};
 
 pub fn wildcard_matches(pattern: &str, value: &str) -> bool {
     let pattern: Vec<char> = pattern.chars().collect();
@@ -33,20 +33,26 @@ pub fn is_dependency_allowed(
     from_tag: &str,
     to_tags: &[String],
     rules: &OrderedMap<RuleValue>,
+    mut callback_decision: impl FnMut(usize, usize, usize, u32) -> bool,
 ) -> Result<bool, String> {
     let mut matched_from_rule = false;
-    for (from_pattern, value) in &rules.0 {
+    for (rule_index, (from_pattern, value)) in rules.0.iter().enumerate() {
         if !wildcard_matches(from_pattern, from_tag) {
             continue;
         }
         matched_from_rule = true;
-        for to_tag in to_tags {
-            if value
-                .matchers()
-                .iter()
-                .any(|matcher| wildcard_matches(matcher, to_tag))
-            {
-                return Ok(true);
+        for (to_tag_index, to_tag) in to_tags.iter().enumerate() {
+            for (matcher_index, matcher) in value.matchers().iter().enumerate() {
+                let matches = match matcher {
+                    RuleMatcher::Null => false,
+                    RuleMatcher::Static(matcher) => wildcard_matches(matcher, to_tag),
+                    RuleMatcher::Callback(matcher_id) => {
+                        callback_decision(rule_index, to_tag_index, matcher_index, *matcher_id)
+                    }
+                };
+                if matches {
+                    return Ok(true);
+                }
             }
         }
     }
@@ -64,29 +70,52 @@ pub fn is_dependency_denied(
     from_tag: &str,
     to_tags: &[String],
     rules: &OrderedMap<RuleValue>,
+    mut callback_decision: impl FnMut(usize, usize, usize, u32) -> bool,
 ) -> bool {
-    rules.0.iter().any(|(from_pattern, value)| {
-        wildcard_matches(from_pattern, from_tag)
-            && to_tags.iter().any(|to_tag| {
-                value
-                    .matchers()
-                    .iter()
-                    .any(|matcher| wildcard_matches(matcher, to_tag))
-            })
-    })
+    for (rule_index, (from_pattern, value)) in rules.0.iter().enumerate() {
+        if !wildcard_matches(from_pattern, from_tag) {
+            continue;
+        }
+        for (to_tag_index, to_tag) in to_tags.iter().enumerate() {
+            for (matcher_index, matcher) in value.matchers().iter().enumerate() {
+                let matches = match matcher {
+                    RuleMatcher::Null => false,
+                    RuleMatcher::Static(matcher) => wildcard_matches(matcher, to_tag),
+                    RuleMatcher::Callback(matcher_id) => {
+                        callback_decision(rule_index, to_tag_index, matcher_index, *matcher_id)
+                    }
+                };
+                if matches {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 pub fn is_external_allowed(
     from_tag: &str,
     external_library: &str,
-    rules: &OrderedMap<Vec<String>>,
+    rules: &OrderedMap<RuleValue>,
+    mut callback_decision: impl FnMut(usize, usize, u32) -> bool,
 ) -> bool {
-    for (from_pattern, library_patterns) in &rules.0 {
-        if wildcard_matches(from_pattern, from_tag)
-            && !library_patterns
-                .iter()
-                .any(|pattern| wildcard_matches(pattern, external_library))
-        {
+    for (rule_index, (from_pattern, rule)) in rules.0.iter().enumerate() {
+        if !wildcard_matches(from_pattern, from_tag) {
+            continue;
+        }
+        let is_allowed = rule
+            .matchers()
+            .iter()
+            .enumerate()
+            .any(|(matcher_index, matcher)| match matcher {
+                RuleMatcher::Null => false,
+                RuleMatcher::Static(pattern) => wildcard_matches(pattern, external_library),
+                RuleMatcher::Callback(matcher_id) => {
+                    callback_decision(rule_index, matcher_index, *matcher_id)
+                }
+            });
+        if !is_allowed {
             return false;
         }
     }
@@ -114,7 +143,8 @@ mod tests {
             is_dependency_allowed(
                 "type:feature",
                 &["shared:ui".to_owned()],
-                &rules(r#"{"type:feature":["type:data","shared:*"]}"#)
+                &rules(r#"{"type:feature":["type:data","shared:*"]}"#),
+                |_, _, _, _| unreachable!()
             )
             .unwrap()
         );
@@ -126,7 +156,8 @@ mod tests {
             !is_dependency_allowed(
                 "type:feature",
                 &["domain:abc".to_owned()],
-                &rules(r#"{"type:feature":["type:data","type:ui"]}"#)
+                &rules(r#"{"type:feature":["type:data","type:ui"]}"#),
+                |_, _, _, _| unreachable!()
             )
             .unwrap()
         );
@@ -140,7 +171,8 @@ mod tests {
                 &["domain:customers:api".to_owned()],
                 &rules(
                     r#"{"domain:*":["domain:shared"],"domain:bookings":"domain:customers:api"}"#
-                )
+                ),
+                |_, _, _, _| unreachable!()
             )
             .unwrap()
         );
@@ -152,7 +184,8 @@ mod tests {
             is_dependency_allowed(
                 "type:function",
                 &["type:ui".to_owned()],
-                &rules(r#"{"type:feature":"type:ui"}"#)
+                &rules(r#"{"type:feature":"type:ui"}"#),
+                |_, _, _, _| unreachable!()
             )
             .unwrap_err()
             .starts_with("SH-002")
@@ -164,12 +197,25 @@ mod tests {
         assert!(is_dependency_denied(
             "type:feature",
             &["type:data".to_owned()],
-            &rules(r#"{"domain:*":"type:data","type:*":"type:data"}"#)
+            &rules(r#"{"domain:*":"type:data","type:*":"type:data"}"#),
+            |_, _, _, _| unreachable!()
         ));
         assert!(!is_dependency_denied(
             "type:feature",
             &["type:ui".to_owned()],
-            &rules(r#"{"type:*":"type:data"}"#)
+            &rules(r#"{"type:*":"type:data"}"#),
+            |_, _, _, _| unreachable!()
+        ));
+    }
+
+    #[test]
+    fn external_matching_keys_are_and_combined() {
+        let rules = rules(r#"{"type:*":["allowed"],"type:feature":[]}"#);
+        assert!(!is_external_allowed(
+            "type:feature",
+            "allowed",
+            &rules,
+            |_, _, _| unreachable!()
         ));
     }
 }

@@ -5,20 +5,47 @@ use crate::js_replacement;
 
 type Placeholders = Vec<(String, String)>;
 
+#[derive(Debug)]
+pub struct TagCallback {
+    pub matcher_id: u32,
+    pub placeholders: Placeholders,
+    pub segment: String,
+    pub regex_source: Option<String>,
+}
+
+pub enum CalculatedTags {
+    Tags(Vec<String>),
+    Callback(TagCallback),
+}
+
+#[cfg(test)]
 pub fn calculate_tags(
     module_path: &str,
     config: &OrderedMap<ConfigValue>,
     auto_tagging: bool,
 ) -> Result<Vec<String>, String> {
+    match calculate_tags_with_callbacks(module_path, config, auto_tagging)? {
+        CalculatedTags::Tags(tags) => Ok(tags),
+        CalculatedTags::Callback(_) => Err(format!(
+            "module '{module_path}' requires a materialized tag callback"
+        )),
+    }
+}
+
+pub fn calculate_tags_with_callbacks(
+    module_path: &str,
+    config: &OrderedMap<ConfigValue>,
+    auto_tagging: bool,
+) -> Result<CalculatedTags, String> {
     if module_path == "." {
-        return Ok(vec!["root".to_owned()]);
+        return Ok(CalculatedTags::Tags(vec!["root".to_owned()]));
     }
 
     let paths: Vec<&str> = module_path.split('/').collect();
     let mut placeholders = Vec::new();
     match traverse(&paths, config, &mut placeholders, module_path, &[], true, 1)? {
         Some(tags) => Ok(tags),
-        None if auto_tagging => Ok(vec!["noTag".to_owned()]),
+        None if auto_tagging => Ok(CalculatedTags::Tags(vec!["noTag".to_owned()])),
         None => Err(format!(
             "SH-003: No assigned Tag for '{module_path}' in sheriff.config.ts"
         )),
@@ -33,7 +60,7 @@ fn traverse(
     config_path: &[String],
     is_root: bool,
     depth: usize,
-) -> Result<Option<Vec<String>>, String> {
+) -> Result<Option<CalculatedTags>, String> {
     if depth > MAX_CONFIG_NESTING {
         return Err(format!(
             "moduleConfig nesting exceeds the {MAX_CONFIG_NESTING} level limit"
@@ -44,13 +71,13 @@ fn traverse(
             placeholders.clear();
         }
         let original_placeholders = placeholders.clone();
-        let Some(span) = match_segment(matcher, paths, placeholders)? else {
+        let Some(segment_match) = match_segment(matcher, paths, placeholders)? else {
             continue;
         };
-        let rest = &paths[span..];
+        let rest = &paths[segment_match.span..];
 
         if rest.is_empty() {
-            let tags = leaf_tags(value).ok_or_else(|| {
+            let tag_value = leaf_tag_value(value).ok_or_else(|| {
                 let mut full_path = config_path.to_vec();
                 full_path.push(matcher.clone());
                 format!(
@@ -58,7 +85,27 @@ fn traverse(
                     full_path.join("/")
                 )
             })?;
-            return Ok(Some(replace_tags(tags, placeholders, module_path)?));
+            return match tag_value {
+                ConfigValue::Callback(matcher_id) => {
+                    Ok(Some(CalculatedTags::Callback(TagCallback {
+                        matcher_id: *matcher_id,
+                        placeholders: placeholders.clone(),
+                        segment: segment_match.segment,
+                        regex_source: segment_match.regex_source,
+                    })))
+                }
+                ConfigValue::String(tag) => Ok(Some(CalculatedTags::Tags(replace_tags(
+                    std::slice::from_ref(tag),
+                    placeholders,
+                    module_path,
+                )?))),
+                ConfigValue::Strings(tags) => Ok(Some(CalculatedTags::Tags(replace_tags(
+                    tags,
+                    placeholders,
+                    module_path,
+                )?))),
+                ConfigValue::Object(_) => unreachable!("module definition tags are a leaf"),
+            };
         }
 
         if is_leaf(value) {
@@ -87,7 +134,7 @@ fn traverse(
 
 fn is_leaf(value: &ConfigValue) -> bool {
     match value {
-        ConfigValue::String(_) | ConfigValue::Strings(_) => true,
+        ConfigValue::String(_) | ConfigValue::Strings(_) | ConfigValue::Callback(_) => true,
         ConfigValue::Object(entries) => is_module_definition(entries),
     }
 }
@@ -100,20 +147,19 @@ fn is_module_definition(entries: &OrderedMap<ConfigValue>) -> bool {
             .all(|(key, _)| key == "tags" || key == "exports")
 }
 
-fn leaf_tags(value: &ConfigValue) -> Option<&[String]> {
+fn leaf_tag_value(value: &ConfigValue) -> Option<&ConfigValue> {
     match value {
-        ConfigValue::String(value) => Some(std::slice::from_ref(value)),
-        ConfigValue::Strings(values) => Some(values),
+        ConfigValue::String(_) | ConfigValue::Strings(_) | ConfigValue::Callback(_) => Some(value),
         ConfigValue::Object(entries) if is_module_definition(entries) => entries
             .0
             .iter()
             .find(|(key, _)| key == "tags")
-            .and_then(|(_, value)| leaf_tags(value)),
+            .and_then(|(_, value)| leaf_tag_value(value)),
         ConfigValue::Object(_) => None,
     }
 }
 
-fn replace_tags(
+pub fn replace_tags(
     tags: &[String],
     placeholders: &Placeholders,
     module_path: &str,
@@ -142,11 +188,17 @@ fn match_segment(
     matcher: &str,
     paths: &[&str],
     placeholders: &mut Placeholders,
-) -> Result<Option<usize>, String> {
+) -> Result<Option<SegmentMatch>, String> {
+    let segment = paths[0].to_owned();
     if matcher.starts_with('/') && matcher.ends_with('/') && matcher.len() >= 2 {
         let pattern = &matcher[1..matcher.len() - 1];
-        return js_regex::is_full_first_match(pattern, paths[0])
-            .map(|matches| matches.then_some(1));
+        return js_regex::is_full_first_match(pattern, paths[0]).map(|matches| {
+            matches.then_some(SegmentMatch {
+                span: 1,
+                segment,
+                regex_source: Some(pattern.to_owned()),
+            })
+        });
     }
 
     let span = matcher.split('/').count();
@@ -163,7 +215,11 @@ fn match_segment(
         ));
     }
     if placeholder_names.is_empty() {
-        return Ok((matcher == fragment).then_some(span));
+        return Ok((matcher == fragment).then_some(SegmentMatch {
+            span,
+            segment,
+            regex_source: None,
+        }));
     }
 
     let Some(captures) = match_placeholders(matcher, &fragment, placeholder_names.len()) else {
@@ -177,7 +233,17 @@ fn match_segment(
         }
         placeholders.push((name, capture));
     }
-    Ok(Some(span))
+    Ok(Some(SegmentMatch {
+        span,
+        segment,
+        regex_source: None,
+    }))
+}
+
+struct SegmentMatch {
+    span: usize,
+    segment: String,
+    regex_source: Option<String>,
 }
 
 fn find_placeholder(value: &str) -> Vec<String> {

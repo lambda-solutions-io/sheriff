@@ -11,7 +11,17 @@ export interface EngineFile {
   imports: EngineImport[];
 }
 
-export type EngineTagValue = string | string[];
+export interface EngineTagMatcherContext {
+  segment: string;
+  regexMatch?: RegExpMatchArray | null;
+}
+
+export type EngineTagMatcher = (
+  placeholders: Record<string, string>,
+  context: EngineTagMatcherContext,
+) => string | string[];
+
+export type EngineTagValue = string | string[] | EngineTagMatcher;
 
 export interface EngineRegExp {
   source: string;
@@ -44,14 +54,48 @@ export interface EngineInput {
   moduleConfig: EngineModuleConfig;
   modulePaths: EngineModulePath[];
   autoTagging: boolean;
-  depRules: Record<string, string | string[] | null>;
-  denyRules: Record<string, string | string[] | null>;
-  externalRules: Record<string, string[]>;
+  depRules: Record<
+    string,
+    EngineDependencyRuleMatcher | EngineDependencyRuleMatcher[]
+  >;
+  denyRules: Record<
+    string,
+    EngineDependencyRuleMatcher | EngineDependencyRuleMatcher[]
+  >;
+  externalRules: Record<string, string[] | EngineExternalRuleMatcher>;
   encapsulationPattern?: string | RegExp | EngineRegExp | null;
   enableBarrelLess: boolean;
   excludeRoot?: boolean;
   barrelFileName?: string;
 }
+
+export interface EngineDependencyCheckContext {
+  from: string;
+  to: string;
+  fromModulePath: string;
+  toModulePath: string;
+  fromFilePath: string;
+  toFilePath: string;
+  fromTags: string[];
+  toTags: string[];
+}
+
+export type EngineDependencyRuleMatcher =
+  | string
+  | null
+  | ((context: EngineDependencyCheckContext) => boolean);
+
+export interface EngineExternalCheckContext {
+  from: string;
+  fromTags: string[];
+  fromModulePath: string;
+  fromFilePath: string;
+  externalLibrary: string;
+}
+
+export type EngineExternalRuleMatcher = (
+  context: EngineExternalCheckContext,
+) => boolean;
 
 export interface EngineModule {
   path: string;
@@ -104,6 +148,12 @@ export declare class EngineUnsupportedConfigError extends Error {
   readonly code: 'SHERIFF_ENGINE_UNSUPPORTED_CONFIG';
 }
 
+/** The callback must be evaluated by Sheriff's TypeScript compatibility engine. */
+export declare class EngineImpureCallbackError extends Error {
+  readonly code: 'SHERIFF_ENGINE_IMPURE_CALLBACK';
+  readonly fallback: true;
+}
+
 export declare function analyzeProject(inputJson: string): string;
 export declare function analyzeProject(input: EngineInput): string;
 
@@ -130,6 +180,11 @@ export interface ResolveProjectOutput {
   fallback: boolean;
   fallbackReasons: string[];
   sourceConfigPaths: string[];
+}
+
+export interface ResolveProjectErrorOutput extends EngineErrorOutput {
+  /** Resolution errors always require the TypeScript fallback. */
+  fallback: true;
 }
 
 /** Shadow-only R2 API. TypeScript remains the production resolver. */

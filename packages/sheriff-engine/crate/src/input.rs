@@ -1,12 +1,13 @@
 use std::fmt;
 use std::marker::PhantomData;
 
-use serde::de::{MapAccess, SeqAccess, Visitor};
+use serde::de::{Error as _, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
 pub const MAX_INPUT_JSON_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_FILES: usize = 100_000;
 pub const MAX_IMPORTS: usize = 1_000_000;
+pub const MAX_CALLBACK_CANDIDATES: usize = 1_000_000;
 pub const MAX_MODULES: usize = 100_000;
 pub const MAX_RULES: usize = 100_000;
 pub const MAX_TAGS: usize = 100_000;
@@ -65,6 +66,7 @@ where
 pub enum ConfigValue {
     String(String),
     Strings(Vec<String>),
+    Callback(u32),
     Object(OrderedMap<ConfigValue>),
 }
 
@@ -105,9 +107,25 @@ impl<'de> Deserialize<'de> for ConfigValue {
             where
                 A: MapAccess<'de>,
             {
-                let mut entries = Vec::with_capacity(map.size_hint().unwrap_or(0));
+                let mut raw_entries = Vec::with_capacity(map.size_hint().unwrap_or(0));
                 while let Some(entry) = map.next_entry()? {
-                    entries.push(entry);
+                    raw_entries.push(entry);
+                }
+                if let [(key, serde_json::Value::Number(id))] = raw_entries.as_slice()
+                    && key == "__sheriffEngineCallbackId"
+                {
+                    let id = id
+                        .as_u64()
+                        .and_then(|id| u32::try_from(id).ok())
+                        .ok_or_else(|| A::Error::custom("callback id must be a u32"))?;
+                    return Ok(ConfigValue::Callback(id));
+                }
+                let mut entries = Vec::with_capacity(raw_entries.len());
+                for (key, value) in raw_entries {
+                    entries.push((
+                        key,
+                        serde_json::from_value(value).map_err(A::Error::custom)?,
+                    ));
                 }
                 Ok(ConfigValue::Object(OrderedMap(entries)))
             }
@@ -119,17 +137,42 @@ impl<'de> Deserialize<'de> for ConfigValue {
 
 #[derive(Debug, Clone)]
 pub enum RuleValue {
-    Null,
-    String(String),
-    Strings(Vec<String>),
+    Matchers(Vec<RuleMatcher>),
 }
 
 impl RuleValue {
-    pub fn matchers(&self) -> &[String] {
+    pub fn matchers(&self) -> &[RuleMatcher] {
         match self {
-            Self::Null => &[],
-            Self::String(value) => std::slice::from_ref(value),
-            Self::Strings(values) => values,
+            Self::Matchers(values) => values,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum RuleMatcher {
+    Null,
+    Static(String),
+    Callback(u32),
+}
+
+impl<'de> Deserialize<'de> for RuleMatcher {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match value {
+            serde_json::Value::Null => Ok(Self::Null),
+            serde_json::Value::String(value) => Ok(Self::Static(value)),
+            serde_json::Value::Object(entries) if entries.len() == 1 => entries
+                .get("__sheriffEngineCallbackId")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|id| u32::try_from(id).ok())
+                .map(Self::Callback)
+                .ok_or_else(|| D::Error::custom("invalid callback marker")),
+            _ => Err(D::Error::custom(
+                "expected null, a wildcard string, or a callback marker",
+            )),
         }
     }
 }
@@ -149,19 +192,21 @@ impl<'de> Deserialize<'de> for RuleValue {
             }
 
             fn visit_none<E>(self) -> Result<Self::Value, E> {
-                Ok(RuleValue::Null)
+                Ok(RuleValue::Matchers(Vec::new()))
             }
 
             fn visit_unit<E>(self) -> Result<Self::Value, E> {
-                Ok(RuleValue::Null)
+                Ok(RuleValue::Matchers(Vec::new()))
             }
 
             fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
-                Ok(RuleValue::String(value.to_owned()))
+                Ok(RuleValue::Matchers(vec![RuleMatcher::Static(
+                    value.to_owned(),
+                )]))
             }
 
             fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
-                Ok(RuleValue::String(value))
+                Ok(RuleValue::Matchers(vec![RuleMatcher::Static(value)]))
             }
 
             fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
@@ -169,10 +214,29 @@ impl<'de> Deserialize<'de> for RuleValue {
                 A: SeqAccess<'de>,
             {
                 let mut values = Vec::with_capacity(sequence.size_hint().unwrap_or(0));
-                while let Some(value) = sequence.next_element::<String>()? {
+                while let Some(value) = sequence.next_element::<RuleMatcher>()? {
                     values.push(value);
                 }
-                Ok(RuleValue::Strings(values))
+                Ok(RuleValue::Matchers(values))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let Some((key, value)) = map.next_entry::<String, serde_json::Value>()? else {
+                    return Err(A::Error::custom("callback marker must not be empty"));
+                };
+                if map.next_entry::<String, serde_json::Value>()?.is_some()
+                    || key != "__sheriffEngineCallbackId"
+                {
+                    return Err(A::Error::custom("invalid callback marker"));
+                }
+                let id = value
+                    .as_u64()
+                    .and_then(|id| u32::try_from(id).ok())
+                    .ok_or_else(|| A::Error::custom("callback id must be a u32"))?;
+                Ok(RuleValue::Matchers(vec![RuleMatcher::Callback(id)]))
             }
         }
 
@@ -196,7 +260,11 @@ pub struct EngineInput {
     #[serde(default)]
     pub deny_rules: OrderedMap<RuleValue>,
     #[serde(default)]
-    pub external_rules: OrderedMap<Vec<String>>,
+    pub external_rules: OrderedMap<RuleValue>,
+    #[serde(default)]
+    pub tag_callback_results: Option<Vec<Vec<String>>>,
+    #[serde(default)]
+    pub rule_callback_results: Option<Vec<bool>>,
     #[serde(default)]
     pub encapsulation_pattern: Option<EncapsulationPattern>,
     #[serde(default)]
@@ -261,6 +329,26 @@ impl EngineInput {
         validate_rules("depRules", &self.dep_rules)?;
         validate_rules("denyRules", &self.deny_rules)?;
         validate_external_rules(&self.external_rules)?;
+        if let Some(results) = &self.tag_callback_results {
+            check_count("tag callback results", results.len(), MAX_MODULES)?;
+            let mut tag_count = 0usize;
+            for tags in results {
+                tag_count = tag_count
+                    .checked_add(tags.len())
+                    .ok_or_else(|| "tag callback result count overflowed".to_owned())?;
+                for tag in tags {
+                    check_string("tag callback result", tag)?;
+                }
+            }
+            check_count("tag callback result tags", tag_count, MAX_TAGS)?;
+        }
+        if let Some(results) = &self.rule_callback_results {
+            check_count(
+                "rule callback results",
+                results.len(),
+                MAX_CALLBACK_CANDIDATES,
+            )?;
+        }
 
         if let Some(pattern) = &self.encapsulation_pattern {
             match pattern {
@@ -314,6 +402,11 @@ fn validate_tag_config(config: &OrderedMap<ConfigValue>) -> Result<(), String> {
                         .checked_add(tags.len())
                         .ok_or_else(|| "moduleConfig tag count overflowed".to_owned())?;
                 }
+                ConfigValue::Callback(_) => {
+                    tag_count = tag_count
+                        .checked_add(1)
+                        .ok_or_else(|| "moduleConfig tag count overflowed".to_owned())?;
+                }
                 ConfigValue::Object(nested) => stack.push((nested, depth + 1)),
             }
             check_count("moduleConfig tags", tag_count, MAX_TAGS)?;
@@ -326,7 +419,9 @@ fn validate_rules(name: &str, rules: &OrderedMap<RuleValue>) -> Result<(), Strin
     let matcher_count = rules.0.iter().try_fold(0usize, |count, (from, value)| {
         check_string(&format!("{name} key"), from)?;
         for matcher in value.matchers() {
-            check_string(&format!("{name} matcher"), matcher)?;
+            if let RuleMatcher::Static(matcher) = matcher {
+                check_string(&format!("{name} matcher"), matcher)?;
+            }
         }
         count
             .checked_add(value.matchers().len())
@@ -335,15 +430,17 @@ fn validate_rules(name: &str, rules: &OrderedMap<RuleValue>) -> Result<(), Strin
     check_count(name, rules.0.len().saturating_add(matcher_count), MAX_RULES)
 }
 
-fn validate_external_rules(rules: &OrderedMap<Vec<String>>) -> Result<(), String> {
+fn validate_external_rules(rules: &OrderedMap<RuleValue>) -> Result<(), String> {
     let mut count = rules.0.len();
     for (from, matchers) in &rules.0 {
         check_string("externalRules key", from)?;
         count = count
-            .checked_add(matchers.len())
+            .checked_add(matchers.matchers().len())
             .ok_or_else(|| "externalRules matcher count overflowed".to_owned())?;
-        for matcher in matchers {
-            check_string("externalRules matcher", matcher)?;
+        for matcher in matchers.matchers() {
+            if let RuleMatcher::Static(matcher) = matcher {
+                check_string("externalRules matcher", matcher)?;
+            }
         }
     }
     check_count("externalRules", count, MAX_RULES)

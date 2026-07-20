@@ -4,12 +4,15 @@ use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Serialize;
 
-use crate::input::{EncapsulationPattern, EngineInput, ImportKind, InputModulePath};
+use crate::input::{
+    EncapsulationPattern, EngineInput, ImportKind, InputModulePath, MAX_CALLBACK_CANDIDATES,
+    OrderedMap, RuleMatcher, RuleValue,
+};
 use crate::paths::{PathId, PathInterner};
 use crate::rules::{
     is_dependency_allowed, is_dependency_denied, is_external_allowed, wildcard_matches,
 };
-use crate::tags::calculate_tags;
+use crate::tags::{CalculatedTags, calculate_tags_with_callbacks, replace_tags};
 
 #[derive(Debug)]
 struct ModuleData {
@@ -40,6 +43,85 @@ pub struct EngineOutput {
     schema_version: u32,
     modules: Vec<OutputModule>,
     violations: OutputViolations,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum AnalyzeResult {
+    Complete(EngineOutput),
+    TagCallbacks(TagCallbackOutput),
+    RuleCallbacks(RuleCallbackOutput),
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagCallbackOutput {
+    schema_version: u32,
+    tag_callback_candidates: Vec<TagCallbackCandidate>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TagCallbackCandidate {
+    candidate_index: usize,
+    matcher_id: u32,
+    module_id: usize,
+    module_path: String,
+    placeholders: Vec<(String, String)>,
+    matcher_context: TagMatcherContext,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TagMatcherContext {
+    segment: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    regex_source: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleCallbackOutput {
+    schema_version: u32,
+    rule_callback_candidates: Vec<RuleCallbackCandidate>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RuleCallbackCandidate {
+    candidate_index: usize,
+    matcher_id: u32,
+    context: RuleCallbackContext,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum RuleCallbackContext {
+    Dependency(DependencyCallbackContext),
+    External(ExternalCallbackContext),
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DependencyCallbackContext {
+    from: String,
+    to: String,
+    from_module_path: String,
+    to_module_path: String,
+    from_file_path: String,
+    to_file_path: String,
+    from_tags: Vec<String>,
+    to_tags: Vec<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExternalCallbackContext {
+    from: String,
+    from_tags: Vec<String>,
+    from_module_path: String,
+    from_file_path: String,
+    external_library: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -94,7 +176,7 @@ struct FileViolations {
     external: Vec<ExternalViolation>,
 }
 
-pub fn analyze(input: EngineInput) -> Result<EngineOutput, String> {
+pub fn analyze(input: EngineInput) -> Result<AnalyzeResult, String> {
     if input.schema_version != 1 {
         return Err(format!(
             "unsupported schemaVersion {}; expected 1",
@@ -133,9 +215,12 @@ pub fn analyze(input: EngineInput) -> Result<EngineOutput, String> {
 
     let enable_barrel_less = input.enable_barrel_less;
 
+    let tag_callback_results = input.tag_callback_results.clone();
+    let rule_callback_results = input.rule_callback_results.clone();
+    let mut tag_callback_candidates = Vec::new();
     let mut modules = Vec::with_capacity(module_inputs.len());
     let mut module_by_path = FxHashMap::default();
-    for module_input in module_inputs {
+    for (module_id, module_input) in module_inputs.into_iter().enumerate() {
         let path = interner.intern_relative(&input.root_dir, &module_input.path)?;
         if module_by_path.contains_key(&path) {
             return Err(format!(
@@ -143,11 +228,34 @@ pub fn analyze(input: EngineInput) -> Result<EngineOutput, String> {
                 interner.text(path)
             ));
         }
-        let tags = calculate_tags(
+        let tags = match calculate_tags_with_callbacks(
             interner.text(path),
             &input.module_config,
             input.auto_tagging,
-        )?;
+        )? {
+            CalculatedTags::Tags(tags) => tags,
+            CalculatedTags::Callback(callback) => {
+                let candidate_index = tag_callback_candidates.len();
+                let tags = tag_callback_results
+                    .as_ref()
+                    .and_then(|results| results.get(candidate_index))
+                    .map(|tags| replace_tags(tags, &callback.placeholders, interner.text(path)))
+                    .transpose()?
+                    .unwrap_or_default();
+                tag_callback_candidates.push(TagCallbackCandidate {
+                    candidate_index,
+                    matcher_id: callback.matcher_id,
+                    module_id,
+                    module_path: interner.text(path).to_owned(),
+                    placeholders: callback.placeholders,
+                    matcher_context: TagMatcherContext {
+                        segment: callback.segment,
+                        regex_source: callback.regex_source,
+                    },
+                });
+                tags
+            }
+        };
         let module_index = modules.len();
         modules.push(ModuleData {
             path,
@@ -157,6 +265,20 @@ pub fn analyze(input: EngineInput) -> Result<EngineOutput, String> {
             tags,
         });
         module_by_path.insert(path, module_index);
+    }
+
+    if !tag_callback_candidates.is_empty() && tag_callback_results.is_none() {
+        return Ok(AnalyzeResult::TagCallbacks(TagCallbackOutput {
+            schema_version: 1,
+            tag_callback_candidates,
+        }));
+    }
+    if tag_callback_results.as_ref().map(Vec::len).unwrap_or(0) != tag_callback_candidates.len() {
+        return Err(format!(
+            "tag callback result count {} does not match candidate count {}",
+            tag_callback_results.as_ref().map(Vec::len).unwrap_or(0),
+            tag_callback_candidates.len()
+        ));
     }
 
     let mut files = Vec::with_capacity(input.files.len());
@@ -205,6 +327,28 @@ pub fn analyze(input: EngineInput) -> Result<EngineOutput, String> {
         });
     }
 
+    let (rule_callback_candidates, callback_slots) = collect_rule_callback_candidates(
+        &files,
+        &modules,
+        &interner,
+        &input.dep_rules,
+        &input.deny_rules,
+        &input.external_rules,
+    )?;
+    if !rule_callback_candidates.is_empty() && rule_callback_results.is_none() {
+        return Ok(AnalyzeResult::RuleCallbacks(RuleCallbackOutput {
+            schema_version: 1,
+            rule_callback_candidates,
+        }));
+    }
+    if rule_callback_results.as_ref().map(Vec::len).unwrap_or(0) != rule_callback_candidates.len() {
+        return Err(format!(
+            "rule callback result count {} does not match candidate count {}",
+            rule_callback_results.as_ref().map(Vec::len).unwrap_or(0),
+            rule_callback_candidates.len()
+        ));
+    }
+
     let encapsulation_pattern =
         CompiledEncapsulationPattern::new(input.encapsulation_pattern.as_ref())?;
     let context = CheckContext {
@@ -214,6 +358,8 @@ pub fn analyze(input: EngineInput) -> Result<EngineOutput, String> {
         dep_rules: &input.dep_rules,
         deny_rules: &input.deny_rules,
         external_rules: &input.external_rules,
+        rule_callback_results: rule_callback_results.as_deref().unwrap_or(&[]),
+        callback_slots: &callback_slots,
         enable_barrel_less,
         exclude_root: input.exclude_root,
         encapsulation_pattern: &encapsulation_pattern,
@@ -222,7 +368,8 @@ pub fn analyze(input: EngineInput) -> Result<EngineOutput, String> {
 
     let checked: Vec<Result<FileViolations, String>> = files
         .par_iter()
-        .map(|file| check_file(file, &context))
+        .enumerate()
+        .map(|(file_index, file)| check_file(file_index, file, &context))
         .collect();
     let mut violations = OutputViolations::default();
     for result in checked {
@@ -254,11 +401,11 @@ pub fn analyze(input: EngineInput) -> Result<EngineOutput, String> {
         .collect::<Vec<_>>();
     sort_records(&mut output_modules)?;
 
-    Ok(EngineOutput {
+    Ok(AnalyzeResult::Complete(EngineOutput {
         schema_version: 1,
         modules: output_modules,
         violations,
-    })
+    }))
 }
 
 fn find_closest_module(
@@ -288,6 +435,197 @@ fn find_closest_module(
     None
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum RuleCategory {
+    Dependency,
+    Deny,
+    External,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct CallbackSlot {
+    category: RuleCategory,
+    file_index: usize,
+    import_index: usize,
+    from_tag_index: usize,
+    to_tag_index: usize,
+    rule_index: usize,
+    matcher_index: usize,
+}
+
+fn collect_rule_callback_candidates(
+    files: &[FileData],
+    modules: &[ModuleData],
+    interner: &PathInterner,
+    dep_rules: &OrderedMap<RuleValue>,
+    deny_rules: &OrderedMap<RuleValue>,
+    external_rules: &OrderedMap<RuleValue>,
+) -> Result<(Vec<RuleCallbackCandidate>, FxHashMap<CallbackSlot, usize>), String> {
+    let mut candidates = Vec::new();
+    let mut slots = FxHashMap::default();
+    for (file_index, file) in files.iter().enumerate() {
+        let from_module = &modules[file.module];
+        for (import_index, import) in file.imports.iter().enumerate() {
+            match import {
+                ImportData::Module { target, .. } => {
+                    let target_file = &files[*target];
+                    if file.module == target_file.module {
+                        continue;
+                    }
+                    let to_module = &modules[target_file.module];
+                    collect_dependency_candidates(
+                        RuleCategory::Dependency,
+                        dep_rules,
+                        file_index,
+                        import_index,
+                        file,
+                        target_file,
+                        from_module,
+                        to_module,
+                        interner,
+                        &mut candidates,
+                        &mut slots,
+                    )?;
+                    collect_dependency_candidates(
+                        RuleCategory::Deny,
+                        deny_rules,
+                        file_index,
+                        import_index,
+                        file,
+                        target_file,
+                        from_module,
+                        to_module,
+                        interner,
+                        &mut candidates,
+                        &mut slots,
+                    )?;
+                }
+                ImportData::External { raw } => {
+                    for (from_tag_index, from) in from_module.tags.iter().enumerate() {
+                        for (rule_index, (from_pattern, rule)) in
+                            external_rules.0.iter().enumerate()
+                        {
+                            if !wildcard_matches(from_pattern, from) {
+                                continue;
+                            }
+                            for (matcher_index, matcher) in rule.matchers().iter().enumerate() {
+                                let RuleMatcher::Callback(matcher_id) = matcher else {
+                                    continue;
+                                };
+                                let slot = CallbackSlot {
+                                    category: RuleCategory::External,
+                                    file_index,
+                                    import_index,
+                                    from_tag_index,
+                                    to_tag_index: 0,
+                                    rule_index,
+                                    matcher_index,
+                                };
+                                push_rule_candidate(
+                                    *matcher_id,
+                                    RuleCallbackContext::External(ExternalCallbackContext {
+                                        from: from.clone(),
+                                        from_tags: from_module.tags.clone(),
+                                        from_module_path: interner
+                                            .text(from_module.path)
+                                            .to_owned(),
+                                        from_file_path: interner.text(file.path).to_owned(),
+                                        external_library: raw.clone(),
+                                    }),
+                                    slot,
+                                    &mut candidates,
+                                    &mut slots,
+                                )?;
+                            }
+                        }
+                    }
+                }
+                ImportData::Unresolvable => {}
+            }
+        }
+    }
+    Ok((candidates, slots))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_dependency_candidates(
+    category: RuleCategory,
+    rules: &OrderedMap<RuleValue>,
+    file_index: usize,
+    import_index: usize,
+    file: &FileData,
+    target_file: &FileData,
+    from_module: &ModuleData,
+    to_module: &ModuleData,
+    interner: &PathInterner,
+    candidates: &mut Vec<RuleCallbackCandidate>,
+    slots: &mut FxHashMap<CallbackSlot, usize>,
+) -> Result<(), String> {
+    for (from_tag_index, from) in from_module.tags.iter().enumerate() {
+        for (rule_index, (from_pattern, rule)) in rules.0.iter().enumerate() {
+            if !wildcard_matches(from_pattern, from) {
+                continue;
+            }
+            for (to_tag_index, to) in to_module.tags.iter().enumerate() {
+                for (matcher_index, matcher) in rule.matchers().iter().enumerate() {
+                    let RuleMatcher::Callback(matcher_id) = matcher else {
+                        continue;
+                    };
+                    let slot = CallbackSlot {
+                        category,
+                        file_index,
+                        import_index,
+                        from_tag_index,
+                        to_tag_index,
+                        rule_index,
+                        matcher_index,
+                    };
+                    push_rule_candidate(
+                        *matcher_id,
+                        RuleCallbackContext::Dependency(DependencyCallbackContext {
+                            from: from.clone(),
+                            to: to.clone(),
+                            from_module_path: interner.text(from_module.path).to_owned(),
+                            to_module_path: interner.text(to_module.path).to_owned(),
+                            from_file_path: interner.text(file.path).to_owned(),
+                            to_file_path: interner.text(target_file.path).to_owned(),
+                            from_tags: from_module.tags.clone(),
+                            to_tags: to_module.tags.clone(),
+                        }),
+                        slot,
+                        candidates,
+                        slots,
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn push_rule_candidate(
+    matcher_id: u32,
+    context: RuleCallbackContext,
+    slot: CallbackSlot,
+    candidates: &mut Vec<RuleCallbackCandidate>,
+    slots: &mut FxHashMap<CallbackSlot, usize>,
+) -> Result<(), String> {
+    if candidates.len() == MAX_CALLBACK_CANDIDATES {
+        return Err(format!(
+            "callback candidate count exceeds the {MAX_CALLBACK_CANDIDATES} limit"
+        ));
+    }
+    let candidate_index = candidates.len();
+    candidates.push(RuleCallbackCandidate {
+        candidate_index,
+        matcher_id,
+        context,
+    });
+    let previous = slots.insert(slot, candidate_index);
+    debug_assert!(previous.is_none());
+    Ok(())
+}
+
 enum CompiledEncapsulationPattern {
     String(String),
     Regex {
@@ -315,24 +653,32 @@ struct CheckContext<'a> {
     files: &'a [FileData],
     dep_rules: &'a crate::input::OrderedMap<crate::input::RuleValue>,
     deny_rules: &'a crate::input::OrderedMap<crate::input::RuleValue>,
-    external_rules: &'a crate::input::OrderedMap<Vec<String>>,
+    external_rules: &'a OrderedMap<RuleValue>,
+    rule_callback_results: &'a [bool],
+    callback_slots: &'a FxHashMap<CallbackSlot, usize>,
     enable_barrel_less: bool,
     exclude_root: bool,
     encapsulation_pattern: &'a CompiledEncapsulationPattern,
     barrel_file_name: &'a str,
 }
 
-fn check_file(file: &FileData, context: &CheckContext<'_>) -> Result<FileViolations, String> {
+fn check_file(
+    file_index: usize,
+    file: &FileData,
+    context: &CheckContext<'_>,
+) -> Result<FileViolations, String> {
     let mut output = FileViolations::default();
     let from_module = &context.modules[file.module];
 
-    for import in &file.imports {
+    for (import_index, import) in file.imports.iter().enumerate() {
         match import {
             ImportData::Module { raw, target } => {
                 let target_file = &context.files[*target];
                 let to_module = &context.modules[target_file.module];
                 if file.module != target_file.module {
                     check_dependency(
+                        file_index,
+                        import_index,
                         file,
                         raw,
                         target_file,
@@ -354,8 +700,26 @@ fn check_file(file: &FileData, context: &CheckContext<'_>) -> Result<FileViolati
                 if context.external_rules.0.is_empty() {
                     continue;
                 }
-                for from_tag in &from_module.tags {
-                    if !is_external_allowed(from_tag, raw, context.external_rules) {
+                for (from_tag_index, from_tag) in from_module.tags.iter().enumerate() {
+                    if !is_external_allowed(
+                        from_tag,
+                        raw,
+                        context.external_rules,
+                        |rule_index, matcher_index, _| {
+                            callback_decision(
+                                context,
+                                CallbackSlot {
+                                    category: RuleCategory::External,
+                                    file_index,
+                                    import_index,
+                                    from_tag_index,
+                                    to_tag_index: 0,
+                                    rule_index,
+                                    matcher_index,
+                                },
+                            )
+                        },
+                    ) {
                         output.external.push(ExternalViolation {
                             file: context.interner.text(file.path).to_owned(),
                             external_library: raw.clone(),
@@ -376,6 +740,8 @@ fn check_file(file: &FileData, context: &CheckContext<'_>) -> Result<FileViolati
 
 #[allow(clippy::too_many_arguments)]
 fn check_dependency(
+    file_index: usize,
+    import_index: usize,
     file: &FileData,
     raw: &str,
     target_file: &FileData,
@@ -384,11 +750,47 @@ fn check_dependency(
     context: &CheckContext<'_>,
     output: &mut FileViolations,
 ) -> Result<(), String> {
-    for from_tag in &from_module.tags {
-        let allowed = is_dependency_allowed(from_tag, &to_module.tags, context.dep_rules)?;
+    for (from_tag_index, from_tag) in from_module.tags.iter().enumerate() {
+        let allowed = is_dependency_allowed(
+            from_tag,
+            &to_module.tags,
+            context.dep_rules,
+            |rule_index, to_tag_index, matcher_index, _| {
+                callback_decision(
+                    context,
+                    CallbackSlot {
+                        category: RuleCategory::Dependency,
+                        file_index,
+                        import_index,
+                        from_tag_index,
+                        to_tag_index,
+                        rule_index,
+                        matcher_index,
+                    },
+                )
+            },
+        )?;
         let cause = if !allowed {
             None
-        } else if is_dependency_denied(from_tag, &to_module.tags, context.deny_rules) {
+        } else if is_dependency_denied(
+            from_tag,
+            &to_module.tags,
+            context.deny_rules,
+            |rule_index, to_tag_index, matcher_index, _| {
+                callback_decision(
+                    context,
+                    CallbackSlot {
+                        category: RuleCategory::Deny,
+                        file_index,
+                        import_index,
+                        from_tag_index,
+                        to_tag_index,
+                        rule_index,
+                        matcher_index,
+                    },
+                )
+            },
+        ) {
             Some("deny-rule")
         } else {
             continue;
@@ -409,6 +811,11 @@ fn check_dependency(
         break;
     }
     Ok(())
+}
+
+fn callback_decision(context: &CheckContext<'_>, slot: CallbackSlot) -> bool {
+    let candidate_index = context.callback_slots[&slot];
+    context.rule_callback_results[candidate_index]
 }
 
 fn is_encapsulation_allowed(
@@ -517,7 +924,12 @@ mod tests {
     use super::*;
 
     fn analyze_json(json: &str) -> EngineOutput {
-        analyze(serde_json::from_str(json).unwrap()).unwrap()
+        match analyze(serde_json::from_str(json).unwrap()).unwrap() {
+            AnalyzeResult::Complete(output) => output,
+            AnalyzeResult::TagCallbacks(_) | AnalyzeResult::RuleCallbacks(_) => {
+                panic!("test input unexpectedly requires callback materialization")
+            }
+        }
     }
 
     #[test]
