@@ -1,19 +1,52 @@
 {
   "schemaVersion": 1,
   "contract": "ts.preProcessFile + sheriff TypeScript resolution versus oxc_parser + oxc_resolver",
+  "typesVersionsParity": {
+    "compilerVersion": "5.9.3",
+    "cases": [
+      {
+        "name": "rxjs-root",
+        "passed": true
+      },
+      {
+        "name": "rxjs-subpath",
+        "passed": true
+      },
+      {
+        "name": "first-matching-range",
+        "passed": true
+      },
+      {
+        "name": "longest-pattern-prefix",
+        "passed": true
+      },
+      {
+        "name": "invalid-range-skipped",
+        "passed": true
+      },
+      {
+        "name": "unimported-package",
+        "passed": true
+      },
+      {
+        "name": "scoped-package-subpath",
+        "passed": true
+      }
+    ]
+  },
   "totals": {
     "fixturesDiscovered": 8,
-    "passed": 4,
-    "fallback": 4,
+    "passed": 8,
+    "fallback": 0,
     "skipped": 0,
     "filesCompared": 434,
     "typescriptEdges": 1357,
     "rustEdges": 1357,
     "fallbackRate": {
-      "fixturesFellBack": 4,
+      "fixturesFellBack": 0,
       "fixturesChecked": 8,
-      "percentage": 50,
-      "summary": "4/8 fixtures fell back"
+      "percentage": 0,
+      "summary": "0/8 fixtures fell back"
     },
     "divergences": {
       "kindMismatch": 0,
@@ -25,22 +58,20 @@
   "projects": [
     {
       "project": "angular-i",
-      "status": "fallback",
+      "status": "passed",
       "skipReasons": [],
       "hasInstalledNodeModules": false,
-      "filesCompared": 113,
       "sourceFilesDiscovered": 113,
       "tsconfigGroups": 1,
+      "filesCompared": 113,
       "edges": {
         "typescript": 391,
         "rust": 391
       },
       "engineFallback": {
         "checked": true,
-        "fellBack": true,
-        "reasons": [
-          "package rxjs declares unsupported typesVersions (../../node_modules/rxjs/package.json)"
-        ]
+        "fellBack": false,
+        "reasons": []
       },
       "divergences": {
         "kindMismatch": {
@@ -63,22 +94,20 @@
     },
     {
       "project": "angular-ii",
-      "status": "fallback",
+      "status": "passed",
       "skipReasons": [],
       "hasInstalledNodeModules": false,
-      "filesCompared": 61,
       "sourceFilesDiscovered": 61,
       "tsconfigGroups": 1,
+      "filesCompared": 61,
       "edges": {
         "typescript": 218,
         "rust": 218
       },
       "engineFallback": {
         "checked": true,
-        "fellBack": true,
-        "reasons": [
-          "package rxjs declares unsupported typesVersions (../../node_modules/rxjs/package.json)"
-        ]
+        "fellBack": false,
+        "reasons": []
       },
       "divergences": {
         "kindMismatch": {
@@ -101,22 +130,20 @@
     },
     {
       "project": "angular-iii",
-      "status": "fallback",
+      "status": "passed",
       "skipReasons": [],
       "hasInstalledNodeModules": false,
-      "filesCompared": 81,
       "sourceFilesDiscovered": 81,
       "tsconfigGroups": 1,
+      "filesCompared": 81,
       "edges": {
         "typescript": 262,
         "rust": 262
       },
       "engineFallback": {
         "checked": true,
-        "fellBack": true,
-        "reasons": [
-          "package rxjs declares unsupported typesVersions (../../node_modules/rxjs/package.json)"
-        ]
+        "fellBack": false,
+        "reasons": []
       },
       "divergences": {
         "kindMismatch": {
@@ -139,22 +166,20 @@
     },
     {
       "project": "angular-iv",
-      "status": "fallback",
+      "status": "passed",
       "skipReasons": [],
       "hasInstalledNodeModules": false,
-      "filesCompared": 122,
       "sourceFilesDiscovered": 122,
       "tsconfigGroups": 1,
+      "filesCompared": 122,
       "edges": {
         "typescript": 395,
         "rust": 395
       },
       "engineFallback": {
         "checked": true,
-        "fellBack": true,
-        "reasons": [
-          "package rxjs declares unsupported typesVersions (../../node_modules/rxjs/package.json)"
-        ]
+        "fellBack": false,
+        "reasons": []
       },
       "divergences": {
         "kindMismatch": {

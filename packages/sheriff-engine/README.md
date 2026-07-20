@@ -35,8 +35,19 @@ Before Rust resolution can be selected, every config in the hand-walked
 `ts.parseJsonConfigFileContent` inherits their options; inspecting only the
 entry config's raw text would be unsafe. Unknown options and
 `moduleSuffixes`, `rootDirs`, `customConditions`,
-`allowImportingTsExtensions`, project references, or `typesVersions` on a
-package reached during resolution force a whole-project TypeScript fallback. Parser/resolver
+`allowImportingTsExtensions` or project references force a whole-project
+TypeScript fallback. Reached packages use TypeScript 5.9.3-compatible
+`typesVersions` range selection and path mapping for TypeScript's ASCII range
+grammar; non-ASCII syntax, a numeric component larger than `u64`, rooted
+package/target paths, or a selected path table whose usable patterns do not map
+to string arrays remains on the conservative whole-project fallback.
+Unparseable range keys and path patterns containing multiple `*` characters are
+skipped just as TypeScript skips them. Parser/resolver
 errors and differential shadow mismatches do the same; fallback is never
 per-file. See `tools/engine-shadow/README.md` for the fixture harness and its
 coverage limits.
+
+The range parser is implemented locally instead of using Rust's cached `semver`
+crate because `VersionReq` has a different grammar and semantics from
+TypeScript's `VersionRange` (notably whitespace conjunctions, hyphen ranges,
+wildcard partials, and prerelease-inclusive matching). No dependency was added.

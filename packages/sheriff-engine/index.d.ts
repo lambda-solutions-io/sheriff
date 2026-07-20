@@ -137,3 +137,11 @@ export declare function resolveProjectImports(inputJson: string): string;
 export declare function resolveProjectImports(
   input: ResolveProjectInput,
 ): string;
+
+/** Test-only R2 seam retaining external-library paths for differential checks. */
+export declare function resolveModuleNameForEngineShadow(input: {
+  schemaVersion: 1;
+  tsConfigPath: string;
+  containingFile: string;
+  specifier: string;
+}): string;

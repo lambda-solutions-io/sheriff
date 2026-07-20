@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -59,6 +60,202 @@ const EXPLICITLY_UNSUPPORTED_COMPILER_OPTIONS: &[&str] = &[
     "moduleSuffixes",
     "rootDirs",
 ];
+
+// `typesVersions` is selected against the compiler, not the package or Node.
+// Keep this in lockstep with the TypeScript dependency exercised by the
+// differential harness.
+const TYPESCRIPT_VERSION: Version = Version::new(5, 9, 3);
+
+#[derive(Debug, Clone)]
+enum OrderedJson {
+    Null,
+    Bool,
+    Number,
+    String(String),
+    Array(Vec<OrderedJson>),
+    Object(Vec<(String, OrderedJson)>),
+}
+
+impl<'de> Deserialize<'de> for OrderedJson {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct OrderedJsonVisitor;
+
+        impl<'de> Visitor<'de> for OrderedJsonVisitor {
+            type Value = OrderedJson;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("any JSON value")
+            }
+
+            fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
+                Ok(OrderedJson::Bool)
+            }
+
+            fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
+                Ok(OrderedJson::Number)
+            }
+
+            fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E> {
+                Ok(OrderedJson::Number)
+            }
+
+            fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
+                Ok(OrderedJson::Number)
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(OrderedJson::String(value.to_owned()))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+                Ok(OrderedJson::String(value))
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E> {
+                Ok(OrderedJson::Null)
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E> {
+                Ok(OrderedJson::Null)
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut values = Vec::with_capacity(sequence.size_hint().unwrap_or(0));
+                while let Some(value) = sequence.next_element()? {
+                    values.push(value);
+                }
+                Ok(OrderedJson::Array(values))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut entries = Vec::with_capacity(map.size_hint().unwrap_or(0));
+                while let Some(entry) = map.next_entry()? {
+                    entries.push(entry);
+                }
+                Ok(OrderedJson::Object(entries))
+            }
+        }
+
+        deserializer.deserialize_any(OrderedJsonVisitor)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Version {
+    major: u64,
+    minor: u64,
+    patch: u64,
+    prerelease: Vec<String>,
+}
+
+impl Version {
+    const fn new(major: u64, minor: u64, patch: u64) -> Self {
+        Self {
+            major,
+            minor,
+            patch,
+            prerelease: Vec::new(),
+        }
+    }
+
+    fn increment(&self, field: VersionField) -> Result<Self, RangeParseError> {
+        match field {
+            VersionField::Major => Ok(Self::new(
+                self.major
+                    .checked_add(1)
+                    .ok_or(RangeParseError::Unsupported)?,
+                0,
+                0,
+            )),
+            VersionField::Minor => Ok(Self::new(
+                self.major,
+                self.minor
+                    .checked_add(1)
+                    .ok_or(RangeParseError::Unsupported)?,
+                0,
+            )),
+            VersionField::Patch => Ok(Self::new(
+                self.major,
+                self.minor,
+                self.patch
+                    .checked_add(1)
+                    .ok_or(RangeParseError::Unsupported)?,
+            )),
+        }
+    }
+
+    fn with_zero_prerelease(mut self) -> Self {
+        self.prerelease = vec!["0".to_owned()];
+        self
+    }
+}
+
+impl Ord for Version {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.major
+            .cmp(&other.major)
+            .then_with(|| self.minor.cmp(&other.minor))
+            .then_with(|| self.patch.cmp(&other.patch))
+            .then_with(|| compare_prerelease(&self.prerelease, &other.prerelease))
+    }
+}
+
+impl PartialOrd for Version {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum VersionField {
+    Major,
+    Minor,
+    Patch,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ComparatorOperator {
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+    Equal,
+}
+
+#[derive(Debug, Clone)]
+struct Comparator {
+    operator: ComparatorOperator,
+    operand: Version,
+}
+
+#[derive(Debug, Clone)]
+struct VersionRange(Vec<Vec<Comparator>>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RangeParseError {
+    Invalid,
+    Unsupported,
+}
+
+#[derive(Debug)]
+struct PartialVersion {
+    version: Version,
+    major_wildcard: bool,
+    minor_wildcard: bool,
+    patch_wildcard: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaterializedPath {
@@ -160,6 +357,22 @@ pub struct ResolveProjectOutput {
     pub source_config_paths: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolveModuleInput {
+    pub schema_version: u32,
+    pub ts_config_path: String,
+    pub containing_file: String,
+    pub specifier: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolveModuleOutput {
+    pub schema_version: u32,
+    pub resolved_path: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedFile {
@@ -197,6 +410,43 @@ pub enum ResolveProjectError {
     Resolution(String),
     LimitExceeded(String),
     CyclicTsConfigExtends(String),
+}
+
+pub fn resolve_module_name_for_shadow(
+    input: ResolveModuleInput,
+) -> Result<ResolveModuleOutput, ResolveProjectError> {
+    if input.schema_version != 1 {
+        return Err(ResolveProjectError::Resolution(format!(
+            "unsupported resolve-module schemaVersion {}; expected 1",
+            input.schema_version
+        )));
+    }
+    let context = get_ts_config_context(Path::new(&input.ts_config_path))?;
+    let resolver = create_resolver(
+        Some(Path::new(&input.ts_config_path)),
+        context.module_resolution.as_deref(),
+    );
+    let containing_file = Path::new(&input.containing_file);
+    let manifest_path = (!is_relative_import(&input.specifier)
+        && !Path::new(&input.specifier).is_absolute())
+    .then(|| {
+        containing_file.parent().and_then(|directory| {
+            find_installed_package_manifest(directory, &extract_package_name(&input.specifier))
+        })
+    })
+    .flatten();
+    let resolved_path = normal_resolve(
+        &resolver,
+        containing_file,
+        &input.specifier,
+        &context,
+        manifest_path.as_deref(),
+    )
+    .map(|path| path.to_string_lossy().into_owned());
+    Ok(ResolveModuleOutput {
+        schema_version: 1,
+        resolved_path,
+    })
 }
 
 impl std::fmt::Display for ResolveProjectError {
@@ -741,9 +991,22 @@ fn resolve_imports(
             continue;
         }
 
+        let is_bare_import =
+            !is_relative_import(&import.raw) && !Path::new(&import.raw).is_absolute();
+        let installed_package_manifest = is_bare_import
+            .then(|| {
+                find_installed_package_manifest(&importing_dir, &extract_package_name(&import.raw))
+            })
+            .flatten();
         // Sheriff computes normal resolution eagerly even though alias resolution
         // has priority over it.
-        let normal = normal_resolve(resolver, importing_file, &import.raw, context);
+        let normal = normal_resolve(
+            resolver,
+            importing_file,
+            &import.raw,
+            context,
+            installed_package_manifest.as_deref(),
+        );
         let normal_is_none = normal.is_none();
         let resolved_package_manifest = normal
             .as_deref()
@@ -758,18 +1021,11 @@ fn resolve_imports(
         let alias_is_none = alias.is_none();
 
         let (kind, resolved) = classify(&import.raw, alias, normal, &context.root_dir, &universe)?;
-        let is_bare_import =
-            !is_relative_import(&import.raw) && !Path::new(&import.raw).is_absolute();
         let package_manifest = resolved_package_manifest.or_else(|| {
             // typesVersions can make oxc fail before it returns a resolved path.
             // An installed bare package still counts as reached in that case.
             (is_bare_import && (kind == ImportKind::External || (alias_is_none && normal_is_none)))
-                .then(|| {
-                    find_installed_package_manifest(
-                        &importing_dir,
-                        &extract_package_name(&import.raw),
-                    )
-                })
+                .then_some(installed_package_manifest)
                 .flatten()
         });
         if kind == ImportKind::External || package_manifest.is_some() {
@@ -798,6 +1054,7 @@ fn normal_resolve(
     importing_file: &Path,
     specifier: &str,
     context: &TsConfigContext,
+    package_manifest: Option<&Path>,
 ) -> Option<PathBuf> {
     // resolveJsonModule never reaches Sheriff's ts.resolveModuleName call (see
     // create_resolver), while oxc resolves an explicit existing .json path even
@@ -818,6 +1075,12 @@ fn normal_resolve(
         {
             return Some(resolution.into_path_buf());
         }
+    }
+    if let Some(manifest_path) = package_manifest
+        && let Ok(Some(resolved)) =
+            resolve_types_versions(resolver, importing_file, specifier, manifest_path)
+    {
+        return Some(resolved);
     }
     resolver
         .resolve_file(importing_file, specifier)
@@ -930,6 +1193,565 @@ fn dependency_universe(file_dir: &Path, root_dir: &Path) -> HashSet<String> {
     }
 }
 
+impl VersionRange {
+    fn try_parse(text: &str) -> Result<Option<Self>, RangeParseError> {
+        if !text.is_ascii() {
+            // TypeScript's regular expressions accept Unicode whitespace. The
+            // Rust implementation intentionally limits its faithful grammar to
+            // ASCII and preserves fallback for anything outside it.
+            return Err(RangeParseError::Unsupported);
+        }
+        let mut alternatives = Vec::new();
+        for raw_alternative in text.trim().split("||") {
+            let alternative = raw_alternative.trim();
+            if alternative.is_empty() {
+                continue;
+            }
+            let mut comparators = Vec::new();
+            if let Some((left, right)) = split_hyphen_range(alternative) {
+                parse_hyphen(left, right, &mut comparators)?;
+            } else {
+                for simple in alternative.split_whitespace() {
+                    parse_comparator(simple, &mut comparators)?;
+                }
+            }
+            alternatives.push(comparators);
+        }
+        Ok(Some(Self(alternatives)))
+    }
+
+    fn test(&self, version: &Version) -> bool {
+        self.0.is_empty()
+            || self.0.iter().any(|alternative| {
+                alternative.iter().all(|comparator| {
+                    let ordering = version.cmp(&comparator.operand);
+                    match comparator.operator {
+                        ComparatorOperator::Less => ordering.is_lt(),
+                        ComparatorOperator::LessEqual => !ordering.is_gt(),
+                        ComparatorOperator::Greater => ordering.is_gt(),
+                        ComparatorOperator::GreaterEqual => !ordering.is_lt(),
+                        ComparatorOperator::Equal => ordering.is_eq(),
+                    }
+                })
+            })
+    }
+}
+
+fn compare_prerelease(left: &[String], right: &[String]) -> Ordering {
+    if left.is_empty() || right.is_empty() {
+        return match (left.is_empty(), right.is_empty()) {
+            (true, true) => Ordering::Equal,
+            (true, false) => Ordering::Greater,
+            (false, true) => Ordering::Less,
+            (false, false) => unreachable!(),
+        };
+    }
+    for (left_part, right_part) in left.iter().zip(right) {
+        let ordering = match (
+            numeric_identifier(left_part),
+            numeric_identifier(right_part),
+        ) {
+            (Some(left_number), Some(right_number)) => left_number.cmp(&right_number),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => left_part.cmp(right_part),
+        };
+        if !ordering.is_eq() {
+            return ordering;
+        }
+    }
+    left.len().cmp(&right.len())
+}
+
+fn numeric_identifier(value: &str) -> Option<u64> {
+    ((!value.is_empty())
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && (value == "0" || !value.starts_with('0')))
+    .then(|| value.parse().ok())
+    .flatten()
+}
+
+fn split_hyphen_range(range: &str) -> Option<(&str, &str)> {
+    let bytes = range.as_bytes();
+    let mut match_at = None;
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte == b'-'
+            && index > 0
+            && index + 1 < bytes.len()
+            && bytes[index - 1].is_ascii_whitespace()
+            && bytes[index + 1].is_ascii_whitespace()
+        {
+            if match_at.is_some() {
+                return None;
+            }
+            match_at = Some(index);
+        }
+    }
+    let index = match_at?;
+    let left = range[..index].trim();
+    let right = range[index + 1..].trim();
+    (!left.is_empty()
+        && !right.is_empty()
+        && left.bytes().all(is_range_component_byte)
+        && right.bytes().all(is_range_component_byte))
+    .then_some((left, right))
+}
+
+fn is_range_component_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'+' | b'.' | b'*')
+}
+
+fn parse_hyphen(
+    left: &str,
+    right: &str,
+    comparators: &mut Vec<Comparator>,
+) -> Result<(), RangeParseError> {
+    let left = parse_partial(left)?;
+    let right = parse_partial(right)?;
+    if !left.major_wildcard {
+        comparators.push(Comparator {
+            operator: ComparatorOperator::GreaterEqual,
+            operand: left.version,
+        });
+    }
+    if !right.major_wildcard {
+        let (operator, operand) = if right.minor_wildcard {
+            (
+                ComparatorOperator::Less,
+                right.version.increment(VersionField::Major)?,
+            )
+        } else if right.patch_wildcard {
+            (
+                ComparatorOperator::Less,
+                right.version.increment(VersionField::Minor)?,
+            )
+        } else {
+            (ComparatorOperator::LessEqual, right.version)
+        };
+        comparators.push(Comparator { operator, operand });
+    }
+    Ok(())
+}
+
+fn parse_comparator(
+    simple: &str,
+    comparators: &mut Vec<Comparator>,
+) -> Result<(), RangeParseError> {
+    let (operator, version_text) = ["<=", ">=", "~", "^", "<", ">", "="]
+        .into_iter()
+        .find_map(|operator| {
+            simple
+                .strip_prefix(operator)
+                .map(|version| (Some(operator), version))
+        })
+        .unwrap_or((None, simple));
+    if version_text.is_empty() || !version_text.bytes().all(is_range_component_byte) {
+        return Err(RangeParseError::Invalid);
+    }
+    let partial = parse_partial(version_text)?;
+    if partial.major_wildcard {
+        if matches!(operator, Some("<" | ">")) {
+            comparators.push(Comparator {
+                operator: ComparatorOperator::Less,
+                operand: Version {
+                    prerelease: vec!["0".to_owned()],
+                    ..Version::new(0, 0, 0)
+                },
+            });
+        }
+        return Ok(());
+    }
+
+    let version = partial.version;
+    match operator {
+        Some("~") => {
+            comparators.push(Comparator {
+                operator: ComparatorOperator::GreaterEqual,
+                operand: version.clone(),
+            });
+            comparators.push(Comparator {
+                operator: ComparatorOperator::Less,
+                operand: version.increment(if partial.minor_wildcard {
+                    VersionField::Major
+                } else {
+                    VersionField::Minor
+                })?,
+            });
+        }
+        Some("^") => {
+            comparators.push(Comparator {
+                operator: ComparatorOperator::GreaterEqual,
+                operand: version.clone(),
+            });
+            let field = if version.major > 0 || partial.minor_wildcard {
+                VersionField::Major
+            } else if version.minor > 0 || partial.patch_wildcard {
+                VersionField::Minor
+            } else {
+                VersionField::Patch
+            };
+            comparators.push(Comparator {
+                operator: ComparatorOperator::Less,
+                operand: version.increment(field)?,
+            });
+        }
+        Some("<" | ">=") => {
+            let version = if partial.minor_wildcard || partial.patch_wildcard {
+                version.with_zero_prerelease()
+            } else {
+                version
+            };
+            comparators.push(Comparator {
+                operator: if operator == Some("<") {
+                    ComparatorOperator::Less
+                } else {
+                    ComparatorOperator::GreaterEqual
+                },
+                operand: version,
+            });
+        }
+        Some("<=" | ">") => {
+            let (operator, version) = if partial.minor_wildcard {
+                (
+                    if operator == Some("<=") {
+                        ComparatorOperator::Less
+                    } else {
+                        ComparatorOperator::GreaterEqual
+                    },
+                    version
+                        .increment(VersionField::Major)?
+                        .with_zero_prerelease(),
+                )
+            } else if partial.patch_wildcard {
+                (
+                    if operator == Some("<=") {
+                        ComparatorOperator::Less
+                    } else {
+                        ComparatorOperator::GreaterEqual
+                    },
+                    version
+                        .increment(VersionField::Minor)?
+                        .with_zero_prerelease(),
+                )
+            } else {
+                (
+                    if operator == Some("<=") {
+                        ComparatorOperator::LessEqual
+                    } else {
+                        ComparatorOperator::Greater
+                    },
+                    version,
+                )
+            };
+            comparators.push(Comparator {
+                operator,
+                operand: version,
+            });
+        }
+        Some("=") | None => {
+            if partial.minor_wildcard || partial.patch_wildcard {
+                comparators.push(Comparator {
+                    operator: ComparatorOperator::GreaterEqual,
+                    operand: version.clone().with_zero_prerelease(),
+                });
+                comparators.push(Comparator {
+                    operator: ComparatorOperator::Less,
+                    operand: version
+                        .increment(if partial.minor_wildcard {
+                            VersionField::Major
+                        } else {
+                            VersionField::Minor
+                        })?
+                        .with_zero_prerelease(),
+                });
+            } else {
+                comparators.push(Comparator {
+                    operator: ComparatorOperator::Equal,
+                    operand: version,
+                });
+            }
+        }
+        Some(_) => return Err(RangeParseError::Invalid),
+    }
+    Ok(())
+}
+
+fn parse_partial(text: &str) -> Result<PartialVersion, RangeParseError> {
+    let mut plus_parts = text.split('+');
+    let version_and_prerelease = plus_parts.next().unwrap_or_default();
+    let build = plus_parts.next();
+    if plus_parts.next().is_some() || build.is_some_and(|build| !valid_build(build)) {
+        return Err(RangeParseError::Invalid);
+    }
+
+    let (version_text, prerelease) = version_and_prerelease
+        .split_once('-')
+        .map_or((version_and_prerelease, None), |(version, prerelease)| {
+            (version, Some(prerelease))
+        });
+    let components: Vec<_> = version_text.split('.').collect();
+    if components.is_empty()
+        || components.len() > 3
+        || components.iter().any(|component| component.is_empty())
+        || ((prerelease.is_some() || build.is_some()) && components.len() != 3)
+        || prerelease.is_some_and(|prerelease| !valid_prerelease(prerelease))
+    {
+        return Err(RangeParseError::Invalid);
+    }
+
+    let major = parse_partial_component(components[0])?;
+    let minor = components
+        .get(1)
+        .map_or(Ok(None), |component| parse_partial_component(component))?;
+    let patch = components
+        .get(2)
+        .map_or(Ok(None), |component| parse_partial_component(component))?;
+    let major_wildcard = major.is_none();
+    let minor_wildcard = major_wildcard || minor.is_none();
+    let patch_wildcard = minor_wildcard || patch.is_none();
+    Ok(PartialVersion {
+        version: Version {
+            major: major.unwrap_or(0),
+            minor: if major_wildcard {
+                0
+            } else {
+                minor.unwrap_or(0)
+            },
+            patch: if minor_wildcard {
+                0
+            } else {
+                patch.unwrap_or(0)
+            },
+            prerelease: prerelease
+                .map(|value| value.split('.').map(str::to_owned).collect())
+                .unwrap_or_default(),
+        },
+        major_wildcard,
+        minor_wildcard,
+        patch_wildcard,
+    })
+}
+
+fn parse_partial_component(component: &str) -> Result<Option<u64>, RangeParseError> {
+    if matches!(component, "*" | "x" | "X") {
+        return Ok(None);
+    }
+    if !component.bytes().all(|byte| byte.is_ascii_digit())
+        || (component.len() > 1 && component.starts_with('0'))
+    {
+        return Err(RangeParseError::Invalid);
+    }
+    component
+        .parse()
+        .map(Some)
+        .map_err(|_| RangeParseError::Unsupported)
+}
+
+fn valid_prerelease(prerelease: &str) -> bool {
+    !prerelease.is_empty()
+        && prerelease.split('.').all(|part| {
+            let all_digits = part.bytes().all(|byte| byte.is_ascii_digit());
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                && if all_digits {
+                    part == "0" || !part.starts_with('0')
+                } else {
+                    part.as_bytes()
+                        .first()
+                        .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'-')
+                }
+        })
+}
+
+fn valid_build(build: &str) -> bool {
+    !build.is_empty()
+        && build.split('.').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+}
+
+fn resolve_types_versions(
+    resolver: &Resolver,
+    importing_file: &Path,
+    specifier: &str,
+    manifest_path: &Path,
+) -> Result<Option<PathBuf>, String> {
+    let manifest = read_ordered_json(manifest_path)?;
+    let Some(paths) = selected_types_versions_paths(&manifest)? else {
+        return Ok(None);
+    };
+    let package_root = manifest_path
+        .parent()
+        .ok_or_else(|| format!("package manifest {} has no parent", manifest_path.display()))?;
+    let module_name = types_versions_module_name(&manifest, specifier)?;
+    let Some((targets, matched_text)) = best_types_versions_mapping(paths, &module_name)? else {
+        return Ok(None);
+    };
+
+    for target in targets {
+        let rewritten = if matched_text.is_empty() {
+            target.to_owned()
+        } else {
+            target.replacen('*', &matched_text, 1)
+        };
+        let candidate = node_join(package_root, &rewritten.replace('\\', "/"));
+        if let Ok(resolution) =
+            resolver.resolve_file(importing_file, candidate.to_string_lossy().as_ref())
+        {
+            return Ok(Some(resolution.into_path_buf()));
+        }
+    }
+    Ok(None)
+}
+
+fn read_ordered_json(path: &Path) -> Result<OrderedJson, String> {
+    let raw = fs::read_to_string(path)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    serde_json::from_str(&raw)
+        .map_err(|error| format!("could not parse {}: {error}", path.display()))
+}
+
+fn selected_types_versions_paths(
+    manifest: &OrderedJson,
+) -> Result<Option<&[(String, OrderedJson)]>, String> {
+    let types_versions = match object_get(manifest, "typesVersions") {
+        Some(OrderedJson::Object(types_versions)) => types_versions,
+        Some(OrderedJson::Array(_)) => {
+            return Err(
+                "array-valued typesVersions is outside Sheriff's supported shape".to_owned(),
+            );
+        }
+        _ => return Ok(None),
+    };
+    for (index, (range_text, _)) in types_versions.iter().enumerate() {
+        if types_versions[..index]
+            .iter()
+            .any(|(earlier, _)| earlier == range_text)
+        {
+            continue;
+        }
+        let range = match VersionRange::try_parse(range_text) {
+            Ok(Some(range)) => range,
+            Ok(None) | Err(RangeParseError::Invalid) => continue,
+            Err(RangeParseError::Unsupported) => {
+                return Err(format!(
+                    "typesVersions range {range_text:?} is outside Sheriff's supported range grammar"
+                ));
+            }
+        };
+        if range.test(&TYPESCRIPT_VERSION) {
+            return match object_get_last(types_versions, range_text) {
+                Some(OrderedJson::Object(paths)) => Ok(Some(paths)),
+                Some(OrderedJson::Array(_) | OrderedJson::Null) => Err(format!(
+                    "typesVersions range {range_text:?} has an unsupported path-table shape"
+                )),
+                _ => Ok(None),
+            };
+        }
+    }
+    Ok(None)
+}
+
+fn types_versions_module_name(manifest: &OrderedJson, specifier: &str) -> Result<String, String> {
+    let package_name = extract_package_name(specifier);
+    if let Some(rest) = specifier.strip_prefix(&format!("{package_name}/")) {
+        return Ok(rest.to_owned());
+    }
+    let entry = ["typings", "types", "main"]
+        .into_iter()
+        .find_map(|field| match object_get(manifest, field) {
+            Some(OrderedJson::String(value)) if !value.is_empty() => Some(value.as_str()),
+            _ => None,
+        })
+        .unwrap_or("index");
+    if is_rooted_typescript_path(entry) {
+        return Err(format!(
+            "rooted package entry {entry:?} is outside Sheriff's typesVersions support"
+        ));
+    }
+    Ok(entry.trim_start_matches("./").replace('\\', "/"))
+}
+
+fn best_types_versions_mapping<'a>(
+    paths: &'a [(String, OrderedJson)],
+    module_name: &str,
+) -> Result<Option<(Vec<&'a str>, String)>, String> {
+    let mut best_pattern: Option<(&str, &str, &str)> = None;
+    for (index, (key, _)) in paths.iter().enumerate() {
+        if paths[..index].iter().any(|(earlier, _)| earlier == key) {
+            continue;
+        }
+        let star_count = key.bytes().filter(|byte| *byte == b'*').count();
+        if star_count == 0 && key == module_name {
+            return mapping_targets(paths, key).map(|targets| Some((targets, String::new())));
+        }
+        if star_count != 1 {
+            continue;
+        }
+        let (prefix, suffix) = key.split_once('*').expect("one star was counted");
+        if module_name.len() >= prefix.len() + suffix.len()
+            && module_name.starts_with(prefix)
+            && module_name.ends_with(suffix)
+            && best_pattern.is_none_or(|(best_prefix, _, _)| prefix.len() > best_prefix.len())
+        {
+            best_pattern = Some((prefix, suffix, key));
+        }
+    }
+    let Some((prefix, suffix, key)) = best_pattern else {
+        return Ok(None);
+    };
+    let matched = module_name[prefix.len()..module_name.len() - suffix.len()].to_owned();
+    mapping_targets(paths, key).map(|targets| Some((targets, matched)))
+}
+
+fn mapping_targets<'a>(
+    paths: &'a [(String, OrderedJson)],
+    key: &str,
+) -> Result<Vec<&'a str>, String> {
+    match object_get_last(paths, key) {
+        Some(OrderedJson::Array(targets)) => targets
+            .iter()
+            .map(|target| match target {
+                OrderedJson::String(target) if !is_rooted_typescript_path(target) => {
+                    Ok(target.as_str())
+                }
+                OrderedJson::String(target) => Err(format!(
+                    "typesVersions path pattern {key:?} has unsupported rooted target {target:?}"
+                )),
+                _ => Err(format!(
+                    "typesVersions path pattern {key:?} contains a non-string target"
+                )),
+            })
+            .collect(),
+        _ => Err(format!(
+            "typesVersions path pattern {key:?} does not map to a string array"
+        )),
+    }
+}
+
+fn is_rooted_typescript_path(path: &str) -> bool {
+    path.starts_with(['/', '\\']) || path.as_bytes().get(1) == Some(&b':') || path.contains("://")
+}
+
+fn object_get<'a>(value: &'a OrderedJson, key: &str) -> Option<&'a OrderedJson> {
+    let OrderedJson::Object(entries) = value else {
+        return None;
+    };
+    object_get_last(entries, key)
+}
+
+fn object_get_last<'a>(entries: &'a [(String, OrderedJson)], key: &str) -> Option<&'a OrderedJson> {
+    entries
+        .iter()
+        .rev()
+        .find_map(|(entry_key, value)| (entry_key == key).then_some(value))
+}
+
 fn types_versions_fallback_reasons(
     reached_packages: &HashSet<ReachedPackage>,
     root_dir: &Path,
@@ -947,18 +1769,36 @@ fn types_versions_fallback_reasons(
     packages.sort_by(|left, right| left.1.cmp(right.1).then_with(|| left.0.cmp(right.0)));
 
     for (package, manifest_path) in packages {
-        if fs::read_to_string(manifest_path)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-            .is_some_and(|manifest| manifest.get("typesVersions").is_some())
-        {
+        let support_error = read_ordered_json(manifest_path).and_then(|manifest| {
+            selected_types_versions_paths(&manifest).and_then(|selected| {
+                if let Some(paths) = selected {
+                    types_versions_module_name(&manifest, package)
+                        .and_then(|_| validate_types_versions_paths(paths))
+                } else {
+                    Ok(())
+                }
+            })
+        });
+        if let Err(reason) = support_error {
             reasons.push(format!(
-                "package {package} declares unsupported typesVersions ({})",
+                "package {package} has unsupported typesVersions: {reason} ({})",
                 relative_for_oracle(root_dir, manifest_path)
             ));
         }
     }
     reasons
+}
+
+fn validate_types_versions_paths(paths: &[(String, OrderedJson)]) -> Result<(), String> {
+    for (index, (key, _)) in paths.iter().enumerate() {
+        if paths[..index].iter().any(|(earlier, _)| earlier == key)
+            || key.bytes().filter(|byte| *byte == b'*').count() > 1
+        {
+            continue;
+        }
+        mapping_targets(paths, key)?;
+    }
+    Ok(())
 }
 
 fn package_manifest_from_resolved_path(resolved: &Path, specifier: &str) -> Option<PathBuf> {
@@ -1080,10 +1920,10 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{
-        ImportKind, MaterializedPath, ResolveProjectError, ResolveProjectInput,
-        checked_import_total, classify, dependency_universe, extract_package_name,
-        get_ts_config_context, node_join, resolve_potential_ts_path, resolve_project,
-        sanitize_jsonc,
+        ImportKind, MaterializedPath, RangeParseError, ResolveProjectError, ResolveProjectInput,
+        TYPESCRIPT_VERSION, VersionRange, checked_import_total, classify, dependency_universe,
+        extract_package_name, get_ts_config_context, node_join, resolve_potential_ts_path,
+        resolve_project, sanitize_jsonc,
     };
     use crate::input::{MAX_CONFIG_NESTING, MAX_IMPORTS, MAX_STRING_BYTES};
 
@@ -1460,7 +2300,7 @@ mod tests {
     }
 
     #[test]
-    fn imported_dependency_types_versions_trigger_project_fallback() {
+    fn imported_dependency_with_supported_types_versions_does_not_fall_back() {
         let temp = TestDir::new();
         let config = temp.write("tsconfig.json", "{}");
         temp.write(
@@ -1481,14 +2321,9 @@ mod tests {
         })
         .unwrap();
 
-        assert!(output.fallback);
-        assert!(output.files.is_empty());
-        assert_eq!(
-            output.fallback_reasons,
-            [
-                "package typed-package declares unsupported typesVersions (node_modules/typed-package/package.json)"
-            ]
-        );
+        assert!(!output.fallback);
+        assert!(output.fallback_reasons.is_empty());
+        assert_eq!(output.files.len(), 1);
 
         let shadow_output = resolve_project(ResolveProjectInput {
             schema_version: 1,
@@ -1498,12 +2333,12 @@ mod tests {
             shadow_mode: true,
         })
         .unwrap();
-        assert!(shadow_output.fallback);
+        assert!(!shadow_output.fallback);
         assert_eq!(shadow_output.files.len(), 1);
     }
 
     #[test]
-    fn installed_dev_dependency_types_versions_trigger_project_fallback() {
+    fn installed_dev_dependency_types_versions_are_mapped() {
         let temp = TestDir::new();
         let config = temp.write("tsconfig.json", "{}");
         temp.write("package.json", r#"{"devDependencies":{"tv-pkg":"1.0.0"}}"#);
@@ -1522,18 +2357,14 @@ mod tests {
         })
         .unwrap();
 
-        assert!(output.fallback);
-        assert!(output.files.is_empty());
-        assert_eq!(
-            output.fallback_reasons,
-            [
-                "package tv-pkg declares unsupported typesVersions (node_modules/tv-pkg/package.json)"
-            ]
-        );
+        assert!(!output.fallback);
+        assert!(output.fallback_reasons.is_empty());
+        assert_eq!(output.files.len(), 1);
+        assert_eq!(output.files[0].imports[0].kind, ImportKind::External);
     }
 
     #[test]
-    fn scoped_subpath_import_audits_the_package_manifest() {
+    fn scoped_subpath_import_maps_types_versions() {
         let temp = TestDir::new();
         let config = temp.write("tsconfig.json", "{}");
         temp.write("package.json", r#"{"dependencies":{"@scope/pkg":"1.0.0"}}"#);
@@ -1552,14 +2383,96 @@ mod tests {
         })
         .unwrap();
 
+        assert!(!output.fallback);
+        assert!(output.fallback_reasons.is_empty());
+        assert_eq!(output.files[0].imports[0].kind, ImportKind::External);
+    }
+
+    #[test]
+    fn unsupported_types_versions_target_shape_preserves_project_fallback() {
+        let temp = TestDir::new();
+        let config = temp.write("tsconfig.json", "{}");
+        temp.write("package.json", r#"{"dependencies":{"bad-tv":"1.0.0"}}"#);
+        temp.write(
+            "node_modules/bad-tv/package.json",
+            r#"{"typesVersions":{"*":{"*":"types/*"}}}"#,
+        );
+        let source = temp.write("src/main.ts", r#"import "bad-tv";"#);
+        let output = resolve_project(ResolveProjectInput {
+            schema_version: 1,
+            ts_config_path: config.to_string_lossy().into_owned(),
+            files: vec![source.to_string_lossy().into_owned()],
+            ignore_file_extensions: Vec::new(),
+            shadow_mode: false,
+        })
+        .unwrap();
+
         assert!(output.fallback);
         assert!(output.files.is_empty());
-        assert_eq!(
-            output.fallback_reasons,
-            [
-                "package @scope/pkg declares unsupported typesVersions (node_modules/@scope/pkg/package.json)"
-            ]
+        assert_eq!(output.fallback_reasons.len(), 1);
+        assert!(
+            output.fallback_reasons[0]
+                .contains("path pattern \"*\" does not map to a string array")
         );
+    }
+
+    #[test]
+    fn unsupported_range_numbers_preserve_project_fallback() {
+        let temp = TestDir::new();
+        let config = temp.write("tsconfig.json", "{}");
+        temp.write("package.json", r#"{"dependencies":{"huge-tv":"1.0.0"}}"#);
+        temp.write(
+            "node_modules/huge-tv/package.json",
+            r#"{"typesVersions":{"18446744073709551616":{"*":["wrong/*"]},"*":{"*":["types/*"]}}}"#,
+        );
+        let source = temp.write("src/main.ts", r#"import "huge-tv";"#);
+        let output = resolve_project(ResolveProjectInput {
+            schema_version: 1,
+            ts_config_path: config.to_string_lossy().into_owned(),
+            files: vec![source.to_string_lossy().into_owned()],
+            ignore_file_extensions: Vec::new(),
+            shadow_mode: false,
+        })
+        .unwrap();
+
+        assert!(output.fallback);
+        assert!(output.fallback_reasons[0].contains("outside Sheriff's supported range grammar"));
+    }
+
+    #[test]
+    fn version_range_parser_covers_typescript_grammar() {
+        for range in [
+            "*",
+            ">=4.2",
+            ">5.8 <=5.9.3",
+            "4.0 - 5.9.3",
+            "~5.9.0",
+            "^5.0.0",
+            "1.x || 5.9.x",
+            "5.9.3+ignored-build",
+        ] {
+            assert!(
+                VersionRange::try_parse(range)
+                    .unwrap()
+                    .unwrap()
+                    .test(&TYPESCRIPT_VERSION),
+                "{range} should match"
+            );
+        }
+
+        for range in ["<4", ">5.9.3", "^0.5", "4.x"] {
+            assert!(
+                !VersionRange::try_parse(range)
+                    .unwrap()
+                    .unwrap()
+                    .test(&TYPESCRIPT_VERSION),
+                "{range} should not match"
+            );
+        }
+        assert!(matches!(
+            VersionRange::try_parse("not a range"),
+            Err(RangeParseError::Invalid)
+        ));
     }
 
     #[test]

@@ -70,6 +70,8 @@ const ignoredDirectories = new Set([
   'actual',
 ]);
 
+const typesVersionsParity = runTypesVersionsParity();
+
 const fixtureNames = fs
   .readdirSync(fixturesRoot, { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
@@ -148,6 +150,7 @@ const report = {
   schemaVersion: 1,
   contract:
     'ts.preProcessFile + sheriff TypeScript resolution versus oxc_parser + oxc_resolver',
+  typesVersionsParity,
   totals,
   projects,
 };
@@ -314,6 +317,28 @@ function dumpTypeScriptEdges(groups) {
   return JSON.parse(result.stdout);
 }
 
+function runTypesVersionsParity() {
+  const result = spawnSync(
+    process.execPath,
+    [path.join(toolDir, 'types-versions-parity.mjs')],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      maxBuffer: 10 * 1024 * 1024,
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      `typesVersions differential failed (${result.status}): ${result.stderr || result.stdout}`,
+    );
+  }
+  const parity = JSON.parse(result.stdout);
+  return {
+    compilerVersion: parity.compilerVersion,
+    cases: parity.results.map(({ name, passed }) => ({ name, passed })),
+  };
+}
+
 function diffEdges(tsEdges, rustEdges) {
   const result = emptyDivergenceSummary();
   const tsGroups = groupEdges(tsEdges);
@@ -422,6 +447,7 @@ function renderSummary(report) {
     '',
     `Fixtures: ${report.totals.passed} passed, ${report.totals.fallback} project fallbacks, ${report.totals.skipped} skipped (${report.totals.fixturesDiscovered} discovered)`,
     `Fallback rate: ${report.totals.fallbackRate.summary} (${report.totals.fallbackRate.percentage.toFixed(1)}%)`,
+    `typesVersions parity: ${report.typesVersionsParity.cases.filter(({ passed }) => passed).length}/${report.typesVersionsParity.cases.length} passed against TypeScript ${report.typesVersionsParity.compilerVersion}`,
     `Coverage: ${report.totals.filesCompared} source files; ${report.totals.typescriptEdges} TS edges; ${report.totals.rustEdges} Rust edges`,
     `Divergences: kind=${report.totals.divergences.kindMismatch}, path=${report.totals.divergences.pathMismatch}, missing=${report.totals.divergences.missingEdge}, extra=${report.totals.divergences.extraEdge}`,
     '',

@@ -14,6 +14,19 @@ const {
 useDefaultFs();
 
 const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+if (input.operation === 'resolve-module-names') {
+  const ts = require('typescript');
+  const resolutions = input.cases.map(({ containingFile, specifier }) => ({
+    resolvedPath:
+      ts.resolveModuleName(specifier, containingFile, {}, ts.sys).resolvedModule
+        ?.resolvedFileName ?? null,
+  }));
+  process.stdout.write(
+    JSON.stringify({ compilerVersion: ts.version, resolutions }),
+  );
+  return;
+}
+
 const edges = [];
 for (const group of input.groups) {
   const tsData = generateTsData(group.tsConfigPath);

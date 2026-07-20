@@ -16,6 +16,12 @@ path mismatch, missing edge, or extra edge; occurrence order and duplicates are
 part of the comparison. Both reports show whether each fixture triggered the
 engine fallback, its reasons, and the overall fixture fallback rate.
 
+Before fixture comparison, `run.mjs` executes a direct `typesVersions`
+differential. It invokes the installed compiler's real `ts.resolveModuleName`
+through `dump-typescript.cjs` and compares canonical resolved paths with the
+Rust shadow seam for `rxjs`, range-key ordering, path-pattern specificity,
+invalid ranges, unimported packages, and scoped-package subpaths.
+
 The harness enumerates JavaScript and TypeScript files directly from disk,
 whereas production starts at an entry file and discovers the project by
 traversing resolved imports. Its per-file coverage is therefore a superset of
@@ -52,9 +58,11 @@ The allowed names are `allowJs`, `allowSyntheticDefaultImports`, `baseUrl`,
 limited to `commonjs`, `es2022`, or `esnext`.
 
 `moduleSuffixes`, `rootDirs`, `customConditions`,
-`allowImportingTsExtensions`, project `references`, and `typesVersions` on a
-package reached during resolution force TypeScript fallback. Unknown options do
-as well.
+`allowImportingTsExtensions`, and project `references` force TypeScript
+fallback. Reached `typesVersions` packages are resolved in Rust when their
+selected mapping is faithfully covered; unsupported numeric range components
+or selected target shapes retain the fallback. The same applies to non-ASCII
+range syntax and rooted package/target paths. Unknown options do as well.
 Any shadow divergence forces fallback for the whole project, never one file.
 `shadowMode` only makes Rust produce comparison data after eligibility has
 failed; it does not make the project Rust-eligible. The production/default

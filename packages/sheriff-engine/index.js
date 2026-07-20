@@ -87,8 +87,15 @@ function resolveProjectImports(inputJson) {
   return loadNative().resolveProjectImports(serialized);
 }
 
+function resolveModuleNameForEngineShadow(inputJson) {
+  const serialized =
+    typeof inputJson === 'string' ? inputJson : JSON.stringify(inputJson);
+  return loadNative().resolveModuleNameForEngineShadow(serialized);
+}
+
 module.exports = {
   analyzeProject,
   resolveProjectImports,
+  resolveModuleNameForEngineShadow,
   EngineUnsupportedConfigError,
 };

@@ -75,6 +75,31 @@ pub fn resolve_project_imports(input_json: String) -> String {
     }
 }
 
+/// Test-only R2 seam for comparing one Rust resolution with
+/// `ts.resolveModuleName` without discarding external-library paths.
+#[napi(js_name = "resolveModuleNameForEngineShadow")]
+pub fn resolve_module_name_for_engine_shadow(input_json: String) -> String {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let input: resolve::ResolveModuleInput =
+            serde_json::from_str(&input_json).map_err(|error| {
+                resolve::ResolveProjectError::Resolution(format!(
+                    "invalid ResolveModuleInput JSON: {error}"
+                ))
+            })?;
+        let output = resolve::resolve_module_name_for_shadow(input)?;
+        serde_json::to_string(&output).map_err(|error| {
+            resolve::ResolveProjectError::Resolution(format!(
+                "could not serialize resolve-module output: {error}"
+            ))
+        })
+    }));
+    match result {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => error_json("SHERIFF_ENGINE_RESOLUTION_ERROR", error.to_string()),
+        Err(payload) => error_json("SHERIFF_ENGINE_PANIC", panic_message(payload)),
+    }
+}
+
 fn analyze_inner(input_json: &str) -> Result<String, String> {
     let input: input::EngineInput = serde_json::from_str(input_json)
         .map_err(|error| format!("invalid EngineInput JSON: {error}"))?;
