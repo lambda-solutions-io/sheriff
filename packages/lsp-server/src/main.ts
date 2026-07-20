@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createConnection } from 'vscode-languageserver/node';
 import { createSheriffLspServer } from './lib/lsp-server';
+import { createWorkerDiagnostics } from './lib/worker-diagnostics';
 
 function main(): void {
   const args = process.argv.slice(2);
@@ -17,9 +18,12 @@ function main(): void {
   }
 
   const connection = createConnection(process.stdin, process.stdout);
+  const diagnostics = createWorkerDiagnostics();
   createSheriffLspServer({
     changeDebounceMs: 150,
     connection,
+    createDiagnostics: diagnostics.createDiagnostics,
+    disposeDiagnostics: diagnostics.dispose,
   });
   connection.listen();
 }
