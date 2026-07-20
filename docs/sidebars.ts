@@ -20,6 +20,7 @@ const sidebars: SidebarsConfig = {
     'configuration',
     'cli',
     'integration',
+    'lsp-server',
   ],
   releaseNotesSidebar: [
     {

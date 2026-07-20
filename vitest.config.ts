@@ -17,6 +17,9 @@ export default defineConfig({
       '@lambda-solutions/mcp-server-sheriff': resolve(
         './packages/mcp-server/src/index.ts',
       ),
+      '@lambda-solutions/lsp-server-sheriff': resolve(
+        './packages/lsp-server/src/index.ts',
+      ),
       '@lambda-solutions/sheriff-core': resolve('./packages/core/src/index.ts'),
     },
   },
