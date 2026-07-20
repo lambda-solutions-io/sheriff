@@ -29,7 +29,13 @@ export interface SheriffLspServer {
   dispose(): void;
 }
 
-type ServerState = 'uninitialized' | 'initialized' | 'shutdown';
+type ServerState =
+  | 'uninitialized'
+  | 'initializing'
+  | 'initialized'
+  | 'shutdown';
+
+const MAX_INITIALIZING_DOCUMENTS = 1_000;
 
 interface DiagnosticsRun {
   readonly uri: string;
@@ -53,6 +59,7 @@ export function createSheriffLspServer(
   const documentGenerations = new Map<string, number>();
   const pendingDiagnostics = new Map<string, ReturnType<typeof setTimeout>>();
   const inFlightDiagnostics = new Set<DiagnosticsRun>();
+  const initializingDocuments = new Set<string>();
   const disposables: Disposable[] = [];
   let state: ServerState = 'uninitialized';
 
@@ -153,6 +160,34 @@ export function createSheriffLspServer(
     pendingDiagnostics.set(document.uri, timer);
   }
 
+  function diagnoseChangedDocument(document: TextDocument): void {
+    invalidateDocumentDiagnostics(document.uri);
+    if (openDocuments.has(document.uri)) {
+      scheduleDiagnostics(document);
+    } else {
+      openDocuments.add(document.uri);
+      publishDiagnostics(document);
+    }
+  }
+
+  function queueInitializingDocument(uri: string): void {
+    // Queue eager clients until `initialized`; the cap bounds invalid traffic.
+    if (initializingDocuments.size < MAX_INITIALIZING_DOCUMENTS) {
+      initializingDocuments.add(uri);
+    }
+  }
+
+  function flushInitializingDocuments(): void {
+    const uris = [...initializingDocuments];
+    initializingDocuments.clear();
+    for (const uri of uris) {
+      const document = documents.get(uri);
+      if (document !== undefined) {
+        diagnoseChangedDocument(document);
+      }
+    }
+  }
+
   function cancelAllDiagnostics(): void {
     for (const pending of pendingDiagnostics.values()) {
       clearTimeout(pending);
@@ -161,12 +196,13 @@ export function createSheriffLspServer(
     inFlightDiagnostics.clear();
     openDocuments.clear();
     documentGenerations.clear();
+    initializingDocuments.clear();
   }
 
   disposables.push(
     connection.onInitialize(() => {
       if (state === 'uninitialized') {
-        state = 'initialized';
+        state = 'initializing';
       }
       return {
         capabilities: {},
@@ -176,24 +212,32 @@ export function createSheriffLspServer(
         },
       };
     }),
+    connection.onInitialized(() => {
+      if (state === 'initializing') {
+        state = 'initialized';
+        flushInitializingDocuments();
+      }
+    }),
     connection.onShutdown(() => {
       state = 'shutdown';
       cancelAllDiagnostics();
     }),
     documents.onDidChangeContent(({ document }) => {
+      if (state === 'initializing') {
+        queueInitializingDocument(document.uri);
+        return;
+      }
       if (state !== 'initialized') {
         return;
       }
 
-      invalidateDocumentDiagnostics(document.uri);
-      if (openDocuments.has(document.uri)) {
-        scheduleDiagnostics(document);
-      } else {
-        openDocuments.add(document.uri);
-        publishDiagnostics(document);
-      }
+      diagnoseChangedDocument(document);
     }),
     documents.onDidClose(({ document }) => {
+      if (state === 'initializing') {
+        initializingDocuments.delete(document.uri);
+        return;
+      }
       if (state !== 'initialized') {
         return;
       }
@@ -201,6 +245,7 @@ export function createSheriffLspServer(
       cancelPendingDiagnostics(document.uri);
       openDocuments.delete(document.uri);
       invalidateDocumentDiagnostics(document.uri);
+      documentGenerations.delete(document.uri);
       sendDiagnosticsSafely(document.uri, []);
     }),
     documents.listen(connection),
