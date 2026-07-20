@@ -106,3 +106,34 @@ export declare class EngineUnsupportedConfigError extends Error {
 
 export declare function analyzeProject(inputJson: string): string;
 export declare function analyzeProject(input: EngineInput): string;
+
+export interface ResolveProjectInput {
+  schemaVersion: 1;
+  tsConfigPath: string;
+  files: string[];
+  ignoreFileExtensions?: string[];
+  /** Measure Rust even when fallback eligibility has already failed. */
+  shadowMode?: boolean;
+}
+
+export interface ResolvedProjectImport extends EngineImport {
+  resolvedPath: string | null;
+  /** UTF-8 byte offsets inside the module string literal. */
+  start: number;
+  end: number;
+}
+
+export interface ResolveProjectOutput {
+  schemaVersion: 1;
+  rootDir: string;
+  files: Array<{ file: string; imports: ResolvedProjectImport[] }>;
+  fallback: boolean;
+  fallbackReasons: string[];
+  sourceConfigPaths: string[];
+}
+
+/** Shadow-only R2 API. TypeScript remains the production resolver. */
+export declare function resolveProjectImports(inputJson: string): string;
+export declare function resolveProjectImports(
+  input: ResolveProjectInput,
+): string;

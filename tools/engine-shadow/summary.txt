@@ -1,0 +1,18 @@
+Sheriff Rust engine R2 shadow report
+
+Fixtures: 7 passed, 1 project fallbacks, 0 skipped (8 discovered)
+Coverage: 434 source files; 1357 TS edges; 1357 Rust edges
+Divergences: kind=0, path=0, missing=0, extra=0
+
+- angular-i: passed; files=113; TS=391; Rust=391; no node_modules; bare imports cover dependency-universe classification only
+- angular-ii: passed; files=61; TS=218; Rust=218; no node_modules; bare imports cover dependency-universe classification only
+- angular-iii: passed; files=81; TS=262; Rust=262; no node_modules; bare imports cover dependency-universe classification only
+- angular-iv: passed; files=122; TS=395; Rust=395; no node_modules; bare imports cover dependency-universe classification only
+- angular-v-multi: fallback; files=30; TS=60; Rust=60; installed dependencies present
+  reason: package rxjs declares unsupported typesVersions (/Users/michaelberger/Documents/dev/_workspaces/sheriff/sheriff-rust-engine/test-projects/angular-v-multi/node_modules/rxjs/package.json)
+- nextjs-i: passed; files=10; TS=16; Rust=16; installed dependencies present
+- plugin-i: passed; files=7; TS=6; Rust=6; no node_modules; bare imports cover dependency-universe classification only
+- typescript-i: passed; files=10; TS=9; Rust=9; no node_modules; bare imports cover dependency-universe classification only
+
+Machine report: tools/engine-shadow/report.json
+

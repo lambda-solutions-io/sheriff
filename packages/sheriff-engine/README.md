@@ -22,3 +22,21 @@ These limits keep malformed configuration from exhausting the Node host process:
 JavaScript `RegExp` values are serialized as `{ source, flags }` only for
 `encapsulationPattern`. Sticky (`y`) and Unicode-set (`v`) flags are rejected with a structured
 error because approximating either at the stateless JSON boundary would be incorrect.
+
+## R2 import-resolution shadow API
+
+`resolveProjectImports` parses imports with oxc and resolves them in Rust, but is
+shadow-only: Sheriff still uses TypeScript by default. The API reports UTF-8 byte
+offsets and the ordered `module | external | unresolvable` edge stream.
+
+Before Rust resolution can be selected, every config in the hand-walked
+`extends` chain is checked against the conservative allowlist in
+`crate/src/resolve.rs`. Parent configs must be checked because
+`ts.parseJsonConfigFileContent` inherits their options; inspecting only the
+entry config's raw text would be unsafe. Unknown options and
+`moduleSuffixes`, `rootDirs`, `customConditions`,
+`allowImportingTsExtensions`, project references, or dependency
+`typesVersions` force a whole-project TypeScript fallback. Parser/resolver
+errors and differential shadow mismatches do the same; fallback is never
+per-file. See `tools/engine-shadow/README.md` for the fixture harness and its
+coverage limits.

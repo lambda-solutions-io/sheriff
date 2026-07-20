@@ -51,7 +51,7 @@ function loadNative() {
     const loadError = new Error(
       expectedPathIsMissing
         ? `Sheriff native engine is unavailable for ${nativeTriple()}. ` +
-            `Expected ${binaryPath}. Run \"npm run build:native\" in packages/sheriff-engine.`
+          `Expected ${binaryPath}. Run \"npm run build:native\" in packages/sheriff-engine.`
         : `Sheriff native engine for ${nativeTriple()} exists but failed to load from ${binaryPath}: ${error?.message ?? error}`,
       { cause: error },
     );
@@ -81,7 +81,14 @@ function analyzeProject(inputJson) {
   return loadNative().analyzeProject(JSON.stringify(serializableInput));
 }
 
+function resolveProjectImports(inputJson) {
+  const serialized =
+    typeof inputJson === 'string' ? inputJson : JSON.stringify(inputJson);
+  return loadNative().resolveProjectImports(serialized);
+}
+
 module.exports = {
   analyzeProject,
+  resolveProjectImports,
   EngineUnsupportedConfigError,
 };

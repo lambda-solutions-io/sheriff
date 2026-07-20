@@ -1,7 +1,9 @@
 mod engine;
+mod extract;
 mod input;
 mod js_regex;
 mod paths;
+mod resolve;
 mod rules;
 mod tags;
 
@@ -43,11 +45,42 @@ pub fn analyze_project(input_json: String) -> String {
     }
 }
 
+/// Shadow-only R2 entry point. The production TypeScript resolver remains the
+/// default until the later consumer cutover phase.
+#[napi(js_name = "resolveProjectImports")]
+pub fn resolve_project_imports(input_json: String) -> String {
+    if input_json.len() > input::MAX_INPUT_JSON_BYTES {
+        return error_json(
+            "SHERIFF_ENGINE_LIMIT_EXCEEDED",
+            format!(
+                "input JSON exceeds the {} byte limit",
+                input::MAX_INPUT_JSON_BYTES
+            ),
+        );
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| resolve_imports_inner(&input_json)));
+    match result {
+        Ok(Ok(output)) => output,
+        Ok(Err(message)) => error_json("SHERIFF_ENGINE_RESOLUTION_ERROR", message),
+        Err(payload) => error_json("SHERIFF_ENGINE_PANIC", panic_message(payload)),
+    }
+}
+
 fn analyze_inner(input_json: &str) -> Result<String, String> {
     let input: input::EngineInput = serde_json::from_str(input_json)
         .map_err(|error| format!("invalid EngineInput JSON: {error}"))?;
     input.validate()?;
     let output = engine::analyze(input)?;
+    serde_json::to_string(&output).map_err(|error| format!("could not serialize output: {error}"))
+}
+
+fn resolve_imports_inner(input_json: &str) -> Result<String, String> {
+    let input: resolve::ResolveProjectInput = serde_json::from_str(input_json)
+        .map_err(|error| format!("invalid ResolveProjectInput JSON: {error}"))?;
+    if input.files.len() > input::MAX_FILES {
+        return Err(format!("files exceeds the {} item limit", input::MAX_FILES));
+    }
+    let output = resolve::resolve_project(input)?;
     serde_json::to_string(&output).map_err(|error| format!("could not serialize output: {error}"))
 }
 

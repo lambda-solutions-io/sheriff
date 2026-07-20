@@ -28,6 +28,12 @@ type ImportResolution =
   | { kind: 'external'; raw: string }
   | { kind: 'unresolvable'; raw: string };
 
+export type EngineShadowImport = {
+  raw: string;
+  resolvedPath: string | null;
+  kind: 'module' | 'external' | 'unresolvable';
+};
+
 // https://stackoverflow.com/questions/71815527/typescript-compiler-apihow-to-get-absolute-path-to-source-file-of-import-module
 /**
  * This function generates the FileInfo tree.
@@ -200,4 +206,43 @@ function resolveImports(
   }
 
   return resolutions;
+}
+
+/**
+ * R2 differential-test seam. It intentionally exposes the ordered, classified
+ * edge stream immediately before `UnassignedFileInfo` stores it. Production
+ * traversal continues to use the TypeScript path above.
+ */
+export function resolveImportsForEngineShadow(
+  fsPath: FsPath,
+  tsData: TsData,
+  ignoreFileExtensions: string[],
+): EngineShadowImport[] {
+  const rootDir = tsData.rootDir;
+  const externalSeen = new Set<string>();
+
+  return resolveImports(
+    fsPath,
+    tsData,
+    ignoreFileExtensions,
+    getFs().readFile(fsPath),
+  ).flatMap((resolution): EngineShadowImport[] => {
+    if (resolution.kind === 'external') {
+      if (externalSeen.has(resolution.raw)) return [];
+      externalSeen.add(resolution.raw);
+    }
+
+    return [
+      {
+        raw: resolution.raw,
+        kind: resolution.kind,
+        resolvedPath:
+          resolution.kind === 'module'
+            ? (
+                getFs().relativeTo(rootDir, resolution.importPath) || '.'
+              ).replaceAll('\\', '/')
+            : null,
+      },
+    ];
+  });
 }

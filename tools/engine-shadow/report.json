@@ -1,0 +1,272 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-20T08:48:46.823Z",
+  "contract": "ts.preProcessFile + sheriff TypeScript resolution versus oxc_parser + oxc_resolver",
+  "totals": {
+    "fixturesDiscovered": 8,
+    "passed": 7,
+    "fallback": 1,
+    "skipped": 0,
+    "filesCompared": 434,
+    "typescriptEdges": 1357,
+    "rustEdges": 1357,
+    "divergences": {
+      "kindMismatch": 0,
+      "pathMismatch": 0,
+      "missingEdge": 0,
+      "extraEdge": 0
+    }
+  },
+  "projects": [
+    {
+      "project": "angular-i",
+      "status": "passed",
+      "skipReasons": [],
+      "hasInstalledNodeModules": false,
+      "sourceFilesDiscovered": 113,
+      "tsconfigGroups": 1,
+      "filesCompared": 113,
+      "edges": {
+        "typescript": 391,
+        "rust": 391
+      },
+      "divergences": {
+        "kindMismatch": {
+          "count": 0,
+          "examples": []
+        },
+        "pathMismatch": {
+          "count": 0,
+          "examples": []
+        },
+        "missingEdge": {
+          "count": 0,
+          "examples": []
+        },
+        "extraEdge": {
+          "count": 0,
+          "examples": []
+        }
+      }
+    },
+    {
+      "project": "angular-ii",
+      "status": "passed",
+      "skipReasons": [],
+      "hasInstalledNodeModules": false,
+      "sourceFilesDiscovered": 61,
+      "tsconfigGroups": 1,
+      "filesCompared": 61,
+      "edges": {
+        "typescript": 218,
+        "rust": 218
+      },
+      "divergences": {
+        "kindMismatch": {
+          "count": 0,
+          "examples": []
+        },
+        "pathMismatch": {
+          "count": 0,
+          "examples": []
+        },
+        "missingEdge": {
+          "count": 0,
+          "examples": []
+        },
+        "extraEdge": {
+          "count": 0,
+          "examples": []
+        }
+      }
+    },
+    {
+      "project": "angular-iii",
+      "status": "passed",
+      "skipReasons": [],
+      "hasInstalledNodeModules": false,
+      "sourceFilesDiscovered": 81,
+      "tsconfigGroups": 1,
+      "filesCompared": 81,
+      "edges": {
+        "typescript": 262,
+        "rust": 262
+      },
+      "divergences": {
+        "kindMismatch": {
+          "count": 0,
+          "examples": []
+        },
+        "pathMismatch": {
+          "count": 0,
+          "examples": []
+        },
+        "missingEdge": {
+          "count": 0,
+          "examples": []
+        },
+        "extraEdge": {
+          "count": 0,
+          "examples": []
+        }
+      }
+    },
+    {
+      "project": "angular-iv",
+      "status": "passed",
+      "skipReasons": [],
+      "hasInstalledNodeModules": false,
+      "sourceFilesDiscovered": 122,
+      "tsconfigGroups": 1,
+      "filesCompared": 122,
+      "edges": {
+        "typescript": 395,
+        "rust": 395
+      },
+      "divergences": {
+        "kindMismatch": {
+          "count": 0,
+          "examples": []
+        },
+        "pathMismatch": {
+          "count": 0,
+          "examples": []
+        },
+        "missingEdge": {
+          "count": 0,
+          "examples": []
+        },
+        "extraEdge": {
+          "count": 0,
+          "examples": []
+        }
+      }
+    },
+    {
+      "project": "angular-v-multi",
+      "status": "fallback",
+      "skipReasons": [
+        "package rxjs declares unsupported typesVersions (/Users/michaelberger/Documents/dev/_workspaces/sheriff/sheriff-rust-engine/test-projects/angular-v-multi/node_modules/rxjs/package.json)"
+      ],
+      "hasInstalledNodeModules": true,
+      "filesCompared": 30,
+      "sourceFilesDiscovered": 30,
+      "tsconfigGroups": 1,
+      "edges": {
+        "typescript": 60,
+        "rust": 60
+      },
+      "divergences": {
+        "kindMismatch": {
+          "count": 0,
+          "examples": []
+        },
+        "pathMismatch": {
+          "count": 0,
+          "examples": []
+        },
+        "missingEdge": {
+          "count": 0,
+          "examples": []
+        },
+        "extraEdge": {
+          "count": 0,
+          "examples": []
+        }
+      }
+    },
+    {
+      "project": "nextjs-i",
+      "status": "passed",
+      "skipReasons": [],
+      "hasInstalledNodeModules": true,
+      "sourceFilesDiscovered": 10,
+      "tsconfigGroups": 1,
+      "filesCompared": 10,
+      "edges": {
+        "typescript": 16,
+        "rust": 16
+      },
+      "divergences": {
+        "kindMismatch": {
+          "count": 0,
+          "examples": []
+        },
+        "pathMismatch": {
+          "count": 0,
+          "examples": []
+        },
+        "missingEdge": {
+          "count": 0,
+          "examples": []
+        },
+        "extraEdge": {
+          "count": 0,
+          "examples": []
+        }
+      }
+    },
+    {
+      "project": "plugin-i",
+      "status": "passed",
+      "skipReasons": [],
+      "hasInstalledNodeModules": false,
+      "sourceFilesDiscovered": 7,
+      "tsconfigGroups": 1,
+      "filesCompared": 7,
+      "edges": {
+        "typescript": 6,
+        "rust": 6
+      },
+      "divergences": {
+        "kindMismatch": {
+          "count": 0,
+          "examples": []
+        },
+        "pathMismatch": {
+          "count": 0,
+          "examples": []
+        },
+        "missingEdge": {
+          "count": 0,
+          "examples": []
+        },
+        "extraEdge": {
+          "count": 0,
+          "examples": []
+        }
+      }
+    },
+    {
+      "project": "typescript-i",
+      "status": "passed",
+      "skipReasons": [],
+      "hasInstalledNodeModules": false,
+      "sourceFilesDiscovered": 10,
+      "tsconfigGroups": 1,
+      "filesCompared": 10,
+      "edges": {
+        "typescript": 9,
+        "rust": 9
+      },
+      "divergences": {
+        "kindMismatch": {
+          "count": 0,
+          "examples": []
+        },
+        "pathMismatch": {
+          "count": 0,
+          "examples": []
+        },
+        "missingEdge": {
+          "count": 0,
+          "examples": []
+        },
+        "extraEdge": {
+          "count": 0,
+          "examples": []
+        }
+      }
+    }
+  ]
+}
