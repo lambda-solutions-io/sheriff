@@ -1,5 +1,4 @@
 import { FsPath } from './fs-path';
-import throwIfNull from '../util/throw-if-null';
 
 /**
  * Represents a TypeScript file with its dependencies but does
@@ -14,7 +13,7 @@ import throwIfNull from '../util/throw-if-null';
  * should cause an error or not.
  */
 export class UnassignedFileInfo {
-  #rawImportMap = new Map<string, string>();
+  #importEdges: UnassignedImportEdge[] = [];
   #unresolvableImports: string[] = [];
   #externalLibraries: string[] = [];
 
@@ -41,14 +40,15 @@ export class UnassignedFileInfo {
 
   addImport(importedFileInfo: UnassignedFileInfo, rawImport: string) {
     this.imports.push(importedFileInfo);
-    this.#rawImportMap.set(importedFileInfo.path, rawImport);
+    this.#importEdges.push({ importedFileInfo, rawImport });
   }
 
-  getRawImportForImportedFileInfo(path: FsPath): string {
-    return throwIfNull(
-      this.#rawImportMap.get(path),
-      `raw import for ${path} is not available in ${this.path}`,
-    );
+  /**
+   * Every resolved import in source order, including multiple raw specifiers
+   * which resolve to the same file.
+   */
+  get importEdges(): ReadonlyArray<Readonly<UnassignedImportEdge>> {
+    return this.#importEdges;
   }
 
   addExternalLibrary(libraryImport: string) {
@@ -63,3 +63,8 @@ export class UnassignedFileInfo {
     return [...this.#externalLibraries] as const;
   }
 }
+
+export type UnassignedImportEdge = {
+  importedFileInfo: UnassignedFileInfo;
+  rawImport: string;
+};

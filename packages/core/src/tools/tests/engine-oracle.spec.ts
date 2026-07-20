@@ -37,11 +37,12 @@ describe('generateOracle', () => {
         },
         depRules: { '*': '*' },
         enableBarrelLess: true,
+        encapsulationPattern: 'private',
       }),
       src: {
         'main.ts': [
           './customer/feature/customer.ts',
-          './customer/data/internal/secret.ts',
+          './customer/data/private/secret.ts',
         ],
         customer: {
           feature: {
@@ -49,7 +50,7 @@ describe('generateOracle', () => {
           },
           data: {
             'public.ts': [],
-            internal: { 'secret.ts': [] },
+            private: { 'secret.ts': [] },
           },
         },
       },
@@ -108,6 +109,137 @@ describe('generateOracle', () => {
         domain: {
           'booking.ts': ['rxjs', '@angular/core', './missing.ts'],
         },
+      },
+    });
+
+    expect(generateOracle('/project/src/main.ts')).toMatchSnapshot();
+  });
+
+  it('preserves duplicate resolved imports with distinct raw specifiers', () => {
+    createProject({
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': sheriffConfig({
+        modules: { 'src/target': 'target' },
+        depRules: { root: noDependencies, target: '*' },
+      }),
+      src: {
+        'main.ts': ['./target', './target/index.ts'],
+        target: { 'index.ts': [] },
+      },
+    });
+
+    expect(generateOracle('/project/src/main.ts')).toMatchSnapshot();
+  });
+
+  it('assigns files only at module path segment boundaries', () => {
+    createProject({
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': sheriffConfig({
+        modules: {
+          'src/a/b': 'module:b',
+          'src/a/bc': 'module:bc',
+        },
+        depRules: { '*': '*' },
+        enableBarrelLess: true,
+      }),
+      src: {
+        'main.ts': ['./a/b/inside.ts', './a/bc/x.ts', './a/bx/x.ts'],
+        a: {
+          b: { 'inside.ts': [] },
+          bc: { 'x.ts': [] },
+          bx: { 'x.ts': [] },
+        },
+      },
+    });
+
+    expect(generateOracle('/project/src/main.ts')).toMatchSnapshot();
+  });
+
+  it('passes resolved files to function dependency and deny rules', () => {
+    createProject({
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': sheriffConfig({
+        modules: {
+          'src/source': 'source',
+          'src/target': 'target',
+        },
+        depRules: {
+          root: 'source',
+          source: ({ toFilePath }) =>
+            toFilePath.endsWith('/allowed.ts') ||
+            toFilePath.endsWith('/denied.ts'),
+          target: noDependencies,
+        },
+        denyRules: {
+          source: ({ toFilePath }) => toFilePath.endsWith('/denied.ts'),
+        },
+        enableBarrelLess: true,
+      }),
+      src: {
+        'main.ts': ['./source'],
+        source: {
+          'index.ts': ['../target/allowed.ts', '../target/denied.ts'],
+        },
+        target: {
+          'allowed.ts': [],
+          'denied.ts': [],
+        },
+      },
+    });
+
+    expect(generateOracle('/project/src/main.ts')).toMatchSnapshot();
+  });
+
+  it('classifies declared but uninstalled dependencies as external', () => {
+    createProject({
+      'package.json': JSON.stringify({
+        dependencies: { 'declared-package': '^1.0.0' },
+      }),
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': sheriffConfig({
+        modules: { 'src/domain': 'domain' },
+        depRules: { '*': '*' },
+        externalRules: { domain: [] },
+        enableBarrelLess: true,
+      }),
+      src: {
+        'main.ts': ['./domain/entry.ts'],
+        domain: { 'entry.ts': ['declared-package/subpath'] },
+      },
+    });
+
+    expect(generateOracle('/project/src/main.ts')).toMatchSnapshot();
+  });
+
+  it('uses noTag when auto tagging does not match moduleConfig', () => {
+    createProject({
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': sheriffConfig({
+        modules: { 'src/manual': 'manual' },
+        depRules: { '*': '*' },
+        enableBarrelLess: true,
+      }),
+      src: {
+        'main.ts': ['./automatic', './manual/entry.ts'],
+        automatic: { 'index.ts': [] },
+        manual: { 'entry.ts': [] },
+      },
+    });
+
+    expect(generateOracle('/project/src/main.ts')).toMatchSnapshot();
+  });
+
+  it('omits imports with configured ignored file extensions', () => {
+    createProject({
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': sheriffConfig({
+        depRules: { '*': '*' },
+        ignoreFileExtensions: ['scss'],
+      }),
+      src: {
+        'main.ts': ['./feature', './styles.scss'],
+        'styles.scss': '',
+        feature: { 'index.ts': [] },
       },
     });
 

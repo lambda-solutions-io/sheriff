@@ -458,6 +458,13 @@ externalRules: {
 
 `depRules` allows functions instead of static values. The names of the tags can include wildcards:
 
+The `RuleMatcherFn` context used by `depRules` and `denyRules` contains `from`
+and `to` (the currently checked tags), `fromTags` and `toTags` (all tags on each
+module), `fromModulePath` and `toModulePath`, plus `fromFilePath` and
+`toFilePath`. `toFilePath` is the resolved imported **file**, not its module
+directory. This release fixes the previous module-path value, so matcher
+functions that relied on that bug must switch to `toModulePath`.
+
 ```typescript
 import { SheriffConfig } from '@lambda-solutions/sheriff-core';
 

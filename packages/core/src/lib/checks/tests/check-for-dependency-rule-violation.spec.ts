@@ -276,6 +276,41 @@ describe('check for dependency rule violation', () => {
     );
   });
 
+  it('should preserve each raw import when two specifiers resolve to one file', () => {
+    const projectInfo = testInit('src/main.ts', {
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': sheriffConfig({
+        modules: { 'src/target': 'target' },
+        depRules: { root: noDependencies, target: '*' },
+      }),
+      src: {
+        'main.ts': ['./target', './target/index.ts'],
+        target: { 'index.ts': [] },
+      },
+    });
+
+    const violations = checkForDependencyRuleViolation(
+      toFsPath('/project/src/main.ts'),
+      projectInfo,
+    );
+
+    expect(
+      violations.map(({ rawImport, toFilePath }) => ({
+        rawImport,
+        toFilePath,
+      })),
+    ).toEqual([
+      {
+        rawImport: './target',
+        toFilePath: '/project/src/target/index.ts',
+      },
+      {
+        rawImport: './target/index.ts',
+        toFilePath: '/project/src/target/index.ts',
+      },
+    ]);
+  });
+
   it('should require that each existing tag has clearance', () => {
     const project = {
       'tsconfig.json': tsConfig(),

@@ -13,6 +13,7 @@ export type DependencyRuleViolation = {
   rawImport: string;
   fromModulePath: FsPath;
   toModulePath: FsPath;
+  toFilePath: FsPath;
   fromTag: string;
   toTags: string[];
   /**
@@ -33,18 +34,16 @@ export function checkForDependencyRuleViolation(
   }
 
   const assignedFileInfo = getFileInfo(fsPath);
-  const importedFilesWithRawImport = assignedFileInfo.imports
+  const importedFilesWithRawImport = assignedFileInfo.importEdges
     // skip imports of same module
     .filter(
-      (importedFi) =>
-        importedFi.moduleInfo.path !== assignedFileInfo.moduleInfo.path,
+      ({ importedFileInfo }) =>
+        importedFileInfo.moduleInfo.path !== assignedFileInfo.moduleInfo.path,
     )
-    .map((fileInfo) => ({
-      importedFilePath: fileInfo.path,
-      importedModulePath: fileInfo.moduleInfo.path,
-      rawImport: assignedFileInfo.getRawImportForImportedFileInfo(
-        fileInfo.path,
-      ),
+    .map(({ importedFileInfo, rawImport }) => ({
+      importedFilePath: importedFileInfo.path,
+      importedModulePath: importedFileInfo.moduleInfo.path,
+      rawImport,
     }));
   const fromModule = toFsPath(assignedFileInfo.moduleInfo.path);
   const fromTags = calcTagsForModule(
@@ -85,6 +84,7 @@ export function checkForDependencyRuleViolation(
           rawImport,
           fromModulePath: fromModule,
           toModulePath: toFsPath(importedModulePath),
+          toFilePath: importedFilePath,
           fromTag,
           toTags,
         });
@@ -97,6 +97,7 @@ export function checkForDependencyRuleViolation(
           rawImport,
           fromModulePath: fromModule,
           toModulePath: toFsPath(importedModulePath),
+          toFilePath: importedFilePath,
           fromTag,
           toTags,
           cause: 'deny-rule',

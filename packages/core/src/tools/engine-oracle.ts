@@ -44,6 +44,7 @@ export type EngineOracleDependencyViolation = {
   rawImport: string;
   fromModulePath: string;
   toModulePath: string;
+  toFilePath: string;
   fromTag: string;
   toTags: string[];
   cause?: 'deny-rule';
@@ -52,6 +53,7 @@ export type EngineOracleDependencyViolation = {
 export type EngineOracleEncapsulationViolation = {
   file: string;
   rawImport: string;
+  toFilePath: string;
 };
 
 export type EngineOracleExternalViolation = {
@@ -125,9 +127,9 @@ function createFileEntry(
   fileInfo: FileInfo,
   rootDir: FsPath,
 ): EngineOracleFile {
-  const resolvedImports: EngineOracleImport[] = fileInfo.imports.map(
-    (importedFileInfo) => ({
-      raw: fileInfo.getRawImportForImportedFileInfo(importedFileInfo.path),
+  const resolvedImports: EngineOracleImport[] = fileInfo.importEdges.map(
+    ({ importedFileInfo, rawImport }) => ({
+      raw: rawImport,
       resolvedPath: relativePath(rootDir, importedFileInfo.path),
       kind: 'module',
     }),
@@ -174,6 +176,7 @@ function createViolations(
           projectInfo.rootDir,
           violation.toModulePath,
         ),
+        toFilePath: relativePath(projectInfo.rootDir, violation.toFilePath),
         fromTag: violation.fromTag,
         toTags: [...violation.toTags].sort(compareStrings),
       };
@@ -183,12 +186,13 @@ function createViolations(
       dependency.push(entry);
     }
 
-    for (const rawImport of Object.keys(
+    for (const [rawImport, importedFileInfo] of Object.entries(
       hasEncapsulationViolations(fileInfo.path, projectInfo),
     )) {
       encapsulation.push({
         file: relativePath(projectInfo.rootDir, fileInfo.path),
         rawImport,
+        toFilePath: relativePath(projectInfo.rootDir, importedFileInfo.path),
       });
     }
 

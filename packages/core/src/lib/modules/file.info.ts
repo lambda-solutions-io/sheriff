@@ -6,11 +6,11 @@ import { FsPath } from '../file-info/fs-path';
  * Central element representing a TypeScript file with its
  * imports and assigned module.
  *
- * Due to ESLint, we can have partial imports (dev is still
- * typing). That's why there is `getRawImportForImportedFileInfo`.
+ * Due to ESLint, we can have partial imports while a developer is typing.
  */
 export class FileInfo {
   #imports: FileInfo[] | undefined;
+  #importEdges: FileInfoImportEdge[] | undefined;
 
   constructor(
     private unassignedFileInfo: UnassignedFileInfo,
@@ -32,11 +32,19 @@ export class FileInfo {
   }
 
   /**
-   * For unresolvable imports (ESLint while user is typing) we want
-   * to get the string as it is in the file.
+   * Every resolved import in source order, including multiple raw specifiers
+   * which resolve to the same file.
    */
-  getRawImportForImportedFileInfo(path: FsPath): string {
-    return this.unassignedFileInfo.getRawImportForImportedFileInfo(path);
+  get importEdges(): ReadonlyArray<Readonly<FileInfoImportEdge>> {
+    if (this.#importEdges === undefined) {
+      this.#importEdges = this.unassignedFileInfo.importEdges.map(
+        ({ importedFileInfo, rawImport }) => ({
+          importedFileInfo: this.getFileInfo(importedFileInfo.path),
+          rawImport,
+        }),
+      );
+    }
+    return this.#importEdges;
   }
 
   get unresolvableImports() {
@@ -55,3 +63,8 @@ export class FileInfo {
     return this.unassignedFileInfo.getExternalLibraries();
   }
 }
+
+export type FileInfoImportEdge = {
+  importedFileInfo: FileInfo;
+  rawImport: string;
+};

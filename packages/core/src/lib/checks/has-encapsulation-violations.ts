@@ -23,7 +23,10 @@ export function hasEncapsulationViolations(
   const encapsulationViolations: Record<string, FileInfo> = {};
   const assignedFileInfo = getFileInfo(fsPath);
 
-  for (const importedFileInfo of assignedFileInfo.imports) {
+  for (const {
+    importedFileInfo,
+    rawImport,
+  } of assignedFileInfo.importEdges) {
     if (
       isSameModule(importedFileInfo, assignedFileInfo) ||
       isExcludedRootModule(rootDir, config, importedFileInfo) ||
@@ -36,9 +39,6 @@ export function hasEncapsulationViolations(
     ) {
       // 👍 all good
     } else {
-      const rawImport = assignedFileInfo.getRawImportForImportedFileInfo(
-        importedFileInfo.path,
-      );
       encapsulationViolations[rawImport] = importedFileInfo;
     }
   }

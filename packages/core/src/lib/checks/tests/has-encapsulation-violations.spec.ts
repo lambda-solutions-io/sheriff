@@ -57,4 +57,26 @@ describe('check encapsulation', () => {
       ).toEqual(deepImports);
     }
   });
+
+  it('should preserve distinct raw specifiers for one encapsulated file', () => {
+    const projectInfo = testInit('src/main.ts', {
+      'tsconfig.json': tsConfig(),
+      src: {
+        'main.ts': ['./target/internal', './target/internal.ts'],
+        target: {
+          'index.ts': [],
+          'internal.ts': [],
+        },
+      },
+    });
+
+    expect(
+      Object.keys(
+        hasEncapsulationViolations(
+          toFsPath('/project/src/main.ts'),
+          projectInfo,
+        ),
+      ),
+    ).toEqual(['./target/internal', './target/internal.ts']);
+  });
 });

@@ -1,5 +1,78 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`generateOracle > assigns files only at module path segment boundaries 1`] = `
+{
+  "files": [
+    {
+      "imports": [],
+      "module": "src/a/b",
+      "path": "src/a/b/inside.ts",
+    },
+    {
+      "imports": [],
+      "module": "src/a/bc",
+      "path": "src/a/bc/x.ts",
+    },
+    {
+      "imports": [],
+      "module": ".",
+      "path": "src/a/bx/x.ts",
+    },
+    {
+      "imports": [
+        {
+          "kind": "module",
+          "raw": "./a/b/inside.ts",
+          "resolvedPath": "src/a/b/inside.ts",
+        },
+        {
+          "kind": "module",
+          "raw": "./a/bc/x.ts",
+          "resolvedPath": "src/a/bc/x.ts",
+        },
+        {
+          "kind": "module",
+          "raw": "./a/bx/x.ts",
+          "resolvedPath": "src/a/bx/x.ts",
+        },
+      ],
+      "module": ".",
+      "path": "src/main.ts",
+    },
+  ],
+  "modules": [
+    {
+      "isBarrel": false,
+      "path": ".",
+      "tags": [
+        "root",
+      ],
+    },
+    {
+      "isBarrel": false,
+      "path": "src/a/b",
+      "tags": [
+        "module:b",
+      ],
+    },
+    {
+      "isBarrel": false,
+      "path": "src/a/bc",
+      "tags": [
+        "module:bc",
+      ],
+    },
+  ],
+  "rootDir": ".",
+  "version": 1,
+  "violations": {
+    "dependency": [],
+    "encapsulation": [],
+    "external": [],
+  },
+}
+`;
+
 exports[`generateOracle > captures barrel modules and deep imports 1`] = `
 {
   "files": [
@@ -65,6 +138,7 @@ exports[`generateOracle > captures barrel modules and deep imports 1`] = `
       {
         "file": "src/main.ts",
         "rawImport": "./feature/internal.ts",
+        "toFilePath": "src/feature/internal.ts",
       },
     ],
     "external": [],
@@ -78,7 +152,7 @@ exports[`generateOracle > captures barrel-less encapsulation 1`] = `
     {
       "imports": [],
       "module": "src/customer/data",
-      "path": "src/customer/data/internal/secret.ts",
+      "path": "src/customer/data/private/secret.ts",
     },
     {
       "imports": [],
@@ -100,8 +174,8 @@ exports[`generateOracle > captures barrel-less encapsulation 1`] = `
       "imports": [
         {
           "kind": "module",
-          "raw": "./customer/data/internal/secret.ts",
-          "resolvedPath": "src/customer/data/internal/secret.ts",
+          "raw": "./customer/data/private/secret.ts",
+          "resolvedPath": "src/customer/data/private/secret.ts",
         },
         {
           "kind": "module",
@@ -145,7 +219,8 @@ exports[`generateOracle > captures barrel-less encapsulation 1`] = `
     "encapsulation": [
       {
         "file": "src/main.ts",
-        "rawImport": "./customer/data/internal/secret.ts",
+        "rawImport": "./customer/data/private/secret.ts",
+        "toFilePath": "src/customer/data/private/secret.ts",
       },
     ],
     "external": [],
@@ -304,6 +379,7 @@ exports[`generateOracle > captures placeholder tags and dependency violations 1`
         "fromModulePath": "src/customers/feature",
         "fromTag": "domain:customers",
         "rawImport": "../../holidays/data",
+        "toFilePath": "src/holidays/data/index.ts",
         "toModulePath": "src/holidays/data",
         "toTags": [
           "domain:holidays",
@@ -316,6 +392,7 @@ exports[`generateOracle > captures placeholder tags and dependency violations 1`
         "fromModulePath": "src/customers/feature",
         "fromTag": "type:feature",
         "rawImport": "../data",
+        "toFilePath": "src/customers/data/index.ts",
         "toModulePath": "src/customers/data",
         "toTags": [
           "domain:customers",
@@ -323,6 +400,334 @@ exports[`generateOracle > captures placeholder tags and dependency violations 1`
         ],
       },
     ],
+    "encapsulation": [],
+    "external": [],
+  },
+}
+`;
+
+exports[`generateOracle > classifies declared but uninstalled dependencies as external 1`] = `
+{
+  "files": [
+    {
+      "imports": [
+        {
+          "kind": "external",
+          "raw": "declared-package/subpath",
+          "resolvedPath": null,
+        },
+      ],
+      "module": "src/domain",
+      "path": "src/domain/entry.ts",
+    },
+    {
+      "imports": [
+        {
+          "kind": "module",
+          "raw": "./domain/entry.ts",
+          "resolvedPath": "src/domain/entry.ts",
+        },
+      ],
+      "module": ".",
+      "path": "src/main.ts",
+    },
+  ],
+  "modules": [
+    {
+      "isBarrel": false,
+      "path": ".",
+      "tags": [
+        "root",
+      ],
+    },
+    {
+      "isBarrel": false,
+      "path": "src/domain",
+      "tags": [
+        "domain",
+      ],
+    },
+  ],
+  "rootDir": ".",
+  "version": 1,
+  "violations": {
+    "dependency": [],
+    "encapsulation": [],
+    "external": [
+      {
+        "externalLibrary": "declared-package/subpath",
+        "file": "src/domain/entry.ts",
+        "fromTag": "domain",
+      },
+    ],
+  },
+}
+`;
+
+exports[`generateOracle > omits imports with configured ignored file extensions 1`] = `
+{
+  "files": [
+    {
+      "imports": [],
+      "module": "src/feature",
+      "path": "src/feature/index.ts",
+    },
+    {
+      "imports": [
+        {
+          "kind": "module",
+          "raw": "./feature",
+          "resolvedPath": "src/feature/index.ts",
+        },
+      ],
+      "module": ".",
+      "path": "src/main.ts",
+    },
+  ],
+  "modules": [
+    {
+      "isBarrel": false,
+      "path": ".",
+      "tags": [
+        "root",
+      ],
+    },
+    {
+      "isBarrel": true,
+      "path": "src/feature",
+      "tags": [
+        "noTag",
+      ],
+    },
+  ],
+  "rootDir": ".",
+  "version": 1,
+  "violations": {
+    "dependency": [],
+    "encapsulation": [],
+    "external": [],
+  },
+}
+`;
+
+exports[`generateOracle > passes resolved files to function dependency and deny rules 1`] = `
+{
+  "files": [
+    {
+      "imports": [
+        {
+          "kind": "module",
+          "raw": "./source",
+          "resolvedPath": "src/source/index.ts",
+        },
+      ],
+      "module": ".",
+      "path": "src/main.ts",
+    },
+    {
+      "imports": [
+        {
+          "kind": "module",
+          "raw": "../target/allowed.ts",
+          "resolvedPath": "src/target/allowed.ts",
+        },
+        {
+          "kind": "module",
+          "raw": "../target/denied.ts",
+          "resolvedPath": "src/target/denied.ts",
+        },
+      ],
+      "module": "src/source",
+      "path": "src/source/index.ts",
+    },
+    {
+      "imports": [],
+      "module": "src/target",
+      "path": "src/target/allowed.ts",
+    },
+    {
+      "imports": [],
+      "module": "src/target",
+      "path": "src/target/denied.ts",
+    },
+  ],
+  "modules": [
+    {
+      "isBarrel": false,
+      "path": ".",
+      "tags": [
+        "root",
+      ],
+    },
+    {
+      "isBarrel": true,
+      "path": "src/source",
+      "tags": [
+        "source",
+      ],
+    },
+    {
+      "isBarrel": false,
+      "path": "src/target",
+      "tags": [
+        "target",
+      ],
+    },
+  ],
+  "rootDir": ".",
+  "version": 1,
+  "violations": {
+    "dependency": [
+      {
+        "cause": "deny-rule",
+        "file": "src/source/index.ts",
+        "fromModulePath": "src/source",
+        "fromTag": "source",
+        "rawImport": "../target/denied.ts",
+        "toFilePath": "src/target/denied.ts",
+        "toModulePath": "src/target",
+        "toTags": [
+          "target",
+        ],
+      },
+    ],
+    "encapsulation": [],
+    "external": [],
+  },
+}
+`;
+
+exports[`generateOracle > preserves duplicate resolved imports with distinct raw specifiers 1`] = `
+{
+  "files": [
+    {
+      "imports": [
+        {
+          "kind": "module",
+          "raw": "./target",
+          "resolvedPath": "src/target/index.ts",
+        },
+        {
+          "kind": "module",
+          "raw": "./target/index.ts",
+          "resolvedPath": "src/target/index.ts",
+        },
+      ],
+      "module": ".",
+      "path": "src/main.ts",
+    },
+    {
+      "imports": [],
+      "module": "src/target",
+      "path": "src/target/index.ts",
+    },
+  ],
+  "modules": [
+    {
+      "isBarrel": false,
+      "path": ".",
+      "tags": [
+        "root",
+      ],
+    },
+    {
+      "isBarrel": true,
+      "path": "src/target",
+      "tags": [
+        "target",
+      ],
+    },
+  ],
+  "rootDir": ".",
+  "version": 1,
+  "violations": {
+    "dependency": [
+      {
+        "file": "src/main.ts",
+        "fromModulePath": ".",
+        "fromTag": "root",
+        "rawImport": "./target",
+        "toFilePath": "src/target/index.ts",
+        "toModulePath": "src/target",
+        "toTags": [
+          "target",
+        ],
+      },
+      {
+        "file": "src/main.ts",
+        "fromModulePath": ".",
+        "fromTag": "root",
+        "rawImport": "./target/index.ts",
+        "toFilePath": "src/target/index.ts",
+        "toModulePath": "src/target",
+        "toTags": [
+          "target",
+        ],
+      },
+    ],
+    "encapsulation": [],
+    "external": [],
+  },
+}
+`;
+
+exports[`generateOracle > uses noTag when auto tagging does not match moduleConfig 1`] = `
+{
+  "files": [
+    {
+      "imports": [],
+      "module": "src/automatic",
+      "path": "src/automatic/index.ts",
+    },
+    {
+      "imports": [
+        {
+          "kind": "module",
+          "raw": "./automatic",
+          "resolvedPath": "src/automatic/index.ts",
+        },
+        {
+          "kind": "module",
+          "raw": "./manual/entry.ts",
+          "resolvedPath": "src/manual/entry.ts",
+        },
+      ],
+      "module": ".",
+      "path": "src/main.ts",
+    },
+    {
+      "imports": [],
+      "module": "src/manual",
+      "path": "src/manual/entry.ts",
+    },
+  ],
+  "modules": [
+    {
+      "isBarrel": false,
+      "path": ".",
+      "tags": [
+        "root",
+      ],
+    },
+    {
+      "isBarrel": true,
+      "path": "src/automatic",
+      "tags": [
+        "noTag",
+      ],
+    },
+    {
+      "isBarrel": false,
+      "path": "src/manual",
+      "tags": [
+        "manual",
+      ],
+    },
+  ],
+  "rootDir": ".",
+  "version": 1,
+  "violations": {
+    "dependency": [],
     "encapsulation": [],
     "external": [],
   },
