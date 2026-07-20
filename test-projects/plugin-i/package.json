@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
+    "@lambda-solutions/eslint-plugin-sheriff": "file:.yalc/@lambda-solutions/eslint-plugin-sheriff",
+    "@lambda-solutions/sheriff-core": "file:.yalc/@lambda-solutions/sheriff-core",
+    "@lambda-solutions/sheriff-ui": "file:.yalc/@lambda-solutions/sheriff-ui",
     "mberger-junit-sheriff": "file:./plugins/mberger-junit-sheriff"
   },
   "devDependencies": {
