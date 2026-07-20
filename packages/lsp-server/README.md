@@ -37,23 +37,87 @@ For local development from this repository, use the built binary:
 ```json
 {
   "command": "node",
-  "args": ["dist/packages/lsp-server/src/main.js", "--stdio"],
+  "args": ["tools/scripts/run-lsp-local.mjs", "--stdio"],
   "languages": ["typescript", "typescriptreact", "javascript", "javascriptreact"]
 }
 ```
 
 ## IntelliJ
 
-IntelliJ Platform 2023.2 and newer can host native LSP integrations. For IDEs
-without a dedicated Sheriff integration, LSP4IJ can start the same stdio
-command:
+Install the [LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij)
+plugin, then open **Settings | Languages & Frameworks | Language Servers** and
+add a user-defined server with:
 
-```text
-node dist/packages/lsp-server/src/main.js --stdio
+- Name: `Sheriff`
+- Command when IntelliJ opened this repository:
+
+  ```text
+  node $PROJECT_DIR$/tools/scripts/run-lsp-local.mjs --stdio
+  ```
+
+- Command when IntelliJ opened a separate consumer project: use absolute paths
+  for both Node and this repository's `tools/scripts/run-lsp-local.mjs`.
+
+In **Mappings | File name patterns**, add:
+
+| Pattern | Language ID       |
+| ------- | ----------------- |
+| `*.ts`  | `typescript`      |
+| `*.tsx` | `typescriptreact` |
+| `*.js`  | `javascript`      |
+| `*.jsx` | `javascriptreact` |
+
+File-name mappings also work in IntelliJ editions that use TextMate for
+TypeScript and preserve that syntax highlighting. No initialization options or
+server configuration are required.
+
+Build before starting IntelliJ:
+
+```bash
+YARN_IGNORE_PATH=1 corepack yarn install --frozen-lockfile
+YARN_IGNORE_PATH=1 corepack yarn build:all
 ```
 
-Map the server to TypeScript and JavaScript file types in the project that has
-`tsconfig.json` and `sheriff.config.ts` at the TypeScript project root.
+`YARN_IGNORE_PATH=1` ensures this Yarn 1 repository is not redirected by a
+user-level Yarn 4 configuration.
+
+To verify this checkout, open
+`test-projects/angular-iv/src/app/app.component.ts` and temporarily add this
+unsaved import:
+
+```ts
+import { MessageService } from './shared/ui-messaging/message/message.service';
+```
+
+The module specifier should receive a red `sheriff` diagnostic explaining that
+it is a deep import. Removing the line should clear the diagnostic without
+saving. Use **View | Tool Windows | LSP Consoles** to inspect `initialize`,
+`textDocument/didOpen` or `textDocument/didChange`, and
+`textDocument/publishDiagnostics` messages. Set the server's trace level to
+`verbose` in its **Debug** tab when troubleshooting.
+
+If LSP4IJ cannot find `node`, replace it with the result of `command -v node`.
+If the server reports a missing module, rebuild and confirm that both
+`dist/packages/lsp-server/src/main.js` and
+`dist/packages/lsp-server/src/lib/diagnostics-worker.js` exist. Empty
+diagnostics usually mean the opened file has no nearest `tsconfig.json` or no
+Sheriff config discoverable from that TypeScript project.
+
+## Performance model
+
+The stdio transport stays responsive while Sheriff performs synchronous
+filesystem and TypeScript analysis in one persistent worker thread. Only one
+analysis runs at a time, queued revisions of the same URI are coalesced, and
+results from older document versions are discarded. A document revision is
+analyzed once for dependency, external, and encapsulation rules; the core keeps
+at most 16 document analyses and validates their filesystem dependencies before
+reuse. Changes are debounced by 150 ms while document-open analysis remains
+immediate.
+
+The local launcher creates a temporary module-resolution link to the built core
+package, forwards stdio without adding protocol output, and removes the link
+when the server exits. Installed releases do not need the launcher; use the
+published `sheriff-lsp --stdio` binary directly.
 
 ## Protocol
 
@@ -83,6 +147,6 @@ import or export statement. If the file is outside a TypeScript project or no
 `sheriff.config.ts` is found by Sheriff's core project discovery, the server
 publishes an empty diagnostics array.
 
-The current implementation uses the same in-process core API as the ESLint
-plugin. A daemon-backed implementation can be added behind the diagnostics
-creation function later without changing the LSP transport.
+The current implementation uses the same core API as the ESLint plugin from a
+persistent worker. A daemon-backed implementation can be added behind the
+diagnostics creation function later without changing the LSP transport.

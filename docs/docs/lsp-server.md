@@ -35,22 +35,30 @@ When testing from a local checkout, point the client at the built file instead:
 ```json
 {
   "command": "node",
-  "args": ["dist/packages/lsp-server/src/main.js", "--stdio"],
+  "args": ["tools/scripts/run-lsp-local.mjs", "--stdio"],
   "languages": ["typescript", "typescriptreact", "javascript", "javascriptreact"]
 }
 ```
 
 ## IntelliJ
 
-IntelliJ Platform 2023.2 and newer includes an LSP API. If your IDE does not
-ship a Sheriff integration, use LSP4IJ and configure it to start:
+Install LSP4IJ from the JetBrains Marketplace. In **Settings | Languages &
+Frameworks | Language Servers**, add a user-defined server named `Sheriff`.
+When IntelliJ opened this repository, use:
 
 ```text
-node dist/packages/lsp-server/src/main.js --stdio
+node $PROJECT_DIR$/tools/scripts/run-lsp-local.mjs --stdio
 ```
 
-Attach the server to TypeScript and JavaScript file types in a project that has
-`tsconfig.json` and `sheriff.config.ts` at the TypeScript project root.
+For a separate consumer project, use absolute paths to Node and the built
+repository's `tools/scripts/run-lsp-local.mjs`. Add file-name mappings for
+`*.ts` / `typescript`, `*.tsx` / `typescriptreact`, `*.js` / `javascript`, and
+`*.jsx` / `javascriptreact`. No initialization options are needed.
+
+After applying the settings, inspect **View | Tool Windows | LSP Consoles**.
+Opening or editing a mapped file should show `didOpen` or `didChange`, followed
+by `publishDiagnostics`. Diagnostics update from unsaved content. See the
+package README for a concrete fixture and troubleshooting checklist.
 
 ## Capabilities
 
@@ -77,6 +85,9 @@ buffer.
 Files outside a TypeScript project or without a `sheriff.config.ts` beside the
 nearest `tsconfig.json` publish an empty diagnostics list.
 
-The implementation is intentionally in-process today. A Sheriff daemon bridge
-can be added behind the diagnostics creation function later without changing
-the editor-facing LSP transport.
+Sheriff analysis runs in one persistent worker thread so synchronous project
+work cannot block the LSP transport. Queued revisions of the same document are
+coalesced, stale results are discarded, changes are debounced by 150 ms, and
+all rule families share one bounded, dependency-validated document analysis.
+A Sheriff daemon bridge can still be added behind the diagnostics function
+later without changing the editor-facing transport.
