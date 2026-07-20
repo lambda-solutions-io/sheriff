@@ -49,3 +49,13 @@ export const toFsPath = (path: string): FsPath => {
       return path as FsPath;
   }
 };
+
+/**
+ * Constructs an FsPath from an absolute path returned by a Dirent scan.
+ * The caller must obtain the path from `readdirSync({ withFileTypes: true })`,
+ * which establishes the entry's existence without another filesystem probe.
+ */
+export const toFsPathFromDirent = (path: string): FsPath => {
+  fsPathCache.add(path);
+  return path as FsPath;
+};
