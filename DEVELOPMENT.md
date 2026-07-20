@@ -1,4 +1,5 @@
 # About Sheriff
+
 Sheriff consists of three processes:
 
 1. File Graph: `traverseFilesystem` gets and entry file and returns a graph of all the files that are required to run
@@ -13,6 +14,7 @@ The entry point is always the `init` function.
 # Development
 
 ## Setup
+
 We are using `yarn` as our package manager. To install all dependencies, run the following command:
 
 ```shell
@@ -27,6 +29,32 @@ expected. The following steps are required to run the tests:
 1. **Build Sheriff**: `yarn build:all`
 2. **Link Sheriff**: `yarn link:sheriff`
 3. **Run the integration tests**: Execute one of the `integration-test.sh`-scripts within the tests projects or run all by executing the `run-integration-tests.sh`.
+
+## Performance regression checks
+
+The normal Vitest suite always runs deterministic cache and operation-count
+guards. Wall-clock scaling is intentionally opt-in so shared CI load cannot
+make it flaky:
+
+```shell
+SHERIFF_PERF=1 yarn vitest run packages/core/src/lib/main/init-performance.perf.spec.ts
+```
+
+For a reproducible CLI baseline, build Sheriff and run the benchmark harness:
+
+```shell
+yarn build:all
+yarn perf:bench
+yarn perf:bench:compare
+```
+
+The harness regenerates 2,101-file and 10,501-file projects below ignored
+`tmp/perf`, runs `verify` three times per size, and records each median in
+`tools/perf/baseline.json`. `perf:bench:compare` leaves the baseline unchanged
+and fails when either median is more than 25% slower. Review machine and Node
+version differences before treating a comparison as a code regression. To
+accept an intentional performance change, rerun `yarn perf:bench`, inspect the
+new table, and commit the updated baseline.
 
 # Fork maintenance (@lambda-solutions/sheriff)
 

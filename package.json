@@ -8,6 +8,8 @@
     "commit": "commit",
     "lint:all": "eslint ./packages",
     "link:sheriff": "yarn run build:all && yalc publish dist/packages/core && yalc publish dist/packages/eslint-plugin && yalc link @lambda-solutions/sheriff-core @lambda-solutions/eslint-plugin-sheriff",
+    "perf:bench": "node tools/perf/run-bench.mjs",
+    "perf:bench:compare": "node tools/perf/run-bench.mjs --compare",
     "run:cli": "nx build core && chmod +x dist/packages/core/src/bin/main.js",
     "test": "vitest",
     "test:ci": "vitest -c vitest.config.ci.ts"

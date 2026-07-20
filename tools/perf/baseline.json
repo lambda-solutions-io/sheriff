@@ -1,0 +1,14 @@
+{
+  "gitSha": "e48cc79e4eba70a2d1600e284b647e88d0ed4ff9",
+  "node": "v22.16.0",
+  "sizes": {
+    "2.1k": {
+      "files": 2101,
+      "medianMs": 404.81
+    },
+    "10.5k": {
+      "files": 10501,
+      "medianMs": 1730.97
+    }
+  }
+}
