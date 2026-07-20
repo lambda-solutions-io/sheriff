@@ -36,6 +36,22 @@ export const isFsPath = (path: string): path is FsPath => {
 };
 
 /**
+ * Maps a path to an FsPath without touching the filesystem.
+ *
+ * Only for callers that already have proof the absolute path exists — e.g. a
+ * `Dirent` from `readdirSync(..., { withFileTypes: true })`, where the
+ * directory read itself established existence. Using it there avoids one
+ * `exists()` syscall per directory entry.
+ *
+ * The path is added to the shared cache so a later `toFsPath` on the same
+ * path is free too. Passing a non-existing path breaks the `FsPath` contract.
+ */
+export const toExistingFsPath = (path: string): FsPath => {
+  fsPathCache.add(path);
+  return path as FsPath;
+};
+
+/**
  * Maps a path to an FsPath. Throws an error if the path does not exist or is
  * relative.
  */

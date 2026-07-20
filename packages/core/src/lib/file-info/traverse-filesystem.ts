@@ -5,6 +5,7 @@ import { TsData } from './ts-data';
 import { FsPath } from './fs-path';
 import { resolvePotentialTsPath } from './resolve-potential-ts-path';
 import { fixPathSeparators } from './fix-path-separators';
+import { isInsideRoot } from './is-inside-root';
 import { isRelativeImport } from '../eslint/is-relative-import';
 import {
   extractPackageName,
@@ -172,7 +173,7 @@ function resolveImports(
       const { resolvedFileName } = resolvedImport.resolvedModule;
       if (!resolvedImport.resolvedModule.isExternalLibraryImport) {
         const importPath = fixPathSeparators(resolvedFileName);
-        if (!importPath.startsWith(rootDir)) {
+        if (!isInsideRoot(importPath, rootDir)) {
           throw new Error(`${importPath} is outside of root ${rootDir}`);
         }
         resolutions.push({ kind: 'module', raw: fileName, importPath });
