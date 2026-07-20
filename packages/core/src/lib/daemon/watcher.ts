@@ -1,6 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { toFsPath } from '../file-info/fs-path';
+import {
+  FsPath,
+  toFsPath,
+  toFsPathFromDirent,
+} from '../file-info/fs-path';
 import {
   invalidatePath,
   invalidateStructure,
@@ -39,11 +43,12 @@ export type WatcherOptions = {
  */
 export function startWatcher(options: WatcherOptions): { close: () => void } {
   const { rootDir, onInvalidate, onConfigChange } = options;
+  const knownPaths = scanKnownPaths(rootDir);
 
   const watcher = fs.watch(
     rootDir,
     { recursive: true },
-    (_eventType, filename) => {
+    (eventType, filename) => {
       if (!filename || isIgnored(filename)) {
         return;
       }
@@ -55,15 +60,33 @@ export function startWatcher(options: WatcherOptions): { close: () => void } {
         return;
       }
 
-      // `fs.watch` does not distinguish add/unlink from content changes
-      // reliably across platforms, so a structural drop happens for
-      // every event. Structure caches are cheap to rebuild once.
-      invalidateStructure();
-      try {
-        invalidatePath(toFsPath(absolutePath));
-      } catch {
-        // deleted files cannot be converted to an FsPath; their cache
-        // entries die through dependency validation instead
+      const knownPath = knownPaths.get(absolutePath);
+      const existsNow = safeExists(absolutePath);
+      const isContentChange =
+        isSupportedEventType(eventType) &&
+        knownPath !== undefined &&
+        existsNow === true;
+
+      let pathToInvalidate = knownPath;
+      if (existsNow === true && pathToInvalidate === undefined) {
+        try {
+          pathToInvalidate = toFsPath(absolutePath);
+          knownPaths.set(absolutePath, pathToInvalidate);
+        } catch {
+          // The path vanished between the direct existence probe and
+          // conversion. The structural invalidation below is conservative.
+        }
+      } else if (existsNow === false) {
+        removeKnownPathAndDescendants(knownPaths, absolutePath);
+      }
+
+      if (!isContentChange) {
+        // New, removed, unknown, or ambiguous paths can change module
+        // resolution for imports anywhere in the project.
+        invalidateStructure();
+      }
+      if (pathToInvalidate !== undefined) {
+        invalidatePath(pathToInvalidate);
       }
 
       onInvalidate?.(absolutePath);
@@ -71,6 +94,60 @@ export function startWatcher(options: WatcherOptions): { close: () => void } {
   );
 
   return { close: () => watcher.close() };
+}
+
+function scanKnownPaths(rootDir: string): Map<string, FsPath> {
+  const knownPaths = new Map<string, FsPath>();
+  scanDirectory(rootDir, knownPaths);
+  return knownPaths;
+}
+
+function scanDirectory(directory: string, knownPaths: Map<string, FsPath>) {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(directory, { withFileTypes: true });
+  } catch {
+    // An incomplete initial scan only causes extra structural invalidations:
+    // an unrecorded path is always treated conservatively as newly present.
+    return;
+  }
+
+  for (const entry of entries) {
+    const absolutePath = path.join(directory, entry.name);
+    if (isIgnored(entry.name)) {
+      continue;
+    }
+
+    knownPaths.set(absolutePath, toFsPathFromDirent(absolutePath));
+    if (entry.isDirectory()) {
+      scanDirectory(absolutePath, knownPaths);
+    }
+  }
+}
+
+function safeExists(absolutePath: string): boolean | undefined {
+  try {
+    return fs.existsSync(absolutePath);
+  } catch {
+    // Unknown is distinct from missing so callers retain conservative state.
+    return undefined;
+  }
+}
+
+function isSupportedEventType(eventType: string): boolean {
+  return eventType === 'change' || eventType === 'rename';
+}
+
+function removeKnownPathAndDescendants(
+  knownPaths: Map<string, FsPath>,
+  absolutePath: string,
+) {
+  const descendantPrefix = `${absolutePath}${path.sep}`;
+  for (const knownPath of knownPaths.keys()) {
+    if (knownPath === absolutePath || knownPath.startsWith(descendantPrefix)) {
+      knownPaths.delete(knownPath);
+    }
+  }
 }
 
 function isIgnored(filename: string | Buffer): boolean {
