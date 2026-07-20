@@ -644,21 +644,37 @@ being fixed:
 **Impurity gate, per owner decision**: dynamic double-evaluation removed entirely —
 callbacks now run **exactly once**, so detection can no longer perturb user state —
 replaced by a **static-only gate rejecting any callback that references a free
-identifier**. Implemented with **acorn + eslint-scope** scope analysis rather than
-a regex, so destructured params, nested arrow params, property keys and string
-literals are not false positives. Verified: `sameTag` and `endsWith` predicates are
-still accepted; the reproducer above is rejected with `SHERIFF_ENGINE_IMPURE_CALLBACK`
-naming `bump`, **invoked zero times**.
+identifier**. Implemented with the **TypeScript compiler API** — `ts.createSourceFile`
++ `ts.createProgram` + `getTypeChecker` — resolving every identifier through the
+checker's symbol table and rejecting any whose declaration falls outside the
+callback's own node range, rather than a regex. Destructured params, nested arrow
+params, shorthand properties, non-computed property keys and string literals are
+therefore not false positives; `this`, `super`, `import.meta`/`new.target`, native
+functions, and unparseable source forms are rejected outright. Verified: `sameTag`
+and `endsWith` predicates are still accepted; the reproducer above is rejected with
+`SHERIFF_ENGINE_IMPURE_CALLBACK` naming `bump`, **invoked zero times**.
 
 The gate's honest boundary: whole-program dataflow is not recoverable from
 `Function.prototype.toString`, so a free identifier is the limit of what static
 screening can prove. Callbacks calling imported helpers are now rejected — intended,
 per the rule that a false "impure" costs only speed.
 
-**Packaging fix found while verifying**: `acorn`/`eslint-scope` resolved only via
-eslint's hoisted `node_modules` and were declared nowhere. Now declared in
-`packages/sheriff-engine/package.json`; a real install would otherwise have broken.
-Nx build target set unchanged (`core`, `eslint-plugin`, `mcp-server`).
+The gate's honest limit, beyond free identifiers: it cannot prove that calls made
+*through a parameter* are side-effect-free, nor detect mutation reachable only
+through one. Documented in `packages/sheriff-engine/README.md`.
+
+**Packaging fix found while verifying**: `typescript` was undeclared here and
+resolved only via hoisting. Now a `peerDependency >=4.8` (`e5b6a5f`), matching
+`packages/core`'s convention and the oracle contract. Nx build target set unchanged
+(`core`, `eslint-plugin`, `mcp-server`).
+
+**Process note worth keeping**: `78ced96`'s message first claimed the gate used
+acorn + eslint-scope, and added both as dependencies. It never did — the
+coordinator read an intermediate state of `index.js` mid-run and did not re-check
+after codex switched approaches. Caught by a reviewer relay and corrected in
+`e5b6a5f`. Verify the *final* file before describing an implementation, even when
+the gates are green: passing tests say nothing about whether the description of the
+code is true.
 
 Final: 81 rust tests, **23 conformance (0 skipped, was 15)**, 583 TS tests, harness
 8/8 / 0 fallback / 0 divergences, parity 9/9, oracle snapshots untouched.
