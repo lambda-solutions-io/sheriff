@@ -11,6 +11,11 @@ crate-type = ["cdylib"]
 fancy-regex = "0.18.0"
 napi = { version = "2.16.17", features = ["serde-json"] }
 napi-derive = "2.16.13"
+oxc_allocator = "0.140.0"
+oxc_ast = "0.140.0"
+oxc_parser = "0.140.0"
+oxc_resolver = "11.24.2"
+oxc_span = "0.140.0"
 rayon = "1.12.0"
 rustc-hash = "2.1.3"
 serde = { version = "1.0.229", features = ["derive"] }
