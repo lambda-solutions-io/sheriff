@@ -1,12 +1,7 @@
 import * as net from 'net';
 import * as fs from 'fs';
 import { version as packageVersion } from '../../../package.json';
-import { toFsPath } from '../file-info/fs-path';
-import { init } from '../main/init';
-import { checkForDependencyRuleViolation } from '../checks/check-for-dependency-rule-violation';
-import { checkForExternalRuleViolation } from '../checks/check-for-external-rule-violation';
-import { hasEncapsulationViolations } from '../checks/has-encapsulation-violations';
-import { isRelativeImport } from '../eslint/is-relative-import';
+import { getDocumentLintAnalysis } from '../eslint/lint-document';
 import { getPlugins } from '../cli/internal/get-plugins';
 import { createPluginAPI } from '../plugin/create-plugin-api';
 import { ProjectDataOptions } from '../plugin/plugin-api';
@@ -56,10 +51,7 @@ export function startDaemonServer(
 
   let shutdown: (reason: string) => void = () => void 0;
 
-  const idleTimer = setTimeout(
-    () => shutdown('idle timeout'),
-    idleTimeoutMs,
-  );
+  const idleTimer = setTimeout(() => shutdown('idle timeout'), idleTimeoutMs);
   idleTimer.unref();
 
   const watcher = startWatcher({
@@ -129,7 +121,9 @@ function handleRequestLine(
   } catch (error) {
     return {
       id: request.id,
-      error: { message: error instanceof Error ? error.message : String(error) },
+      error: {
+        message: error instanceof Error ? error.message : String(error),
+      },
     };
   }
 }
@@ -202,14 +196,13 @@ function getPluginAPI() {
  * `fileContent` carries unsaved editor buffers.
  */
 function lintFile(filename: string, fileContent?: string) {
-  const entryFile = toFsPath(filename);
-  const projectInfo = init(entryFile, {
-    traverse: false,
-    returnOnMissingConfig: true,
-    entryFileContent: fileContent,
-  });
+  const { result, configFileIsMissing } = getDocumentLintAnalysis(
+    filename,
+    fileContent,
+    true,
+  );
 
-  if (!projectInfo) {
+  if (configFileIsMissing) {
     return {
       dependencyRuleViolations: [],
       encapsulationViolations: [],
@@ -219,29 +212,21 @@ function lintFile(filename: string, fileContent?: string) {
   }
 
   return {
-    dependencyRuleViolations: checkForDependencyRuleViolation(
-      entryFile,
-      projectInfo,
-    ).map((violation) => ({
-      fromTag: violation.fromTag,
-      toTags: violation.toTags,
-      rawImport: violation.rawImport,
-    })),
-    encapsulationViolations: Object.keys(
-      hasEncapsulationViolations(entryFile, projectInfo),
+    dependencyRuleViolations: result.dependencyRuleViolations.map(
+      (violation) => ({
+        fromTag: violation.fromTag,
+        toTags: violation.toTags,
+        rawImport: violation.rawImport,
+      }),
     ),
-    externalRuleViolations: checkForExternalRuleViolation(
-      entryFile,
-      projectInfo,
-    ).map((violation) => ({
+    encapsulationViolations: Object.keys(result.encapsulationViolations),
+    externalRuleViolations: result.externalRuleViolations.map((violation) => ({
       fromTag: violation.fromTag,
       externalLibrary: violation.externalLibrary,
     })),
     // Mirror the in-process rules, which report unresolvable relative imports
     // (e.g. a typo'd './foo') that the resolved-import checks never surface.
-    unresolvableImports: projectInfo.fileInfo.unresolvableImports.filter(
-      (importCommand) => isRelativeImport(importCommand),
-    ),
+    unresolvableImports: result.unresolvableImports,
   };
 }
 

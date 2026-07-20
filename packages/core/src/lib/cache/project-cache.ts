@@ -103,6 +103,15 @@ export function clearProjectCache(): void {
 }
 
 /**
+ * Drops one cache entry from the active filesystem generation.
+ *
+ * Used by bounded higher-level caches which keep their own eviction order.
+ */
+export function deleteProjectCacheEntry(key: string): void {
+  getEntriesForActiveGeneration().delete(key);
+}
+
+/**
  * Drops all entries depending on the given file. Used by the daemon's
  * watcher to invalidate exactly instead of waiting for mtime checks.
  */
