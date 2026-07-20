@@ -40,20 +40,42 @@ describe('init performance operation budgets', () => {
 
     const { cacheStats: coldStats } = initSyntheticProject(project);
 
-    // One compute per source file, plus tsconfig, Sheriff config, and the
-    // barrel-module directory scan. No compute may grow with file x module.
+    // One compute per source file, plus tsconfig, Sheriff config, the
+    // barrel-module directory scan, and the resolved module skeleton. No
+    // compute may grow with file x module.
     expect(coldStats).toEqual({
-      computes: project.fileCount + 3,
+      computes: project.fileCount + 4,
       hits: 0,
     });
 
     resetCacheStats();
     init(project.entryFile);
 
+    // The warm skeleton hit replaces (rather than adds to) the nested
+    // barrel-directory-scan hit, so the warm total remains fileCount + 3.
     expect(getCacheStats()).toEqual({
       computes: 0,
       hits: project.fileCount + 3,
     });
+  });
+
+  it('computes the module skeleton once across per-file init calls', () => {
+    const project = createSyntheticProject({
+      domains: 4,
+      modulesPerDomain: 3,
+      filesPerModule: 4,
+    });
+
+    clearProjectCache();
+    resetCacheStats();
+    for (const sourceFilePath of project.sourceFilePaths) {
+      init(sourceFilePath, { traverse: false });
+    }
+
+    // Each source analysis computes once. The four project-wide computes are
+    // tsconfig, Sheriff config, the directory scan, and one module skeleton;
+    // a skeleton compute per linted file would exceed this exact budget.
+    expect(getCacheStats().computes).toBe(project.fileCount + 4);
   });
 
   it('bounds module assignment by path depth instead of module count', () => {

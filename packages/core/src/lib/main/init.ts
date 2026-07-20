@@ -106,6 +106,7 @@ export function init(
       tsData,
       config,
       options.entryFileContent,
+      resolvedConfig.configFilePath,
     ),
   };
 }
