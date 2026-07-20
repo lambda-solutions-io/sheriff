@@ -129,8 +129,8 @@ node tools/perf/run-bench.mjs
 | --- | --- | --- |
 | R-TS: verify-perf + `lintDocument` | done | `27762e6` (on main), `e3e2f8e` |
 | R0: contract freeze | done | `4cd0b24`, `b55d719` |
-| R1: crate + napi boundary | implemented, fix round in flight | `60cf45c` |
-| R2: oxc extraction + resolution | not started | |
+| R1: crate + napi boundary | **done** | `60cf45c`, `eafb213`, `90eaf8e` |
+| R2: oxc extraction + resolution | **next** | |
 | R3: function-rule materialisation | not started | |
 | R4: incremental ProjectHandle | not started | |
 | R5: consumer cutover + packaging | not started | |
@@ -182,7 +182,7 @@ rules, declared-but-uninstalled externals, `noTag` fallback, and
 
 ---
 
-## R1 (in progress) — engine crate + napi boundary
+## R1 (done) — engine crate + napi boundary
 
 **Goal**: Rust reproduces module assignment, tags, and all three violation kinds
 from *pre-resolved* edges supplied by TS. Resolution itself stays in TS until R2,
@@ -233,9 +233,27 @@ exactly.
 **R3 scope, by design** — R1 is static-only and the wrapper refuses functions.
 R1's obligation is only that the refusal is airtight and the gap is visible.
 
-**Exit criteria**: all 10 oracle snapshots pass or skip with a stated reason;
-zero regex-probe divergences; `cargo clippy -D warnings` and `fmt` clean; the
-normal vitest command passes with *and* without the native artefact present.
+**Exit criteria — all met** (`eafb213`, `90eaf8e`):
+
+- Regex probe: 7 divergences → 0 real ones (the single remaining row is a
+  harness limitation — an empty module directory cannot be expressed as a path).
+- Path semantics verified by probe: out-of-root files fall back to root;
+  `/repo/src/a\b/source.ts` is assigned to root and reports the cross-module
+  violation, matching TS byte-for-byte.
+- Conformance: 8 of 10 oracle scenarios pass natively; 2 skip with an explicit
+  "requires R3" reason (they use function-valued rules). Fixtures are now shared
+  with the oracle spec via `oracle-fixtures.ts`, so both sides test one
+  definition. Zero snapshot churn.
+- 25 Rust tests, `cargo clippy -D warnings` clean, `cargo fmt --check` clean.
+- Full suite passes identically **with and without** the native artefact
+  (587 passed / 13 skipped both ways) — CI needs no Rust toolchain.
+- Input limits are enforced (`MAX_INPUT_JSON_BYTES` 64 MiB, `MAX_FILES` 100k,
+  `MAX_IMPORTS` 1M, `MAX_REGEX_BYTES` 4 KiB, …) with structured errors.
+
+**Process note**: the fix-round agent was killed by SIGTERM before writing its
+report. Thirteen findings were complete; the coordinator verified each one
+independently and dispatched the missing conformance work separately. Do not
+trust an agent's silence as failure, or its report as proof — re-verify.
 
 ---
 
