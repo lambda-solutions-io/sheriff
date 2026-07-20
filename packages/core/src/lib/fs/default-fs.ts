@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Fs } from './fs';
-import { FsPath, toExistingFsPath, toFsPath } from '../file-info/fs-path';
+import { FsPath, toFsPath } from '../file-info/fs-path';
 
 export class DefaultFs extends Fs {
   override appendFile(filename: string, contents: string): void {
@@ -23,8 +23,7 @@ export class DefaultFs extends Fs {
     return fs
       .readdirSync(directory, { withFileTypes: true })
       .filter((child) => filter === 'none' || child.isDirectory())
-      // the directory read already proved these entries exist
-      .map((child) => toExistingFsPath(path.join(directory, child.name)));
+      .map((child) => toFsPath(path.join(directory, child.name)));
   }
 
   removeDir = (path: string) => {
@@ -55,10 +54,9 @@ export class DefaultFs extends Fs {
     referencePath = referencePath || directory;
 
     for (const file of files) {
-      // the directory read already proved this entry exists
-      const filePath = toExistingFsPath(path.join(directory, file.name));
+      const filePath = toFsPath(path.join(directory, file.name));
       if (file.isFile() && file.name.toLowerCase() === filename.toLowerCase()) {
-        found.push(filePath);
+        found.push(toFsPath(filePath));
       }
       if (file.isDirectory()) {
         this.findFiles(filePath, filename, found, referencePath);
