@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Serialize;
 
-use crate::input::{EngineInput, ImportKind, InputModulePath};
+use crate::input::{EncapsulationPattern, EngineInput, ImportKind, InputModulePath};
 use crate::paths::{PathId, PathInterner};
 use crate::rules::{
     is_dependency_allowed, is_dependency_denied, is_external_allowed, wildcard_matches,
@@ -131,10 +131,7 @@ pub fn analyze(input: EngineInput) -> Result<EngineOutput, String> {
         exports: None,
     });
 
-    let inferred_barrel_less = module_inputs
-        .iter()
-        .any(|module| !module.is_barrel && module.path != input.root_dir);
-    let enable_barrel_less = input.enable_barrel_less.unwrap_or(inferred_barrel_less);
+    let enable_barrel_less = input.enable_barrel_less;
 
     let mut modules = Vec::with_capacity(module_inputs.len());
     let mut module_by_path = FxHashMap::default();
@@ -208,6 +205,8 @@ pub fn analyze(input: EngineInput) -> Result<EngineOutput, String> {
         });
     }
 
+    let encapsulation_pattern =
+        CompiledEncapsulationPattern::new(input.encapsulation_pattern.as_ref())?;
     let context = CheckContext {
         interner: &interner,
         modules: &modules,
@@ -217,7 +216,7 @@ pub fn analyze(input: EngineInput) -> Result<EngineOutput, String> {
         external_rules: &input.external_rules,
         enable_barrel_less,
         exclude_root: input.exclude_root,
-        encapsulation_pattern: input.encapsulation_pattern.as_deref(),
+        encapsulation_pattern: &encapsulation_pattern,
         barrel_file_name: &input.barrel_file_name,
     };
 
@@ -267,22 +266,46 @@ fn find_closest_module(
     interner: &PathInterner,
     modules: &FxHashMap<PathId, usize>,
 ) -> Option<usize> {
-    let mut segments = interner.segments(path).to_vec();
+    let mut candidate = interner.text(path);
     loop {
-        let candidate = if segments.is_empty() {
-            ".".to_owned()
-        } else {
-            segments.join("/")
-        };
-        if let Some(path_id) = interner.id(&candidate)
+        if let Some(path_id) = interner.id(candidate)
             && let Some(module) = modules.get(&path_id)
         {
             return Some(*module);
         }
-        if segments.is_empty() {
-            return None;
+        if candidate == "." {
+            break;
         }
-        segments.pop();
+        let separator = candidate
+            .rfind('/')
+            .into_iter()
+            .chain(candidate.rfind('\\'))
+            .max();
+        candidate = separator
+            .filter(|index| *index > 0)
+            .map_or(".", |index| &candidate[..index]);
+    }
+    None
+}
+
+enum CompiledEncapsulationPattern {
+    String(String),
+    Regex {
+        source: String,
+        regex: fancy_regex::Regex,
+    },
+}
+
+impl CompiledEncapsulationPattern {
+    fn new(pattern: Option<&EncapsulationPattern>) -> Result<Self, String> {
+        match pattern {
+            Some(EncapsulationPattern::String(value)) => Ok(Self::String(value.clone())),
+            Some(EncapsulationPattern::Regex { source, flags }) => Ok(Self::Regex {
+                source: source.clone(),
+                regex: crate::js_regex::compile(source, flags)?,
+            }),
+            None => Ok(Self::String("internal".to_owned())),
+        }
     }
 }
 
@@ -295,7 +318,7 @@ struct CheckContext<'a> {
     external_rules: &'a crate::input::OrderedMap<Vec<String>>,
     enable_barrel_less: bool,
     exclude_root: bool,
-    encapsulation_pattern: Option<&'a str>,
+    encapsulation_pattern: &'a CompiledEncapsulationPattern,
     barrel_file_name: &'a str,
 }
 
@@ -318,7 +341,7 @@ fn check_file(file: &FileData, context: &CheckContext<'_>) -> Result<FileViolati
                         context,
                         &mut output,
                     )?;
-                    if !is_encapsulation_allowed(target_file, to_module, context) {
+                    if !is_encapsulation_allowed(target_file, to_module, context)? {
                         output.encapsulation.push(EncapsulationViolation {
                             file: context.interner.text(file.path).to_owned(),
                             raw_import: raw.clone(),
@@ -392,9 +415,9 @@ fn is_encapsulation_allowed(
     target_file: &FileData,
     target_module: &ModuleData,
     context: &CheckContext<'_>,
-) -> bool {
+) -> Result<bool, String> {
     if context.exclude_root && context.interner.text(target_module.path) == "." {
-        return true;
+        return Ok(true);
     }
 
     let module_path = context.interner.text(target_module.path);
@@ -405,11 +428,11 @@ fn is_encapsulation_allowed(
         } else {
             format!("{module_path}/{}", context.barrel_file_name)
         };
-        return file_path == barrel_path;
+        return Ok(file_path == barrel_path);
     }
 
     if !context.enable_barrel_less {
-        return false;
+        return Ok(false);
     }
 
     let relative = if module_path == "." {
@@ -420,17 +443,23 @@ fn is_encapsulation_allowed(
             .unwrap_or(file_path)
     };
     if let Some(exports) = &target_module.exports {
-        return exports
+        return Ok(exports
             .iter()
-            .any(|pattern| file_pattern_matches(pattern, relative));
+            .any(|pattern| file_pattern_matches(pattern, relative)));
     }
 
-    let pattern = target_module
-        .encapsulated_folder
-        .as_deref()
-        .or(context.encapsulation_pattern)
-        .unwrap_or("internal");
-    !relative.starts_with(pattern)
+    let normalized_relative = relative.replace('\\', "/");
+    if let Some(pattern) = target_module.encapsulated_folder.as_deref() {
+        return Ok(!normalized_relative.starts_with(pattern));
+    }
+    match context.encapsulation_pattern {
+        CompiledEncapsulationPattern::String(pattern) => {
+            Ok(!normalized_relative.starts_with(pattern))
+        }
+        CompiledEncapsulationPattern::Regex { source, regex } => {
+            crate::js_regex::has_match(regex, source, &normalized_relative).map(|matches| !matches)
+        }
+    }
 }
 
 fn file_pattern_matches(pattern: &str, path: &str) -> bool {

@@ -5,9 +5,17 @@
   "type": "commonjs",
   "main": "index.js",
   "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "require": "./index.js"
+    }
+  },
   "files": [
     "index.js",
     "index.d.ts",
+    "platform.js",
+    "README.md",
     "native"
   ],
   "scripts": {

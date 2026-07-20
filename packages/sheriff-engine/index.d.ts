@@ -13,6 +13,11 @@ export interface EngineFile {
 
 export type EngineTagValue = string | string[];
 
+export interface EngineRegExp {
+  source: string;
+  flags: string;
+}
+
 export interface EngineModuleDefinition {
   tags: EngineTagValue;
   exports?: string[];
@@ -39,11 +44,11 @@ export interface EngineInput {
   moduleConfig: EngineModuleConfig;
   modulePaths: EngineModulePath[];
   autoTagging: boolean;
-  depRules: Record<string, string | string[]>;
-  denyRules: Record<string, string | string[]>;
+  depRules: Record<string, string | string[] | null>;
+  denyRules: Record<string, string | string[] | null>;
   externalRules: Record<string, string[]>;
-  encapsulationPattern?: string | null;
-  enableBarrelLess?: boolean;
+  encapsulationPattern?: string | RegExp | EngineRegExp | null;
+  enableBarrelLess: boolean;
   excludeRoot?: boolean;
   barrelFileName?: string;
 }

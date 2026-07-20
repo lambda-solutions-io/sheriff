@@ -1,7 +1,11 @@
 import { copyFile, mkdir } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import path from 'node:path';
+
+const require = createRequire(import.meta.url);
+const { nativeBinaryName } = require('../platform.js');
 
 const packageDir = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -46,7 +50,8 @@ await new Promise((resolve, reject) => {
 });
 
 const nativeDir = path.join(packageDir, 'native');
-const targetName = `sheriff-engine.${process.platform}-${process.arch}.node`;
+// TODO(R5): publish native binaries through optional per-platform packages.
+const targetName = nativeBinaryName();
 await mkdir(nativeDir, { recursive: true });
 await copyFile(
   path.join(workspaceDir, 'target', 'release', sourceName),

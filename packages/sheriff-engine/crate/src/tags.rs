@@ -1,7 +1,8 @@
-use rustc_hash::FxHashMap;
-
 use crate::input::{ConfigValue, OrderedMap};
-use crate::simple_regex;
+use crate::input::{MAX_CONFIG_NESTING, MAX_PLACEHOLDERS_PER_MATCHER};
+use crate::js_regex;
+
+type Placeholders = Vec<(String, String)>;
 
 pub fn calculate_tags(
     module_path: &str,
@@ -13,8 +14,8 @@ pub fn calculate_tags(
     }
 
     let paths: Vec<&str> = module_path.split('/').collect();
-    let mut placeholders = FxHashMap::default();
-    match traverse(&paths, config, &mut placeholders, module_path, &[], true)? {
+    let mut placeholders = Vec::new();
+    match traverse(&paths, config, &mut placeholders, module_path, &[], true, 1)? {
         Some(tags) => Ok(tags),
         None if auto_tagging => Ok(vec!["noTag".to_owned()]),
         None => Err(format!(
@@ -26,11 +27,17 @@ pub fn calculate_tags(
 fn traverse(
     paths: &[&str],
     config: &OrderedMap<ConfigValue>,
-    placeholders: &mut FxHashMap<String, String>,
+    placeholders: &mut Placeholders,
     module_path: &str,
     config_path: &[String],
     is_root: bool,
+    depth: usize,
 ) -> Result<Option<Vec<String>>, String> {
+    if depth > MAX_CONFIG_NESTING {
+        return Err(format!(
+            "moduleConfig nesting exceeds the {MAX_CONFIG_NESTING} level limit"
+        ));
+    }
     for (matcher, value) in &config.0 {
         if is_root {
             placeholders.clear();
@@ -63,7 +70,15 @@ fn traverse(
         };
         let mut nested_path = config_path.to_vec();
         nested_path.push(matcher.clone());
-        return traverse(rest, nested, placeholders, module_path, &nested_path, false);
+        return traverse(
+            rest,
+            nested,
+            placeholders,
+            module_path,
+            &nested_path,
+            false,
+            depth + 1,
+        );
     }
 
     Ok(None)
@@ -99,14 +114,18 @@ fn leaf_tags(value: &ConfigValue) -> Option<&[String]> {
 
 fn replace_tags(
     tags: &[String],
-    placeholders: &FxHashMap<String, String>,
+    placeholders: &Placeholders,
     module_path: &str,
 ) -> Result<Vec<String>, String> {
     tags.iter()
         .map(|tag| {
             let mut replaced = tag.clone();
             for (placeholder, value) in placeholders {
-                replaced = replaced.replace(&format!("<{placeholder}>"), value);
+                replaced = replace_all_javascript(
+                    &replaced,
+                    &format!("<{placeholder}>"),
+                    value,
+                );
             }
             if let Some(placeholder) = find_placeholder(&replaced).first() {
                 return Err(format!(
@@ -121,11 +140,12 @@ fn replace_tags(
 fn match_segment(
     matcher: &str,
     paths: &[&str],
-    placeholders: &mut FxHashMap<String, String>,
+    placeholders: &mut Placeholders,
 ) -> Result<Option<usize>, String> {
     if matcher.starts_with('/') && matcher.ends_with('/') && matcher.len() >= 2 {
         let pattern = &matcher[1..matcher.len() - 1];
-        return simple_regex::is_full_match(pattern, paths[0]).map(|matches| matches.then_some(1));
+        return js_regex::is_full_first_match(pattern, paths[0])
+            .map(|matches| matches.then_some(1));
     }
 
     let span = matcher.split('/').count();
@@ -134,6 +154,13 @@ fn match_segment(
     }
     let fragment = paths[..span].join("/");
     let placeholder_names = find_placeholder(matcher);
+    if placeholder_names.len() > MAX_PLACEHOLDERS_PER_MATCHER {
+        return Err(format!(
+            "placeholders in one moduleConfig matcher count {} exceeds the {} limit",
+            placeholder_names.len(),
+            MAX_PLACEHOLDERS_PER_MATCHER
+        ));
+    }
     if placeholder_names.is_empty() {
         return Ok((matcher == fragment).then_some(span));
     }
@@ -142,14 +169,81 @@ fn match_segment(
         return Ok(None);
     };
     for (name, capture) in placeholder_names.into_iter().zip(captures) {
-        if placeholders.contains_key(&name) {
+        if placeholders.iter().any(|(existing, _)| existing == &name) {
             return Err(format!(
                 "SH-005: placeholder for value \"{name}\" does already exist"
             ));
         }
-        placeholders.insert(name, capture);
+        placeholders.push((name, capture));
     }
     Ok(Some(span))
+}
+
+fn replace_all_javascript(input: &str, needle: &str, replacement: &str) -> String {
+    let matches = input.match_indices(needle).collect::<Vec<_>>();
+    if matches.is_empty() {
+        return input.to_owned();
+    }
+
+    let mut output = String::new();
+    let mut copied_until = 0;
+    for (start, matched) in matches {
+        output.push_str(&input[copied_until..start]);
+        output.push_str(&expand_javascript_replacement(
+            replacement,
+            input,
+            start,
+            start + matched.len(),
+        ));
+        copied_until = start + matched.len();
+    }
+    output.push_str(&input[copied_until..]);
+    output
+}
+
+fn expand_javascript_replacement(
+    replacement: &str,
+    input: &str,
+    match_start: usize,
+    match_end: usize,
+) -> String {
+    let mut output = String::with_capacity(replacement.len());
+    let mut characters = replacement.char_indices().peekable();
+    while let Some((index, character)) = characters.next() {
+        if character != '$' {
+            output.push(character);
+            continue;
+        }
+        let Some(&(_, next)) = characters.peek() else {
+            output.push('$');
+            break;
+        };
+        match next {
+            '$' => {
+                output.push('$');
+                characters.next();
+            }
+            '&' => {
+                output.push_str(&input[match_start..match_end]);
+                characters.next();
+            }
+            '`' => {
+                output.push_str(&input[..match_start]);
+                characters.next();
+            }
+            '\'' => {
+                output.push_str(&input[match_end..]);
+                characters.next();
+            }
+            // The placeholder replacement RegExp has no capture groups, so JavaScript
+            // leaves every $n/$nn sequence untouched.
+            '0'..='9' => {
+                output.push_str(&replacement[index..characters.peek().unwrap().0]);
+            }
+            _ => output.push('$'),
+        }
+    }
+    output
 }
 
 fn find_placeholder(value: &str) -> Vec<String> {
@@ -332,6 +426,60 @@ mod tests {
     }
 
     #[test]
+    fn regular_expressions_follow_javascript_first_match_semantics() {
+        let cases = [
+            ("feature-.+", "feature-abc", true),
+            ("feature-.+", "feature-", false),
+            ("[a-z]+", "abc", true),
+            ("[a-z]+", "aBc", false),
+            ("a|ab", "ab", false),
+            ("(a|ab)c", "abc", true),
+            ("a{2,3}", "aaa", true),
+            ("a{2,3}", "a", false),
+            (r"\d+", "123", true),
+            (r"\w+", "abc_1", true),
+            ("x*", "", true),
+            (".*", "anything", true),
+            ("^abc$", "abc", true),
+            ("a+?", "aaa", false),
+            ("(?:ab)+", "abab", true),
+            ("(?=a)a", "a", true),
+            ("(?!b)a", "a", true),
+            (r"(a)\1", "aa", true),
+            ("[^x]+", "abc", true),
+            ("a.c", "abc", true),
+            ("data|feature", "data", true),
+            (r"\s", " ", true),
+            ("[0-9]{3}-[0-9]{2}", "123-45", true),
+            ("(?:(a|ab)c)", "abc", true),
+            ("(ab){2,3}", "abab", true),
+            (r"\u0061+", "aaa", true),
+            (r"\uD83D\uDE00", "😀", true),
+            (".", "\n", false),
+            ("a+", "A", false),
+            ("", "", true),
+            ("", "a", false),
+            ("a.*?b", "axxb", true),
+            ("(a(b|c))+", "abac", true),
+            ("(?:foo|bar){2}", "foobar", true),
+        ];
+
+        for (pattern, value, expected) in cases {
+            assert_eq!(
+                js_regex::is_full_first_match(pattern, value).unwrap(),
+                expected,
+                "/{pattern}/ against {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_regular_expressions_are_structured_errors() {
+        let error = calculate_tags("abc", &config(r#"{"/(abc/":"tag"}"#), true).unwrap_err();
+        assert!(error.contains("invalid regular expression"), "{error}");
+    }
+
+    #[test]
     fn first_applicable_matcher_wins_in_json_order() {
         assert_eq!(
             calculate_tags(
@@ -341,6 +489,44 @@ mod tests {
             )
             .unwrap(),
             ["domain:holidays"]
+        );
+    }
+
+    #[test]
+    fn placeholder_replacement_preserves_capture_insertion_order() {
+        assert_eq!(
+            calculate_tags(
+                "<type>/foo",
+                &config(r#"{"<domain>/<type>":"result:<domain>"}"#),
+                true,
+            )
+            .unwrap(),
+            ["result:foo"]
+        );
+    }
+
+    #[test]
+    fn placeholder_values_use_javascript_replacement_string_expansion() {
+        assert!(
+            calculate_tags("$&", &config(r#"{"<x>":"result:<x>"}"#), true)
+                .unwrap_err()
+                .starts_with("SH-006")
+        );
+        assert_eq!(
+            calculate_tags("$$", &config(r#"{"<x>":"result:<x>"}"#), true).unwrap(),
+            ["result:$"]
+        );
+        assert_eq!(
+            replace_all_javascript("pre<x>post", "<x>", "$`"),
+            "preprepost"
+        );
+        assert_eq!(
+            replace_all_javascript("pre<x>post", "<x>", "$'"),
+            "prepostpost"
+        );
+        assert_eq!(
+            replace_all_javascript("pre<x>post", "<x>", "$1"),
+            "pre$1post"
         );
     }
 

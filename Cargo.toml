@@ -2,3 +2,9 @@
 members = ["packages/sheriff-engine/crate"]
 resolver = "2"
 
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+# The N-API boundary uses catch_unwind; aborting would terminate the Node host.
+panic = "unwind"

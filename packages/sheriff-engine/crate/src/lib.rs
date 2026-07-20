@@ -1,8 +1,8 @@
 mod engine;
 mod input;
+mod js_regex;
 mod paths;
 mod rules;
-mod simple_regex;
 mod tags;
 
 use std::any::Any;
@@ -26,6 +26,15 @@ struct StructuredError {
 
 #[napi(js_name = "analyzeProject")]
 pub fn analyze_project(input_json: String) -> String {
+    if input_json.len() > input::MAX_INPUT_JSON_BYTES {
+        return error_json(
+            "SHERIFF_ENGINE_LIMIT_EXCEEDED",
+            format!(
+                "input JSON exceeds the {} byte limit",
+                input::MAX_INPUT_JSON_BYTES
+            ),
+        );
+    }
     let result = catch_unwind(AssertUnwindSafe(|| analyze_inner(&input_json)));
     match result {
         Ok(Ok(output)) => output,
@@ -35,8 +44,9 @@ pub fn analyze_project(input_json: String) -> String {
 }
 
 fn analyze_inner(input_json: &str) -> Result<String, String> {
-    let input = serde_json::from_str(input_json)
+    let input: input::EngineInput = serde_json::from_str(input_json)
         .map_err(|error| format!("invalid EngineInput JSON: {error}"))?;
+    input.validate()?;
     let output = engine::analyze(input)?;
     serde_json::to_string(&output).map_err(|error| format!("could not serialize output: {error}"))
 }
