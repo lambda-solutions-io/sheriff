@@ -132,8 +132,9 @@ node tools/perf/run-bench.mjs
 | R1: crate + napi boundary | **done** | `60cf45c`, `eafb213`, `90eaf8e` |
 | R2: oxc extraction + resolution | **done** | `df7319d`, `8ff89c9`, `bd266d3`, `694dc52` |
 | R2.1: narrow `typesVersions` fallback | **done** | `9d99e3e` |
-| R2.2: implement `typesVersions` mapping | **in progress** | |
-| R3: function-rule materialisation | not started | |
+| R2.2: implement `typesVersions` mapping | **done** | `64746ac` |
+| R2.3: review round (4 findings) | **done** | `1a21352` |
+| R3: function-rule materialisation | **in progress** | |
 | R4: incremental ProjectHandle | not started | |
 | R5: consumer cutover + packaging | not started | |
 
@@ -481,6 +482,59 @@ than 4/8 with none.
 **Note**: the oracle contract is "sheriff under TS 4.8–5.7" but the installed
 compiler is 5.9.3. If that changes which range key matches for any fixture, it is
 a contract question for the owner, not an implementation detail.
+
+**Result (`64746ac`)**: 8/8 fixtures passed, 0 fallback, 0 divergences, 1357 edges
+per engine. Semver range parsing is **hand-rolled**: the cached `semver` crate's
+`VersionReq` grammar genuinely differs from TS's `VersionRange` (whitespace
+conjunctions, hyphen ranges, wildcard partials, prerelease-inclusive matching), so
+using it would have *introduced* divergence. Unsupported syntax falls back rather
+than guessing. TS 5.9.3 vs the 4.8–5.7 contract affected no fixture — `rxjs`
+declares `>=4.2`, which matches across the whole range.
+
+---
+
+## R2.3 (done) — review round
+
+Two independent reviewers (different lenses, different sandboxes). Every finding
+arrived with a concrete reproducer and is now a permanent regression test.
+
+**Root cause of both HIGH findings**: the audit derived package identity from the
+import **specifier**, so it audited the wrong manifest whenever specifier and
+package name diverge.
+
+- A tsconfig `paths` alias into `node_modules` (`"alias" → tv-pkg`) made the audit
+  search for `node_modules/alias`, find nothing, and skip the audit entirely.
+- `extract_package_name("outer/node_modules/inner")` returned `"outer"`, so a
+  nested package's `typesVersions` was checked against the *outer* manifest.
+
+Both produced `fallback: false` with a wrong resolved path — the same silent-
+divergence class R2 spent a review round eliminating. Replaced with
+`reached_package_from_path()`, which derives identity from the **resolved path
+only**, walking ancestors innermost-first and treating `@scope/name` as one
+package. **The specifier is no longer a source of truth for which package was
+reached** — that is the invariant to preserve in R4/R5.
+
+Also fixed: errors raised *before* the post-resolution audit (limit, parse, read,
+resolution) bypassed it and its `files.clear()`, leaking un-audited results.
+
+**Harness gate (reviewer B)**: the exit code ignored fallback rate entirely, so the
+engine could reach 8/8 fallback — fully switched off — while still exiting 0,
+precisely the failure the metric exists to prevent. Now fails above a committed
+baseline (`run.mjs:19`, currently 0) and names baseline, actual, and regressed
+fixtures. **Verified by forcing the baseline negative: exits 1 as intended** — a
+gate that never fires is worse than no gate. The metric now reports both
+denominators, so skips cannot flatter the rate.
+
+Reviewer B also confirmed the zero-divergence claim is **not vacuous**: the harness
+passes `shadowMode: true` and diffs edges *before* returning fallback status, so
+fallback fixtures were genuinely compared. R5 can rely on it.
+
+**Caveat recorded**: reviewer A cited `@angular-devkit/core/node_modules/rxjs` as
+live corroboration, but that package is not installed in this worktree and the
+claim did not reproduce. The synthetic reproducers are authoritative.
+
+Final: 80 rust tests, clippy clean, 583 TS tests, 8/8 fixtures, 0 divergences,
+**9/9 `typesVersions` parity cases vs real `ts.resolveModuleName`**.
 
 ---
 
