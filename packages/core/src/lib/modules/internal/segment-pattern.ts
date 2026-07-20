@@ -1,13 +1,7 @@
 import { FOLDER_CHARACTERS_REGEX_STRING } from '../../tags/calc-tags-for-module';
+import { normalizePathSeparators } from '../../util/path-separators';
 
-/**
- * Normalize platform-specific separators before comparing config path patterns.
- * VirtualFs is POSIX-only, so Windows coverage has to rely on this explicit
- * normalization at the matching boundaries.
- */
-export function normalizePathSeparators(path: string): string {
-  return path.replaceAll('\\', '/');
-}
+export { normalizePathSeparators } from '../../util/path-separators';
 
 export function matchesFolderSegmentPattern(
   pattern: string,
