@@ -11,6 +11,7 @@ import {
   keys,
   values,
 } from '../util/typed-object-functions';
+import { lastPathSeparatorIndex } from '../util/path-separators';
 
 interface CreateModulesContext {
   entryFileInfo: UnassignedFileInfo;
@@ -90,10 +91,7 @@ export function findClosestModulePath(
 
     // paths can mix separators (tsconfig-derived vs fs-derived on Windows);
     // cut at whichever separator comes last.
-    const separatorIndex = Math.max(
-      currentPath.lastIndexOf('/'),
-      currentPath.lastIndexOf('\\'),
-    );
+    const separatorIndex = lastPathSeparatorIndex(currentPath);
     if (separatorIndex <= 0) {
       break;
     }

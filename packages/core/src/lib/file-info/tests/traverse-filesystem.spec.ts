@@ -4,7 +4,10 @@ import { generateTsData } from '../generate-ts-data';
 import { FsPath, toFsPath } from '../fs-path';
 import { UnassignedFileInfo } from '../unassigned-file-info';
 import { tsConfig } from '../../test/fixtures/ts-config';
-import { traverseFilesystem } from '../traverse-filesystem';
+import {
+  isImportInsideRoot,
+  traverseFilesystem,
+} from '../traverse-filesystem';
 import { describe, it, expect } from 'vitest';
 import { buildFileInfo } from '../../test/build-file-info';
 import getFs from '../../fs/getFs';
@@ -25,6 +28,34 @@ function setup(fileTree: FileTree): UnassignedFileInfo {
 }
 
 describe('traverse filesystem', () => {
+  describe('root containment', () => {
+    it('should accept an exact root path', () => {
+      expect(isImportInsideRoot('/repo/src', '/repo/src')).toBe(true);
+    });
+
+    it('should accept a child path', () => {
+      expect(isImportInsideRoot('/repo/src/app/main.ts', '/repo/src')).toBe(
+        true,
+      );
+    });
+
+    it('should reject a sibling that shares the root prefix', () => {
+      expect(isImportInsideRoot('/repo/src2/main.ts', '/repo/src')).toBe(false);
+    });
+
+    it('should accept a child when the root has a trailing separator', () => {
+      expect(isImportInsideRoot('/repo/src/app/main.ts', '/repo/src/')).toBe(
+        true,
+      );
+    });
+
+    it('should treat mixed separators as segment boundaries', () => {
+      expect(isImportInsideRoot('/repo\\src/app/main.ts', '/repo/src')).toBe(
+        true,
+      );
+    });
+  });
+
   it('should find a single import', () => {
     const fileInfo = setup({
       'tsconfig.json': tsConfig(),

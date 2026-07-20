@@ -14,6 +14,7 @@ import {
   DEFAULT_STRUCTURE_CACHE_TTL_MS,
   getOrCompute,
 } from '../cache/project-cache';
+import { normalizePathSeparators } from '../util/path-separators';
 
 export type ResolveFn = (
   moduleName: string,
@@ -172,7 +173,7 @@ function resolveImports(
       const { resolvedFileName } = resolvedImport.resolvedModule;
       if (!resolvedImport.resolvedModule.isExternalLibraryImport) {
         const importPath = fixPathSeparators(resolvedFileName);
-        if (!importPath.startsWith(rootDir)) {
+        if (!isImportInsideRoot(importPath, rootDir)) {
           throw new Error(`${importPath} is outside of root ${rootDir}`);
         }
         resolutions.push({ kind: 'module', raw: fileName, importPath });
@@ -200,4 +201,21 @@ function resolveImports(
   }
 
   return resolutions;
+}
+
+/** Check path containment without confusing sibling segment prefixes. */
+export function isImportInsideRoot(
+  importPath: string,
+  rootDir: string,
+): boolean {
+  const normalizedImportPath = normalizePathSeparators(importPath);
+  const normalizedRoot =
+    normalizePathSeparators(rootDir).replace(/\/+$/, '') || '/';
+
+  return (
+    normalizedImportPath === normalizedRoot ||
+    normalizedImportPath.startsWith(
+      normalizedRoot === '/' ? normalizedRoot : `${normalizedRoot}/`,
+    )
+  );
 }
