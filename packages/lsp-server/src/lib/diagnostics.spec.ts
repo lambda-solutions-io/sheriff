@@ -2,8 +2,9 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { clearProjectCache } from '@lambda-solutions/sheriff-core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useDefaultFs } from '../../../core/src/lib/fs/getFs';
+import * as fileInfoGenerator from '../../../core/src/lib/file-info/generate-unassigned-file-info';
 import {
   createSheriffDiagnostics,
   extractImportSpecifiers,
@@ -43,6 +44,19 @@ describe('Sheriff diagnostics', () => {
     expect(createSheriffDiagnostics(uri, "import '../shared';\n")).toHaveLength(
       1,
     );
+  });
+
+  it('analyzes a document only once for all Sheriff rule families', () => {
+    const project = createFixtureProject({ withConfig: true });
+    const uri = filePathToUri(join(project, 'src/app/main.ts'));
+    const analysisSpy = vi.spyOn(
+      fileInfoGenerator,
+      'generateUnassignedFileInfo',
+    );
+
+    createSheriffDiagnostics(uri, "import '../shared';\n");
+
+    expect(analysisSpy).toHaveBeenCalledTimes(1);
   });
 
   it('extracts real imports without matching comments or strings', () => {

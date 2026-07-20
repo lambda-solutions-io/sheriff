@@ -26,6 +26,8 @@ import { isRelativeImport } from './is-relative-import';
 
 /** Plain, serializable Sheriff violations found in one document. */
 export interface DocumentLintResult {
+  /** Whether no Sheriff configuration was found for the document. */
+  configFileIsMissing: boolean;
   dependencyRuleViolations: DependencyViolationInfo[];
   encapsulationViolations: string[];
   externalRuleViolations: ExternalRuleViolationInfo[];
@@ -80,7 +82,7 @@ export function lintDocument(
   fileContent?: string,
 ): DocumentLintResult {
   return createPublicDocumentLintResult(
-    getDocumentLintAnalysis(filename, fileContent, false).result,
+    getDocumentLintAnalysis(filename, fileContent, true),
   );
 }
 
@@ -257,9 +259,11 @@ function createInternalDocumentLintResult(
 }
 
 function createPublicDocumentLintResult(
-  result: InternalDocumentLintResult,
+  analysis: DocumentLintAnalysis,
 ): DocumentLintResult {
+  const { result } = analysis;
   return {
+    configFileIsMissing: analysis.configFileIsMissing,
     dependencyRuleViolations: result.dependencyRuleViolations.map(
       ({ fromTag, toTags, rawImport }) => ({
         fromTag,

@@ -11,6 +11,28 @@ import { violatesDependencyRule } from '../violates-dependency-rule';
 import { violatesEncapsulationRule } from '../violates-encapsulation-rule';
 
 describe('lintDocument', () => {
+  it('returns before document analysis when no Sheriff config exists', () => {
+    createProject({
+      'tsconfig.json': tsConfig(),
+      src: {
+        'main.ts': ['./missing'],
+      },
+    });
+    const analysisSpy = vitest.spyOn(
+      fileInfoGenerator,
+      'generateUnassignedFileInfo',
+    );
+
+    expect(lintDocument('/project/src/main.ts')).toEqual({
+      configFileIsMissing: true,
+      dependencyRuleViolations: [],
+      encapsulationViolations: [],
+      externalRuleViolations: [],
+      unresolvableImports: [],
+    });
+    expect(analysisSpy).not.toHaveBeenCalled();
+  });
+
   it('shares one project analysis between ESLint rules for the same file', () => {
     createProject({
       'tsconfig.json': tsConfig(),
