@@ -130,8 +130,8 @@ node tools/perf/run-bench.mjs
 | R-TS: verify-perf + `lintDocument` | done | `27762e6` (on main), `e3e2f8e` |
 | R0: contract freeze | done | `4cd0b24`, `b55d719` |
 | R1: crate + napi boundary | **done** | `60cf45c`, `eafb213`, `90eaf8e` |
-| R2: oxc extraction + resolution | **next** | |
-| R3: function-rule materialisation | not started | |
+| R2: oxc extraction + resolution | **done** | `df7319d`, `8ff89c9`, `bd266d3`, `694dc52` |
+| R3: function-rule materialisation | **next** | |
 | R4: incremental ProjectHandle | not started | |
 | R5: consumer cutover + packaging | not started | |
 
@@ -257,9 +257,78 @@ trust an agent's silence as failure, or its report as proof — re-verify.
 
 ---
 
-## R2 (next) — oxc extraction + resolution, shadow mode
+## R2 (done) — oxc extraction + resolution, shadow mode
 
 **Goal**: Rust produces the import edges itself. **Highest-risk phase.**
+
+**Shipped**: `extract.rs` (oxc parser, `preProcessFile`-equivalent), `resolve.rs`
+(tsconfig walk, alias matching, classification, fallback whitelist),
+`js_replacement.rs` (shared JS `String.replace` semantics), and
+`tools/engine-shadow/` — a dual-engine differential harness. TS remains the
+default; Rust runs shadow-only.
+
+**Result**: 434 files, 1357 edges per engine, **zero divergences**. Two of eight
+fixtures now have real `node_modules` installed (`nextjs-i`, `angular-v-multi`),
+which is what made `exports`-map and subpath resolution testable at all — the
+other six exercise dependency-universe classification only.
+
+**Contract corrections found while implementing** (the PLAN was wrong; the code
+is authoritative):
+
+- Plain `require()` and triple-slash references are **not** extracted — R2 step 1
+  above asked for them, but `ts.preProcessFile` is called with one argument
+  (`detectJavaScriptImports = false`) and `referencedFiles` is ignored.
+  Capturing them would *create* divergence.
+- No-substitution template dynamic imports (`` import(`./x`) ``) **are**
+  captured by TS; substituted ones are not.
+- `ts.parseJsonConfigFileContent` **does** inherit options through `extends`,
+  even with an inline read callback. An entry-config-only whitelist audit would
+  silently miss unsupported parent options, so the audit walks the whole chain.
+
+**Review round — 6 confirmed divergences, all silent (`fallback: false`)**, found
+by two independent reviewers and reproduced against both engines before and
+after the fix (`bd266d3`). The shadow harness passed while every one was live,
+so each is now a permanent regression test:
+
+- `.json` imports fabricated a `module` edge where TS emits none.
+- Package `exports` conditions: TS `external` vs Rust `unresolvable`.
+- The `typesVersions` audit only inspected the dependency universe, which
+  excludes devDependencies — so a devDependency's `typesVersions` affected
+  resolution while escaping the audit.
+- Alias replacement used a literal `replacen`; TS routes through
+  `String.replace`, so `$&`, `` $` ``, `$'`, `$n`, `$$` are special. R1 had
+  already solved this for tag placeholders; it is now shared code, not a second
+  implementation.
+- A dynamic import with a surrogate-pair escape was dropped entirely (`\uXXXX`
+  decoded per-unit into a Rust `char`; lone surrogates are invalid).
+- Scoped-package extraction yielded `@scope/` vs TS's `@scope`.
+
+**Hardening**: R2 reads sources from disk, so the input-JSON cap bounded nothing
+— a 3.9 MB / 200k-import file resolved without error. Per-file size, import
+count, and *acyclic* tsconfig depth are now capped.
+
+**Cyclic `extends`** hung *both* engines identically (neither walker had a
+visited set). Fixed in both together as `SH-019` (`694dc52`) — patching only
+Rust would have created a divergence. Detection is an exact visited-set, not a
+depth heuristic, so deep-but-valid chains are unaffected.
+
+**Known limitations carried into R4/R5** — do not mistake these for done:
+
+1. **The `typesVersions` fallback is too conservative to ship.** `@types/node`
+   declares `typesVersions`, so effectively *any* project with real
+   `node_modules` falls back to TS wholesale — both installed fixtures now do.
+   Correct, but it means the R5 cutover would deliver no speedup. R5 must either
+   implement `typesVersions` resolution or detect whether it actually affects
+   the specifiers in play.
+2. **Graph-discovery parity is untested.** The harness enumerates files from
+   disk; production starts at an entry file and follows resolved imports.
+   Per-file coverage is a *superset* (production reached 10 files where the
+   harness compared 30), so it cannot inflate the zero-divergence claim — but
+   *which files get reached* is not compared. R4/R5 must cover it.
+
+---
+
+## R2 (original plan, for reference)
 
 `oxc_resolver` is a port of enhanced-resolve / tsconfig-paths / tsconfck, *not*
 of `ts.resolveModuleName`. Expect divergence around `exports`/`imports`
@@ -353,9 +422,15 @@ incremental verification.
   tighten with evidence.
 - Equivalence test: graph hash after N incremental updates must equal a clean
   rebuild. Fuzz with random edit sequences.
+- **Graph-discovery parity (untested since R2).** The R2 shadow harness compares
+  per-file resolution only: it enumerates files from disk, while production
+  starts at an entry file and follows resolved imports. Extend the differential
+  to compare the *reached file set* from a given entry, not just the edges of
+  files handed to it.
 
 **Exit criteria**: 10–50ms typical single-file update; incremental and clean
-rebuilds provably identical.
+rebuilds provably identical; entry-driven reached-file sets identical between
+engines.
 
 ---
 
@@ -373,9 +448,17 @@ rebuilds provably identical.
   map when publishing starts.
 - Freeze result shapes, traversal order, and message text **before** flipping the
   default; the daemon's lint DTO is already lossier than the in-process one.
+- **Narrow the `typesVersions` fallback (blocker for any speedup).** R2 made the
+  audit conservative to close a silent divergence: any installed package
+  declaring `typesVersions` falls the whole project back to TS. `@types/node`
+  declares it, so in practice every real project falls back and the engine never
+  runs. Either implement `typesVersions` resolution, or determine whether it
+  affects the specifiers actually in play. Benchmarks are meaningless until this
+  is fixed — measure the fallback rate on real projects first.
 
 **Exit criteria**: benchmarks for cold verify / ESLint / watch on 2.1k and 10.5k
-projects; all `test-projects` goldens byte-identical; documented rollback.
+projects; all `test-projects` goldens byte-identical; documented rollback;
+**fallback rate on real projects measured and acceptable** (see above).
 
 ---
 
