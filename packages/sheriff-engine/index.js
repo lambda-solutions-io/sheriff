@@ -2,6 +2,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports -- napi package loader is intentionally CommonJS. */
 
 const path = require('node:path');
+const ts = require('typescript');
 const { nativeBinaryName, nativeTriple } = require('./platform.js');
 
 class EngineUnsupportedConfigError extends Error {
@@ -50,10 +51,6 @@ function assertStaticConfig(value, configPath = 'input') {
 }
 
 function callbackMarker(callbacks, callback, configPath, kind) {
-  const impureReason = obviousImpurityReason(callback);
-  if (impureReason) {
-    throw new EngineImpureCallbackError(configPath, impureReason);
-  }
   const callbackId = callbacks.length;
   callbacks.push({ callback, configPath, kind });
   return { __sheriffEngineCallbackId: callbackId };
@@ -63,35 +60,145 @@ function obviousImpurityReason(callback) {
   const source = Function.prototype.toString.call(callback);
   if (source.includes('[native code]'))
     return 'native function source is opaque';
-  const localNames = new Set(
-    [...source.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g)].map(
-      (match) => match[1],
-    ),
-  );
-  const mutationTargets = [
-    ...source.matchAll(
-      /\b([A-Za-z_$][\w$]*)\s*(?:\+\+|--|\+=|-=|\*=|\/=|%=|=(?!=|>))/g,
-    ),
-  ];
-  if (mutationTargets.some((match) => !localNames.has(match[1]))) {
-    return 'mutation of non-local state detected';
+  const parsed = parseCallbackSource(source);
+  if (typeof parsed === 'string') return parsed;
+  if (unsupportedLexicalKeyword(parsed.callback)) {
+    return 'a super or meta-property reference was detected';
   }
-  const propertyMutationTargets = [
-    ...source.matchAll(
-      /\b([A-Za-z_$][\w$]*)\s*(?:\.[A-Za-z_$][\w$]*|\[[^\]]+\])+\s*(?:\+\+|--|\+=|-=|\*=|\/=|%=|=(?!=|>))/g,
-    ),
-  ];
-  if (propertyMutationTargets.some((match) => !localNames.has(match[1]))) {
-    return 'mutation of non-local object state detected';
+  let freeIdentifier;
+  const visit = (node) => {
+    if (freeIdentifier) return;
+    if (node.kind === ts.SyntaxKind.ThisKeyword) {
+      freeIdentifier = 'this';
+      return;
+    }
+    if (ts.isIdentifier(node) && isIdentifierReference(node)) {
+      const symbol = ts.isShorthandPropertyAssignment(node.parent)
+        ? parsed.checker.getShorthandAssignmentValueSymbol(node.parent)
+        : parsed.checker.getSymbolAtLocation(node);
+      const declarations = symbol?.declarations;
+      if (
+        !declarations?.some(
+          (declaration) =>
+            declaration.pos >= parsed.callback.pos &&
+            declaration.end <= parsed.callback.end,
+        )
+      ) {
+        freeIdentifier = node.text;
+        return;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parsed.callback);
+
+  return freeIdentifier
+    ? `free identifier '${freeIdentifier}' is referenced`
+    : undefined;
+}
+
+function parseCallbackSource(source) {
+  const fileName = '/__sheriff_callback__.js';
+  const text = `const __sheriffCallback = (${source}\n);`;
+  const sourceFile = ts.createSourceFile(
+    fileName,
+    text,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS,
+  );
+  const options = {
+    allowJs: true,
+    noLib: true,
+    noResolve: true,
+    target: ts.ScriptTarget.Latest,
+  };
+  const host = {
+    fileExists: (requested) => requested === fileName,
+    readFile: (requested) => (requested === fileName ? text : undefined),
+    getSourceFile: (requested) =>
+      requested === fileName ? sourceFile : undefined,
+    getDefaultLibFileName: () => '/lib.d.ts',
+    writeFile: () => {},
+    getCurrentDirectory: () => '/',
+    getDirectories: () => [],
+    getCanonicalFileName: (requested) => requested,
+    useCaseSensitiveFileNames: () => true,
+    getNewLine: () => '\n',
+  };
+  const program = ts.createProgram([fileName], options, host);
+  if (program.getSyntacticDiagnostics(sourceFile).length > 0) {
+    return 'function source could not be parsed conservatively';
+  }
+
+  const statement = sourceFile.statements[0];
+  const declaration = ts.isVariableStatement(statement)
+    ? statement.declarationList.declarations[0]
+    : undefined;
+  const callback = declaration?.initializer
+    ? ts.skipParentheses(declaration.initializer)
+    : undefined;
+  if (
+    !callback ||
+    (!ts.isArrowFunction(callback) && !ts.isFunctionExpression(callback))
+  ) {
+    return 'function source form could not be analyzed conservatively';
+  }
+
+  return { callback, checker: program.getTypeChecker() };
+}
+
+function isIdentifierReference(node) {
+  const parent = node.parent;
+  if (ts.isShorthandPropertyAssignment(parent) && parent.name === node) {
+    return true;
+  }
+  if (ts.isPropertyAccessExpression(parent) && parent.name === node) {
+    return false;
+  }
+  if (ts.isBindingElement(parent) && parent.propertyName === node) {
+    return false;
+  }
+  if (ts.isQualifiedName(parent) && parent.right === node) {
+    return false;
   }
   if (
-    /\b(?:Date|process|globalThis|require|eval|Function|performance)\b|Math\s*\.\s*random\b/.test(
-      source,
-    )
+    (ts.isBreakStatement(parent) ||
+      ts.isContinueStatement(parent) ||
+      ts.isLabeledStatement(parent)) &&
+    parent.label === node
   ) {
-    return 'an obvious ambient-state reference was detected';
+    return false;
   }
-  return undefined;
+  return !ts.isDeclarationName(node);
+}
+
+function unsupportedLexicalKeyword(node) {
+  if (
+    node.kind === ts.SyntaxKind.SuperKeyword ||
+    ts.isMetaProperty(node)
+  ) {
+    return true;
+  }
+  let found = false;
+  ts.forEachChild(node, (child) => {
+    if (!found && unsupportedLexicalKeyword(child)) {
+      found = true;
+    }
+  });
+  return found;
+}
+
+function assertProvablyPure(callbackEntry) {
+  if (!Object.hasOwn(callbackEntry, 'impureReason')) {
+    callbackEntry.impureReason = obviousImpurityReason(callbackEntry.callback);
+  }
+  if (callbackEntry.impureReason) {
+    throw new EngineImpureCallbackError(
+      callbackEntry.configPath,
+      callbackEntry.impureReason,
+    );
+  }
 }
 
 function serializeModuleConfig(value, callbacks, configPath) {
@@ -230,20 +337,9 @@ function prepareInput(input) {
   return { callbacks, serializableInput };
 }
 
-function sameMaterializedValue(left, right) {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function evaluateTwice(callbackEntry, args, normalize) {
-  const first = normalize(callbackEntry.callback(...args), callbackEntry);
-  const second = normalize(callbackEntry.callback(...args), callbackEntry);
-  if (!sameMaterializedValue(first, second)) {
-    throw new EngineImpureCallbackError(
-      callbackEntry.configPath,
-      'two evaluations on the same concrete context returned different values',
-    );
-  }
-  return first;
+function evaluateOnce(callbackEntry, args, normalize) {
+  assertProvablyPure(callbackEntry);
+  return normalize(callbackEntry.callback(...args), callbackEntry);
 }
 
 function normalizeTags(value, callbackEntry) {
@@ -286,7 +382,7 @@ function materializeTagCallbacks(candidates, callbacks) {
         new RegExp(candidate.matcherContext.regexSource),
       );
     }
-    return evaluateTwice(
+    return evaluateOnce(
       callbackEntry,
       [Object.fromEntries(candidate.placeholders), matcherContext],
       normalizeTags,
@@ -307,7 +403,7 @@ function materializeRuleCallbacks(candidates, callbacks) {
         `Sheriff Rust engine emitted unknown rule matcher ${candidate.matcherId}`,
       );
     }
-    return evaluateTwice(
+    return evaluateOnce(
       callbackEntry,
       [candidate.context],
       normalizeRuleDecision,

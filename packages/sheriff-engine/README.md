@@ -23,6 +23,21 @@ JavaScript `RegExp` values are serialized as `{ source, flags }` only for
 `encapsulationPattern`. Sticky (`y`) and Unicode-set (`v`) flags are rejected with a structured
 error because approximating either at the stateless JSON boundary would be incorrect.
 
+## Function callback materialization
+
+The JavaScript bridge batches only reachable callbacks whose source has no free identifiers.
+The TypeScript compiler parses `Function.prototype.toString()` output and resolves lexical symbols
+to distinguish parameter and local bindings from closures, imports, and ambient globals.
+Destructured and nested parameters are supported; non-computed property names and string literals
+are not references.
+Native/opaque functions, unsupported source forms, `this`, `super`, `import.meta`, `new.target`,
+and every unresolved identifier cause `SHERIFF_ENGINE_IMPURE_CALLBACK` fallback before the
+callback is invoked.
+
+This lexical gate cannot prove that calls made through a parameter are side-effect-free, nor can
+it detect mutation reachable only through such a parameter. Accepted callbacks are therefore
+invoked exactly once per concrete candidate; the bridge does not probe them with extra calls.
+
 ## R2 import-resolution shadow API
 
 `resolveProjectImports` parses imports with oxc and resolves them in Rust, but is

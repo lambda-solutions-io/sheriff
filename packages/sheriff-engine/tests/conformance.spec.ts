@@ -78,8 +78,8 @@ describe.skipIf(!nativeEnabled)('function materialisation protocol', () => {
       externalRules: {
         's*': (context) =>
           !('to' in context) &&
-          context.fromModulePath === 'src/source' &&
-          context.fromFilePath === 'src/source/entry.ts',
+          context.fromModulePath === '/project/src/source' &&
+          context.fromFilePath === '/project/src/source/entry.ts',
         source: () => false,
       },
     });
@@ -138,6 +138,58 @@ describe.skipIf(!nativeEnabled)('function materialisation protocol', () => {
     expect(output.violations.dependency[0]?.file).toBe('src/source/blocked.ts');
   });
 
+  it('passes absolute paths in dependency callback contexts', () => {
+    const output = analyze({
+      ...dependencyInput(),
+      depRules: {
+        source: ({
+          fromModulePath,
+          toModulePath,
+          fromFilePath,
+          toFilePath,
+        }) =>
+          fromModulePath === '/project/src/source' &&
+          toModulePath === '/project/src/target' &&
+          fromFilePath === '/project/src/source/entry.ts' &&
+          toFilePath === '/project/src/target/entry.ts',
+        target: [],
+      },
+    });
+
+    expect(output).not.toHaveProperty('error');
+    if ('error' in output) return;
+    expect(output.violations.dependency).toEqual([]);
+  });
+
+  it('serializes dependency callback properties in TypeScript insertion order', () => {
+    const output = JSON.parse(
+      analyzeProject(
+        JSON.stringify({
+          ...dependencyInput(),
+          depRules: {
+            source: { __sheriffEngineCallbackId: 0 },
+            target: [],
+          },
+        }),
+      ),
+    ) as {
+      ruleCallbackCandidates: Array<{ context: Record<string, unknown> }>;
+    };
+
+    expect(Object.keys(output.ruleCallbackCandidates[0]?.context ?? {})).toEqual(
+      [
+        'fromModulePath',
+        'toModulePath',
+        'fromFilePath',
+        'toFilePath',
+        'fromTags',
+        'toTags',
+        'from',
+        'to',
+      ],
+    );
+  });
+
   it('passes accumulated placeholders and the final regex matcher context to tag functions', () => {
     const output = analyze({
       ...baseInput(),
@@ -167,12 +219,126 @@ describe.skipIf(!nativeEnabled)('function materialisation protocol', () => {
   it('rejects an obviously stateful callback before it can be batched', () => {
     let calls = 0;
     const input: EngineInput = {
-      ...baseInput(),
-      depRules: { root: () => calls++ % 2 === 0 },
+      ...dependencyInput(),
+      depRules: {
+        source: () => calls++ % 2 === 0,
+        target: [],
+      },
     };
 
     expect(() => analyzeProject(input)).toThrow(EngineImpureCallbackError);
     expect(calls).toBe(0);
+  });
+
+  it('rejects callbacks that close over helper functions before invoking them', () => {
+    const calls: number[] = [];
+    const bump = () => calls.push(1);
+    const input: EngineInput = {
+      ...dependencyInput(),
+      depRules: {
+        source: ({ toFilePath }) => (bump(), toFilePath.startsWith('/')),
+        target: [],
+      },
+    };
+
+    expect(() => analyzeProject(input)).toThrow(EngineImpureCallbackError);
+    expect(calls).toEqual([]);
+  });
+
+  it('evaluates each materialized callback exactly once per candidate', () => {
+    const output = analyze({
+      ...dependencyInput(),
+      depRules: {
+        source: (context) => (
+          context.fromTags.push('seen'), context.fromTags.length === 2
+        ),
+        target: [],
+      },
+    });
+
+    expect(output).not.toHaveProperty('error');
+    if ('error' in output) return;
+    expect(output.violations.dependency).toEqual([]);
+  });
+
+  it('accepts nested parameters, property keys, and string literals as non-free identifiers', () => {
+    const output = analyze({
+      ...dependencyInput(),
+      depRules: {
+        source: ({ toTags }) =>
+          toTags.some((tag) => ({ value: tag, label: 'tag' }).value === tag),
+        target: [],
+      },
+    });
+
+    expect(output).not.toHaveProperty('error');
+    if ('error' in output) return;
+    expect(output.violations.dependency).toEqual([]);
+  });
+
+  it('does not materialize dependency callbacks after a matching string', () => {
+    const output = analyze({
+      ...dependencyInput(),
+      depRules: {
+        source: [
+          'target',
+          () => {
+            throw new Error('UNREACHABLE');
+          },
+        ],
+        target: [],
+      },
+    });
+
+    expect(output).not.toHaveProperty('error');
+    if ('error' in output) return;
+    expect(output.violations.dependency).toEqual([]);
+  });
+
+  it('does not materialize deny callbacks after a matching string', () => {
+    const output = analyze({
+      ...dependencyInput(),
+      depRules: { source: 'target', target: [] },
+      denyRules: {
+        source: [
+          'target',
+          () => {
+            throw new Error('UNREACHABLE');
+          },
+        ],
+      },
+    });
+
+    expect(output).not.toHaveProperty('error');
+    if ('error' in output) return;
+    expect(output.violations.dependency).toEqual([
+      expect.objectContaining({ cause: 'deny-rule' }),
+    ]);
+  });
+
+  it('does not materialize external callbacks after a statically denying key', () => {
+    const output = analyze({
+      ...baseInput(),
+      files: [
+        {
+          path: 'src/source/entry.ts',
+          imports: [{ raw: 'library', kind: 'external' }],
+        },
+      ],
+      modulePaths: [{ path: 'src/source', isBarrel: false }],
+      moduleConfig: { 'src/source': 'source' },
+      depRules: { source: '*' },
+      externalRules: {
+        source: [],
+        's*': () => {
+          throw new Error('UNREACHABLE');
+        },
+      },
+    });
+
+    expect(output).not.toHaveProperty('error');
+    if ('error' in output) return;
+    expect(output.violations.external).toHaveLength(1);
   });
 
   it('still reports SH-002 when no from key matches', () => {
@@ -208,7 +374,7 @@ describe.skipIf(!nativeEnabled)('function materialisation protocol', () => {
 function baseInput(): EngineInput {
   return {
     schemaVersion: 1,
-    rootDir: '.',
+    rootDir: '/project',
     files: [],
     modulePaths: [],
     moduleConfig: {},
@@ -220,6 +386,30 @@ function baseInput(): EngineInput {
     enableBarrelLess: true,
     excludeRoot: false,
     barrelFileName: 'index.ts',
+  };
+}
+
+function dependencyInput(): EngineInput {
+  return {
+    ...baseInput(),
+    files: [
+      {
+        path: 'src/source/entry.ts',
+        imports: [
+          {
+            raw: '../target/entry.ts',
+            kind: 'module',
+            resolvedPath: 'src/target/entry.ts',
+          },
+        ],
+      },
+      { path: 'src/target/entry.ts', imports: [] },
+    ],
+    modulePaths: [
+      { path: 'src/source', isBarrel: false },
+      { path: 'src/target', isBarrel: false },
+    ],
+    moduleConfig: { 'src/source': 'source', 'src/target': 'target' },
   };
 }
 

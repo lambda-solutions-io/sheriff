@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::path::{Component, Path, PathBuf};
 
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -104,23 +105,23 @@ enum RuleCallbackContext {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DependencyCallbackContext {
-    from: String,
-    to: String,
     from_module_path: String,
     to_module_path: String,
     from_file_path: String,
     to_file_path: String,
     from_tags: Vec<String>,
     to_tags: Vec<String>,
+    from: String,
+    to: String,
 }
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ExternalCallbackContext {
-    from: String,
     from_tags: Vec<String>,
     from_module_path: String,
     from_file_path: String,
+    from: String,
     external_library: String,
 }
 
@@ -184,6 +185,13 @@ pub fn analyze(input: EngineInput) -> Result<AnalyzeResult, String> {
         ));
     }
 
+    let callback_root_dir =
+        normalize_lexically(&std::path::absolute(&input.root_dir).map_err(|error| {
+            format!(
+                "could not make rootDir '{}' absolute for callback contexts: {error}",
+                input.root_dir
+            )
+        })?);
     let mut interner = PathInterner::default();
     let mut file_paths = Vec::with_capacity(input.files.len());
     let mut file_by_path = FxHashMap::default();
@@ -334,6 +342,7 @@ pub fn analyze(input: EngineInput) -> Result<AnalyzeResult, String> {
         &input.dep_rules,
         &input.deny_rules,
         &input.external_rules,
+        &callback_root_dir,
     )?;
     if !rule_callback_candidates.is_empty() && rule_callback_results.is_none() {
         return Ok(AnalyzeResult::RuleCallbacks(RuleCallbackOutput {
@@ -460,6 +469,7 @@ fn collect_rule_callback_candidates(
     dep_rules: &OrderedMap<RuleValue>,
     deny_rules: &OrderedMap<RuleValue>,
     external_rules: &OrderedMap<RuleValue>,
+    callback_root_dir: &Path,
 ) -> Result<(Vec<RuleCallbackCandidate>, FxHashMap<CallbackSlot, usize>), String> {
     let mut candidates = Vec::new();
     let mut slots = FxHashMap::default();
@@ -483,6 +493,7 @@ fn collect_rule_callback_candidates(
                         from_module,
                         to_module,
                         interner,
+                        callback_root_dir,
                         &mut candidates,
                         &mut slots,
                     )?;
@@ -496,46 +507,70 @@ fn collect_rule_callback_candidates(
                         from_module,
                         to_module,
                         interner,
+                        callback_root_dir,
                         &mut candidates,
                         &mut slots,
                     )?;
                 }
                 ImportData::External { raw } => {
-                    for (from_tag_index, from) in from_module.tags.iter().enumerate() {
+                    'from_tags: for (from_tag_index, from) in from_module.tags.iter().enumerate() {
                         for (rule_index, (from_pattern, rule)) in
                             external_rules.0.iter().enumerate()
                         {
                             if !wildcard_matches(from_pattern, from) {
                                 continue;
                             }
+                            let mut has_callback = false;
+                            let mut is_statically_allowed = false;
                             for (matcher_index, matcher) in rule.matchers().iter().enumerate() {
-                                let RuleMatcher::Callback(matcher_id) = matcher else {
-                                    continue;
-                                };
-                                let slot = CallbackSlot {
-                                    category: RuleCategory::External,
-                                    file_index,
-                                    import_index,
-                                    from_tag_index,
-                                    to_tag_index: 0,
-                                    rule_index,
-                                    matcher_index,
-                                };
-                                push_rule_candidate(
-                                    *matcher_id,
-                                    RuleCallbackContext::External(ExternalCallbackContext {
-                                        from: from.clone(),
-                                        from_tags: from_module.tags.clone(),
-                                        from_module_path: interner
-                                            .text(from_module.path)
-                                            .to_owned(),
-                                        from_file_path: interner.text(file.path).to_owned(),
-                                        external_library: raw.clone(),
-                                    }),
-                                    slot,
-                                    &mut candidates,
-                                    &mut slots,
-                                )?;
+                                match matcher {
+                                    RuleMatcher::Static(pattern)
+                                        if wildcard_matches(pattern, raw) =>
+                                    {
+                                        is_statically_allowed = true;
+                                        break;
+                                    }
+                                    RuleMatcher::Callback(matcher_id) => {
+                                        has_callback = true;
+                                        let slot = CallbackSlot {
+                                            category: RuleCategory::External,
+                                            file_index,
+                                            import_index,
+                                            from_tag_index,
+                                            to_tag_index: 0,
+                                            rule_index,
+                                            matcher_index,
+                                        };
+                                        push_rule_candidate(
+                                            *matcher_id,
+                                            RuleCallbackContext::External(
+                                                ExternalCallbackContext {
+                                                    from_tags: from_module.tags.clone(),
+                                                    from_module_path: callback_path(
+                                                        callback_root_dir,
+                                                        interner.text(from_module.path),
+                                                    ),
+                                                    from_file_path: callback_path(
+                                                        callback_root_dir,
+                                                        interner.text(file.path),
+                                                    ),
+                                                    from: from.clone(),
+                                                    external_library: raw.clone(),
+                                                },
+                                            ),
+                                            slot,
+                                            &mut candidates,
+                                            &mut slots,
+                                        )?;
+                                    }
+                                    RuleMatcher::Null | RuleMatcher::Static(_) => {}
+                                }
+                            }
+                            if is_statically_allowed {
+                                continue;
+                            }
+                            if !has_callback {
+                                continue 'from_tags;
                             }
                         }
                     }
@@ -558,49 +593,89 @@ fn collect_dependency_candidates(
     from_module: &ModuleData,
     to_module: &ModuleData,
     interner: &PathInterner,
+    callback_root_dir: &Path,
     candidates: &mut Vec<RuleCallbackCandidate>,
     slots: &mut FxHashMap<CallbackSlot, usize>,
 ) -> Result<(), String> {
-    for (from_tag_index, from) in from_module.tags.iter().enumerate() {
+    'from_tags: for (from_tag_index, from) in from_module.tags.iter().enumerate() {
         for (rule_index, (from_pattern, rule)) in rules.0.iter().enumerate() {
             if !wildcard_matches(from_pattern, from) {
                 continue;
             }
             for (to_tag_index, to) in to_module.tags.iter().enumerate() {
                 for (matcher_index, matcher) in rule.matchers().iter().enumerate() {
-                    let RuleMatcher::Callback(matcher_id) = matcher else {
-                        continue;
-                    };
-                    let slot = CallbackSlot {
-                        category,
-                        file_index,
-                        import_index,
-                        from_tag_index,
-                        to_tag_index,
-                        rule_index,
-                        matcher_index,
-                    };
-                    push_rule_candidate(
-                        *matcher_id,
-                        RuleCallbackContext::Dependency(DependencyCallbackContext {
-                            from: from.clone(),
-                            to: to.clone(),
-                            from_module_path: interner.text(from_module.path).to_owned(),
-                            to_module_path: interner.text(to_module.path).to_owned(),
-                            from_file_path: interner.text(file.path).to_owned(),
-                            to_file_path: interner.text(target_file.path).to_owned(),
-                            from_tags: from_module.tags.clone(),
-                            to_tags: to_module.tags.clone(),
-                        }),
-                        slot,
-                        candidates,
-                        slots,
-                    )?;
+                    match matcher {
+                        RuleMatcher::Static(pattern) if wildcard_matches(pattern, to) => {
+                            continue 'from_tags;
+                        }
+                        RuleMatcher::Callback(matcher_id) => {
+                            let slot = CallbackSlot {
+                                category,
+                                file_index,
+                                import_index,
+                                from_tag_index,
+                                to_tag_index,
+                                rule_index,
+                                matcher_index,
+                            };
+                            push_rule_candidate(
+                                *matcher_id,
+                                RuleCallbackContext::Dependency(DependencyCallbackContext {
+                                    from_module_path: callback_path(
+                                        callback_root_dir,
+                                        interner.text(from_module.path),
+                                    ),
+                                    to_module_path: callback_path(
+                                        callback_root_dir,
+                                        interner.text(to_module.path),
+                                    ),
+                                    from_file_path: callback_path(
+                                        callback_root_dir,
+                                        interner.text(file.path),
+                                    ),
+                                    to_file_path: callback_path(
+                                        callback_root_dir,
+                                        interner.text(target_file.path),
+                                    ),
+                                    from_tags: from_module.tags.clone(),
+                                    to_tags: to_module.tags.clone(),
+                                    from: from.clone(),
+                                    to: to.clone(),
+                                }),
+                                slot,
+                                candidates,
+                                slots,
+                            )?;
+                        }
+                        RuleMatcher::Null | RuleMatcher::Static(_) => {}
+                    }
                 }
             }
         }
     }
     Ok(())
+}
+
+fn callback_path(root_dir: &Path, relative_path: &str) -> String {
+    normalize_lexically(&root_dir.join(relative_path))
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component);
+            }
+        }
+    }
+    normalized
 }
 
 fn push_rule_candidate(
