@@ -30,6 +30,6 @@ export const getProjectDirsFromFileInfo = (
     projectDirs.add(toFsPath(projectDir));
   }
 
-  log.info(Array.from(projectDirs).join(', '));
+  log.info(() => Array.from(projectDirs).join(', '));
   return Array.from(projectDirs);
 };

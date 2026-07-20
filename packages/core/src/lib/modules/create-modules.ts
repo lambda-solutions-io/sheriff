@@ -71,20 +71,13 @@ function normalizeModulePathInfo(
     : modulePathInfo;
 }
 
-function findClosestModulePath(
+/** Finds the deepest ancestor module using one set probe per path segment. */
+export function findClosestModulePath(
   path: string,
-  modulePaths: Set<FsPath>,
+  modulePaths: ReadonlySet<FsPath>,
   rootDir: FsPath,
-) {
+): FsPath {
   let currentPath = path;
-  const pathSeparator = path.startsWith('/') ? '/' : '\\';
-  const rootPrefix = rootDir.endsWith(pathSeparator)
-    ? rootDir
-    : `${rootDir}${pathSeparator}`;
-
-  if (!path.startsWith(rootPrefix)) {
-    return throwIfNull(undefined, `findClosestModule for ${path}`);
-  }
 
   while (currentPath) {
     if (modulePaths.has(currentPath as FsPath)) {
@@ -95,11 +88,24 @@ function findClosestModulePath(
       break;
     }
 
-    const separatorIndex = currentPath.lastIndexOf(pathSeparator);
-    currentPath =
-      separatorIndex < rootDir.length
-        ? rootDir
-        : currentPath.substring(0, separatorIndex);
+    // paths can mix separators (tsconfig-derived vs fs-derived on Windows);
+    // cut at whichever separator comes last.
+    const separatorIndex = Math.max(
+      currentPath.lastIndexOf('/'),
+      currentPath.lastIndexOf('\\'),
+    );
+    if (separatorIndex <= 0) {
+      break;
+    }
+    currentPath = currentPath.substring(0, separatorIndex);
+  }
+
+  // Files that are not under any module directory but share the rootDir
+  // string prefix (e.g. `/repo/src2/x.ts` with rootDir `/repo/src`) were
+  // assigned to the root module by the previous prefix-based matching;
+  // keep that behavior instead of throwing.
+  if (path.startsWith(rootDir) && modulePaths.has(rootDir)) {
+    return rootDir;
   }
 
   return throwIfNull(undefined, `findClosestModule for ${path}`);

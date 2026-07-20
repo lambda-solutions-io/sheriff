@@ -5,6 +5,11 @@ import getFs from '../fs/getFs';
 
 export type LogMessage = string | (() => string);
 
+/**
+ * Pre-init messages are queued as thunks; the cap prevents unbounded
+ * retention of closures (and their captured graphs) when init never runs.
+ */
+const MAX_PRE_INIT_QUEUE = 1000;
 let logQueue: (() => string)[] = [];
 let initialized = false;
 let enabled = false;
@@ -47,6 +52,9 @@ export function log(message: LogMessage, scope = '', level: LogLevel) {
   if (initialized) {
     doLog(getData());
   } else {
+    if (logQueue.length >= MAX_PRE_INIT_QUEUE) {
+      logQueue.shift();
+    }
     logQueue.push(getData);
   }
 }
