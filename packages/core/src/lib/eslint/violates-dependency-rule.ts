@@ -8,6 +8,7 @@ import {
 } from '../checks/check-for-dependency-rule-violation';
 import { FileInfo } from '../modules/file.info';
 import { isRelativeImport } from './is-relative-import';
+import { getSharedProjectInfoOrUndefined } from './shared-project-info';
 import {
   checkForExternalRuleViolation,
   ExternalRuleViolation,
@@ -37,11 +38,16 @@ export const violatesDependencyRule = (
 
   if (!cacheActive) {
     cacheActive = true;
-    const projectInfo = init(toFsPath(filename), {
-      traverse: false,
-      entryFileContent: fileContent,
-      returnOnMissingConfig: true,
-    });
+    const projectInfo = getSharedProjectInfoOrUndefined(
+      toFsPath(filename),
+      fileContent,
+      () =>
+        init(toFsPath(filename), {
+          traverse: false,
+          entryFileContent: fileContent,
+          returnOnMissingConfig: true,
+        }),
+    );
 
     if (!projectInfo) {
       log.info('no sheriff.config.ts present');
