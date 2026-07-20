@@ -19,14 +19,26 @@ export class JsonRpcMessageReader {
       const header = this.buffer.subarray(0, headerEnd).toString('ascii');
       const contentLength = parseContentLength(header);
       const bodyStart = headerEnd + headerSeparator.length;
+      if (contentLength === undefined) {
+        // a header block without Content-Length can never be completed;
+        // skip it instead of wedging the stream forever.
+        this.buffer = this.buffer.subarray(bodyStart);
+        continue;
+      }
       const messageEnd = bodyStart + contentLength;
       if (this.buffer.length < messageEnd) {
         return messages;
       }
 
       const body = this.buffer.subarray(bodyStart, messageEnd).toString('utf8');
-      messages.push(JSON.parse(body) as JsonRpcMessage);
+      // consume the frame before parsing so a malformed body cannot
+      // wedge the codec or drop later frames from the same chunk.
       this.buffer = this.buffer.subarray(messageEnd);
+      try {
+        messages.push(JSON.parse(body) as JsonRpcMessage);
+      } catch {
+        // malformed frame: skip it, keep decoding subsequent frames
+      }
     }
   }
 }
@@ -39,7 +51,7 @@ export function encodeJsonRpcMessage(message: JsonRpcMessage): Buffer {
   );
 }
 
-function parseContentLength(header: string): number {
+function parseContentLength(header: string): number | undefined {
   for (const line of header.split('\r\n')) {
     const separatorIndex = line.indexOf(':');
     if (separatorIndex === -1) {
@@ -55,5 +67,5 @@ function parseContentLength(header: string): number {
     }
   }
 
-  throw new Error('Missing Content-Length header');
+  return undefined;
 }

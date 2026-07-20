@@ -3,7 +3,15 @@ export function filePathToUri(filePath: string): string {
   const pathname = normalizedPath.startsWith('/')
     ? normalizedPath
     : `/${normalizedPath}`;
-  return `file://${encodeURI(pathname).replaceAll('#', '%23')}`;
+  // encode per segment; encodeURI would leave '?' and '%' intact and
+  // break the uriToFilePath roundtrip. Keep Windows drive colons.
+  const encoded = pathname
+    .split('/')
+    .map((segment) =>
+      /^[A-Za-z]:$/.test(segment) ? segment : encodeURIComponent(segment),
+    )
+    .join('/');
+  return `file://${encoded}`;
 }
 
 export function uriToFilePath(uri: string): string {

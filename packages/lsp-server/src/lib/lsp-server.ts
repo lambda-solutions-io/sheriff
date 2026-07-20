@@ -11,6 +11,12 @@ export interface LspConnection {
 export interface SheriffLspServerOptions {
   connection: LspConnection;
   createDiagnostics?: (uri: string, text: string) => Diagnostic[];
+  /**
+   * Delay before diagnostics run after didChange, coalescing keystroke
+   * storms. 0 (default) publishes synchronously — used by tests; main.ts
+   * wires a real delay.
+   */
+  changeDebounceMs?: number;
 }
 
 interface TextDocumentItem {
@@ -53,12 +59,18 @@ export class SheriffLspServer {
     text: string,
   ) => Diagnostic[];
   private readonly documents = new Map<string, TextDocumentItem>();
+  private readonly pendingDiagnostics = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
+  private readonly changeDebounceMs: number;
   private shutdownRequested = false;
 
   constructor(options: SheriffLspServerOptions) {
     this.connection = options.connection;
     this.createDiagnostics =
       options.createDiagnostics ?? createSheriffDiagnostics;
+    this.changeDebounceMs = options.changeDebounceMs ?? 0;
   }
 
   handleMessage(message: JsonRpcMessage): void {
@@ -68,11 +80,36 @@ export class SheriffLspServer {
     }
 
     const id = isRequest(message) ? message['id'] : undefined;
+    try {
+      this.dispatch(method, id, message);
+    } catch (error) {
+      if (id !== undefined) {
+        this.connection.send({
+          jsonrpc: '2.0',
+          id,
+          error: {
+            code: -32603,
+            message: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
+    }
+  }
+
+  private dispatch(
+    method: string,
+    id: RequestId | undefined,
+    message: JsonRpcMessage,
+  ): void {
     switch (method) {
       case 'initialize':
         this.respond(id, {
           capabilities: {
-            textDocumentSync: 1,
+            textDocumentSync: {
+              openClose: true,
+              change: 1,
+              save: { includeText: true },
+            },
           },
           serverInfo: {
             name: 'sheriff-lsp',
@@ -116,35 +153,51 @@ export class SheriffLspServer {
   }
 
   private didOpen(params: unknown): void {
-    const typedParams = params as DidOpenTextDocumentParams;
-    const document = typedParams.textDocument;
+    const typedParams = params as Partial<DidOpenTextDocumentParams>;
+    const document = typedParams?.textDocument;
+    if (
+      typeof document?.uri !== 'string' ||
+      typeof document.text !== 'string'
+    ) {
+      return;
+    }
     this.documents.set(document.uri, document);
     this.publishDiagnostics(document.uri, document.text, document.version);
   }
 
   private didChange(params: unknown): void {
-    const typedParams = params as DidChangeTextDocumentParams;
-    const change = typedParams.contentChanges.at(-1);
-    if (!change) {
+    const typedParams = params as Partial<DidChangeTextDocumentParams>;
+    const uri = typedParams?.textDocument?.uri;
+    const change = Array.isArray(typedParams?.contentChanges)
+      ? typedParams.contentChanges.at(-1)
+      : undefined;
+    if (typeof uri !== 'string' || typeof change?.text !== 'string') {
       return;
     }
 
-    const existingDocument = this.documents.get(typedParams.textDocument.uri);
+    const existingDocument = this.documents.get(uri);
     const document = {
-      uri: typedParams.textDocument.uri,
+      uri,
       text: change.text,
-      version: typedParams.textDocument.version,
+      version: typedParams?.textDocument?.version,
     };
     this.documents.set(document.uri, {
       ...existingDocument,
       ...document,
     });
-    this.publishDiagnostics(document.uri, document.text, document.version);
+    this.schedulePublishDiagnostics(
+      document.uri,
+      document.text,
+      document.version,
+    );
   }
 
   private didSave(params: unknown): void {
-    const typedParams = params as DidSaveTextDocumentParams;
-    const uri = typedParams.textDocument.uri;
+    const typedParams = params as Partial<DidSaveTextDocumentParams>;
+    const uri = typedParams?.textDocument?.uri;
+    if (typeof uri !== 'string') {
+      return;
+    }
     const existingDocument = this.documents.get(uri);
     const text = typedParams.text ?? existingDocument?.text ?? readFile(uri);
     if (text === undefined) {
@@ -152,6 +205,7 @@ export class SheriffLspServer {
       return;
     }
 
+    this.cancelPendingDiagnostics(uri);
     this.documents.set(uri, {
       uri,
       text,
@@ -161,10 +215,46 @@ export class SheriffLspServer {
   }
 
   private didClose(params: unknown): void {
-    const typedParams = params as DidCloseTextDocumentParams;
-    const uri = typedParams.textDocument.uri;
+    const typedParams = params as Partial<DidCloseTextDocumentParams>;
+    const uri = typedParams?.textDocument?.uri;
+    if (typeof uri !== 'string') {
+      return;
+    }
+    this.cancelPendingDiagnostics(uri);
     this.documents.delete(uri);
     this.sendDiagnostics(uri, []);
+  }
+
+  private schedulePublishDiagnostics(
+    uri: string,
+    text: string,
+    version?: number | null,
+  ): void {
+    if (this.changeDebounceMs <= 0) {
+      this.publishDiagnostics(uri, text, version);
+      return;
+    }
+
+    this.cancelPendingDiagnostics(uri);
+    const timer = setTimeout(() => {
+      this.pendingDiagnostics.delete(uri);
+      // publish the latest stored text, not the captured one, in case
+      // didSave updated the document while the timer was pending
+      const document = this.documents.get(uri);
+      if (document) {
+        this.publishDiagnostics(uri, document.text, document.version);
+      }
+    }, this.changeDebounceMs);
+    timer.unref?.();
+    this.pendingDiagnostics.set(uri, timer);
+  }
+
+  private cancelPendingDiagnostics(uri: string): void {
+    const pending = this.pendingDiagnostics.get(uri);
+    if (pending !== undefined) {
+      clearTimeout(pending);
+      this.pendingDiagnostics.delete(uri);
+    }
   }
 
   private publishDiagnostics(

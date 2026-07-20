@@ -21,6 +21,7 @@ function main(): void {
 
   const reader = new JsonRpcMessageReader();
   const server = createSheriffLspServer({
+    changeDebounceMs: 150,
     connection: {
       send: (message) => {
         process.stdout.write(encodeJsonRpcMessage(message));
@@ -32,13 +33,15 @@ function main(): void {
   });
 
   process.stdin.on('data', (chunk: Buffer) => {
-    try {
-      for (const message of reader.push(chunk)) {
+    // isolate failures per message so one bad payload cannot drop the
+    // remaining messages decoded from the same chunk
+    for (const message of reader.push(chunk)) {
+      try {
         server.handleMessage(message);
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        process.stderr.write(`Failed to process LSP message: ${text}\n`);
       }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      process.stderr.write(`Failed to process LSP message: ${message}\n`);
     }
   });
 }
