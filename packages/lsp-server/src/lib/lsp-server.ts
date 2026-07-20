@@ -14,6 +14,8 @@ export interface SheriffLspServerOptions {
     uri: string,
     text: string,
   ) => Diagnostic[] | Promise<Diagnostic[]>;
+  /** Releases resources owned by the diagnostics implementation. */
+  disposeDiagnostics?: () => void;
   /**
    * Delay before diagnostics run after a document changes, coalescing
    * keystroke storms. Open documents are always analyzed immediately.
@@ -62,6 +64,19 @@ export function createSheriffLspServer(
   const initializingDocuments = new Set<string>();
   const disposables: Disposable[] = [];
   let state: ServerState = 'uninitialized';
+  let diagnosticsDisposed = false;
+
+  function disposeDiagnostics(): void {
+    if (diagnosticsDisposed) {
+      return;
+    }
+    diagnosticsDisposed = true;
+    try {
+      options.disposeDiagnostics?.();
+    } catch {
+      // Resource cleanup must not break the LSP shutdown lifecycle.
+    }
+  }
 
   function sendDiagnosticsSafely(
     uri: string,
@@ -221,6 +236,7 @@ export function createSheriffLspServer(
     connection.onShutdown(() => {
       state = 'shutdown';
       cancelAllDiagnostics();
+      disposeDiagnostics();
     }),
     documents.onDidChangeContent(({ document }) => {
       if (state === 'initializing') {
@@ -256,6 +272,7 @@ export function createSheriffLspServer(
     dispose: () => {
       state = 'shutdown';
       cancelAllDiagnostics();
+      disposeDiagnostics();
       for (const disposable of disposables) {
         disposable.dispose();
       }

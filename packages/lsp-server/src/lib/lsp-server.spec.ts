@@ -331,6 +331,17 @@ describe('Sheriff LSP server', () => {
     expect(harness.diagnostics).toEqual([{ uri, diagnostics: [] }]);
   });
 
+  it('disposes the diagnostics backend during shutdown', async () => {
+    const disposeDiagnostics = vi.fn();
+    const harness = await createServer({ disposeDiagnostics });
+
+    await harness.client.sendRequest('shutdown');
+
+    expect(disposeDiagnostics).toHaveBeenCalledOnce();
+    harness.dispose();
+    expect(disposeDiagnostics).toHaveBeenCalledOnce();
+  });
+
   it('releases document generations on close without reviving in-flight analysis', async () => {
     const analysis = deferred<Diagnostic[]>();
     const createDiagnostics = vi.fn(() => analysis.promise);
@@ -448,6 +459,7 @@ describe('Sheriff LSP server', () => {
         text: string,
       ) => Diagnostic[] | Promise<Diagnostic[]>;
       changeDebounceMs?: number;
+      disposeDiagnostics?: () => void;
       initialize?: boolean;
       sendInitialized?: boolean;
     } = {},
