@@ -131,7 +131,8 @@ node tools/perf/run-bench.mjs
 | R0: contract freeze | done | `4cd0b24`, `b55d719` |
 | R1: crate + napi boundary | **done** | `60cf45c`, `eafb213`, `90eaf8e` |
 | R2: oxc extraction + resolution | **done** | `df7319d`, `8ff89c9`, `bd266d3`, `694dc52` |
-| R2.1: narrow `typesVersions` fallback | **next** | |
+| R2.1: narrow `typesVersions` fallback | **done** | `9d99e3e` |
+| R2.2: implement `typesVersions` mapping | **in progress** | |
 | R3: function-rule materialisation | not started | |
 | R4: incremental ProjectHandle | not started | |
 | R5: consumer cutover + packaging | not started | |
@@ -421,6 +422,65 @@ still be caught, by fallback or by correct resolution).
 `typesVersions` changes a resolved path? Construct a project that imports a
 `typesVersions`-declaring package and verify it is either resolved correctly or
 declared.
+
+**Result (`9d99e3e`)**: the audit now takes the set of packages reached during
+resolution and runs *after* resolution rather than before, discarding results via
+`files.clear()` on late fallback outside shadow mode — so a late fallback stays
+indistinguishable from an early one. 73 Rust tests green, clippy clean under
+`-D warnings`. The harness reports `fallbackRate` as a first-class metric.
+
+Both target fixtures were fixed — and the metric immediately earned its keep by
+catching something the plan did not anticipate:
+
+| Fixture | Before | After | Why |
+| --- | --- | --- | --- |
+| `nextjs-i` | fallback | **passed** | triggers installed but never imported |
+| `angular-v-multi` | fallback | **passed** | same |
+| `angular-i`…`iv` | passed | **fallback** | genuinely import `rxjs`, which declares `typesVersions` |
+
+The angular flip is **not a regression**. The old audit walked only from input
+files up to `root_dir`, so it never saw the monorepo's **hoisted root
+`node_modules`** and missed `rxjs` entirely — meaning those four fixtures had been
+resolving through Rust with a `typesVersions` package live. Baseline "6 passed"
+was partly *false* passing, and the narrowed audit exposed it. Net rate 2/8 → 4/8.
+
+Do not "fix" this by restoring the `root_dir`-bounded walk; hoisted
+`node_modules` must stay visible. R2.2 closes the gap properly.
+
+---
+
+## R2.2 (in progress) — implement the `typesVersions` mapping
+
+**Goal**: resolve `typesVersions`-declaring packages through Rust instead of
+falling back, so the four `angular-*` fixtures stop falling back for a legitimate
+reason. Owner decision (2026-07-20): implement the mapping now rather than
+deferring, accepting the parity-test cost.
+
+**The exact TS algorithm** (`node_modules/typescript/lib/typescript.js`, TS 5.9.3)
+— two *different* selection rules that are easy to conflate:
+
+1. `getPackageJsonTypesVersionsPaths` (line 44235) picks the **first matching
+   range key in object insertion order** — not the best or most specific match.
+   Unparseable range keys are silently skipped, not errors. The version compared
+   is the **TypeScript compiler version**, not the package's.
+2. The resulting `paths` table is then matched by `findBestPatternMatch`
+   (line 3638), which picks the **longest matching `prefix`**, where a pattern
+   matches iff
+   `candidate.length >= prefix.length + suffix.length && startsWith(prefix) && endsWith(suffix)`.
+
+Implementing both as the same rule is a bug.
+
+**Mandatory gate**: a differential test calling the **real** `ts.resolveModuleName`
+and asserting identical resolved paths — unit tests alone do not satisfy R2.1
+step 2. Unsupported range syntax must fall back, never guess.
+
+**Exit criteria**: 8/8 fixtures passed, 0 fallback, **still 0 divergences**, with
+edge counts equal between engines. 8/8 with any divergence is a *worse* outcome
+than 4/8 with none.
+
+**Note**: the oracle contract is "sheriff under TS 4.8–5.7" but the installed
+compiler is 5.9.3. If that changes which range key matches for any fixture, it is
+a contract question for the owner, not an implementation detail.
 
 ---
 
