@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sheriff — Module Graph</title>
+    <link rel="stylesheet" href="./style.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">Sheriff — Module Graph</div>
+      <div id="summary" class="summary" aria-live="polite"></div>
+      <div class="controls">
+        <span id="pollStatus" class="poll-status" aria-live="polite"></span>
+        <button id="refreshBtn" type="button">Refresh</button>
+        <button id="pauseBtn" type="button">Pause</button>
+        <button id="fitBtn" type="button">Fit</button>
+        <button id="resetLayoutBtn" type="button" title="Clear saved positions and re-run layout">Reset layout</button>
+        <label class="check">
+          <input id="externalsToggle" type="checkbox">
+          <span>show externals</span>
+        </label>
+        <input id="searchInput" type="search" placeholder="Search modules" aria-label="Search modules">
+      </div>
+    </header>
+
+    <main class="shell">
+      <section id="filterRail" class="rail" aria-label="Filters">
+        <div class="rail-section">
+          <div class="rail-head">
+            <h3>Filters</h3>
+            <button id="clearFiltersBtn" type="button" class="link-btn">Clear</button>
+          </div>
+          <label class="check">
+            <input id="violationOnlyToggle" type="checkbox">
+            <span>violations only</span>
+          </label>
+        </div>
+        <div class="rail-section">
+          <div class="rail-head">
+            <h4>Tags</h4>
+            <span class="facet-actions">
+              <button type="button" class="link-btn" data-facet-all="tags">all</button>
+              <button type="button" class="link-btn" data-facet-none="tags">none</button>
+            </span>
+          </div>
+          <div id="tagFacets" class="facet-list" role="group" aria-label="Filter by tag"></div>
+        </div>
+        <div class="rail-section">
+          <div class="rail-head">
+            <h4>Projects</h4>
+            <span class="facet-actions">
+              <button type="button" class="link-btn" data-facet-all="projects">all</button>
+              <button type="button" class="link-btn" data-facet-none="projects">none</button>
+            </span>
+          </div>
+          <div id="projectFacets" class="facet-list" role="group" aria-label="Filter by project"></div>
+        </div>
+        <div class="rail-section">
+          <div class="rail-head">
+            <h4>Module type</h4>
+            <span class="facet-actions">
+              <button type="button" class="link-btn" data-facet-all="moduleTypes">all</button>
+              <button type="button" class="link-btn" data-facet-none="moduleTypes">none</button>
+            </span>
+          </div>
+          <div id="typeFacets" class="facet-list" role="group" aria-label="Filter by module type"></div>
+        </div>
+        <div id="externalRail" class="rail-section" hidden>
+          <h4>External libraries</h4>
+          <input id="externalSearch" type="search" class="rail-search" placeholder="Filter libraries" aria-label="Filter external libraries">
+          <div id="externalFacets" class="facet-list" role="group" aria-label="Toggle external libraries"></div>
+        </div>
+      </section>
+
+      <section class="graph-wrap" aria-label="Module dependency graph">
+        <div id="banner" class="banner" hidden>
+          <span>sheriff daemon unreachable — retrying</span>
+          <button id="dismissBanner" type="button" aria-label="Dismiss warning">x</button>
+        </div>
+        <div id="cy"></div>
+        <div id="emptyHint" class="empty" hidden>no modules found</div>
+        <div id="focusBar" class="focus-bar" hidden>
+          <span id="focusLabel"></span>
+          <span class="focus-depth" role="group" aria-label="Focus depth">
+            <button id="focusDepthDown" type="button" aria-label="Decrease focus depth">−</button>
+            <span id="focusDepthValue" aria-live="polite">1</span>
+            <button id="focusDepthUp" type="button" aria-label="Increase focus depth">+</button>
+          </span>
+          <select id="focusDirection" aria-label="Focus direction">
+            <option value="both">both</option>
+            <option value="in">incoming</option>
+            <option value="out">outgoing</option>
+          </select>
+          <button id="clearFocusBtn" type="button">Clear focus</button>
+        </div>
+        <div id="legend" class="legend" aria-label="Graph legend"></div>
+      </section>
+
+      <aside class="aside">
+        <nav class="tabs" role="tablist">
+          <button id="tabDetails" class="tab active" type="button" role="tab" aria-selected="true">Selection</button>
+          <button id="tabViolations" class="tab" type="button" role="tab" aria-selected="false">Violations</button>
+        </nav>
+        <div id="details" class="details" role="tabpanel" aria-live="polite">
+          <h2>Selection</h2>
+          <p class="muted">Select a module, file, or edge.</p>
+        </div>
+        <div id="violationsPanel" class="details" role="tabpanel" hidden></div>
+      </aside>
+    </main>
+
+    <script src="./vendor/cytoscape.min.js"></script>
+    <script src="./graph-helpers.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

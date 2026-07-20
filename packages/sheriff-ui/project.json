@@ -1,0 +1,37 @@
+{
+  "name": "sheriff-ui",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "packages/sheriff-ui/src",
+  "projectType": "library",
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/packages/sheriff-ui",
+        "main": "packages/sheriff-ui/src/index.ts",
+        "tsConfig": "packages/sheriff-ui/tsconfig.lib.json",
+        "assets": [
+          "packages/sheriff-ui/*.md",
+          {
+            "input": "packages/sheriff-ui/public",
+            "glob": "**/*",
+            "output": "public"
+          }
+        ]
+      }
+    },
+    "publish": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node tools/scripts/publish.mjs sheriff-ui {args.ver} {args.tag}"
+      },
+      "dependsOn": ["build"]
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint",
+      "outputs": ["{options.outputFile}"]
+    }
+  },
+  "tags": []
+}

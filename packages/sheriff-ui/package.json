@@ -1,0 +1,20 @@
+{
+  "name": "@lambda-solutions/sheriff-ui",
+  "version": "1.0.0",
+  "description": "Live module-graph UI plugin for Sheriff",
+  "homepage": "https://github.com/michaelbe812/sheriff",
+  "license": "MIT",
+  "author": {
+    "name": "Michael Berger",
+    "email": "michael.berger@berger-engineering.io"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/michaelbe812/sheriff"
+  },
+  "type": "commonjs",
+  "dependencies": {},
+  "peerDependencies": {
+    "@lambda-solutions/sheriff-core": "1.0.0"
+  }
+}
