@@ -1,0 +1,4 @@
+[workspace]
+members = ["packages/sheriff-engine/crate"]
+resolver = "2"
+

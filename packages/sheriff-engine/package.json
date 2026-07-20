@@ -1,0 +1,16 @@
+{
+  "name": "@lambda-solutions/sheriff-engine",
+  "version": "0.0.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "native"
+  ],
+  "scripts": {
+    "build:native": "node scripts/build-native.mjs"
+  }
+}

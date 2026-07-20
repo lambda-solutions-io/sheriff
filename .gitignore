@@ -43,4 +43,8 @@ Thumbs.db
 yalc.lock
 .test-projects
 
+# Rust / napi native output
+target/
+*.node
+
 .claude/worktrees
