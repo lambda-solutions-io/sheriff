@@ -78,6 +78,19 @@ export function findModulePaths(
   return modulePaths;
 }
 
+type PreparedModuleEntry = { path: string; exports?: string[] };
+
+/**
+ * The flattened, specificity-sorted config is identical for every module in
+ * a project, so it is prepared once per config object instead of once per
+ * module (which made barrel-less `init()` cost O(modules x configEntries)).
+ * Keyed by config identity, so a reparsed config produces a fresh entry.
+ */
+const preparedEntriesByModuleConfig = new WeakMap<
+  ModuleConfig,
+  PreparedModuleEntry[]
+>();
+
 function findExportsForModulePath(
   modulePath: FsPath,
   rootDir: FsPath,
@@ -88,10 +101,27 @@ function findExportsForModulePath(
     fs.relativeTo(rootDir, modulePath),
   );
 
-  return flattenModuleEntries(moduleConfig)
-    .filter(({ path }) => matchesFolderPathPattern(path, relativeModulePath))
-    .sort((left, right) => getSpecificity(right) - getSpecificity(left))
-    .at(0)?.exports;
+  // The list is pre-sorted by descending specificity, so the first match is
+  // the winner. `sort` is stable, so equally specific entries keep their
+  // declaration order — same tie-break as the previous filter/sort/at(0).
+  return getPreparedModuleEntries(moduleConfig).find(({ path }) =>
+    matchesFolderPathPattern(path, relativeModulePath),
+  )?.exports;
+}
+
+function getPreparedModuleEntries(
+  moduleConfig: ModuleConfig,
+): PreparedModuleEntry[] {
+  const cachedEntries = preparedEntriesByModuleConfig.get(moduleConfig);
+  if (cachedEntries) {
+    return cachedEntries;
+  }
+
+  const entries = flattenModuleEntries(moduleConfig).sort(
+    (left, right) => getSpecificity(right) - getSpecificity(left),
+  );
+  preparedEntriesByModuleConfig.set(moduleConfig, entries);
+  return entries;
 }
 
 function flattenModuleEntries(

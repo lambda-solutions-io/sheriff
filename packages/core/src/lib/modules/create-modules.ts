@@ -36,7 +36,10 @@ export function createModules(
         modulePathInfo.hasBarrel,
         barrelFile,
       );
-      module.exportedFilePatterns = modulePathInfo.exports;
+      // Keep the per-init Module fully detached from the cached skeleton.
+      module.exportedFilePatterns = modulePathInfo.exports
+        ? [...modulePathInfo.exports]
+        : undefined;
       return [path, module];
     }),
   );
