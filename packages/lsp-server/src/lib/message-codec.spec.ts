@@ -45,4 +45,35 @@ describe('message codec', () => {
       ),
     ).toEqual([first, second]);
   });
+
+  it('skips a malformed JSON frame and keeps decoding later frames', () => {
+    const reader = new JsonRpcMessageReader();
+    const broken = Buffer.from('Content-Length: 9\r\n\r\n{"id": 1,', 'utf8');
+    const valid = { jsonrpc: '2.0', id: 2, method: 'shutdown' };
+
+    expect(
+      reader.push(Buffer.concat([broken, encodeJsonRpcMessage(valid)])),
+    ).toEqual([valid]);
+  });
+
+  it('skips a header block without Content-Length instead of wedging', () => {
+    const reader = new JsonRpcMessageReader();
+    const headerless = Buffer.from('X-Custom: 1\r\n\r\n', 'utf8');
+    const valid = { jsonrpc: '2.0', method: 'initialized', params: {} };
+
+    expect(
+      reader.push(Buffer.concat([headerless, encodeJsonRpcMessage(valid)])),
+    ).toEqual([valid]);
+  });
+
+  it('frames multibyte UTF-8 payloads by byte length', () => {
+    const reader = new JsonRpcMessageReader();
+    const message = { jsonrpc: '2.0', method: 'x', params: { text: '日本語🙂' } };
+    const encoded = encodeJsonRpcMessage(message);
+
+    expect(reader.push(encoded.subarray(0, encoded.length - 1))).toEqual([]);
+    expect(reader.push(encoded.subarray(encoded.length - 1))).toEqual([
+      message,
+    ]);
+  });
 });
