@@ -9,7 +9,7 @@ import { list } from './list';
 import { cli } from './cli';
 import { exportData } from './export-data';
 import { version } from './version';
-import {version as packageVersion} from '../../../package.json';
+import { version as packageVersion } from '../../../package.json';
 import { getPlugins } from './internal/get-plugins';
 import { executePlugin } from './plugin-command';
 import { SheriffPlugin } from '../plugin/plugin';
@@ -22,7 +22,9 @@ function isBuiltinCommand(cmd: string | undefined): boolean {
 
 function showHelp(plugins: SheriffPlugin[]): void {
   cli.log(
-    cli.bold(`Sheriff (${packageVersion}) - Modularity for TypeScript Projects`),
+    cli.bold(
+      `Sheriff (${packageVersion}) - Modularity for TypeScript Projects`,
+    ),
   );
   cli.log('');
   cli.log('Commands:');
@@ -37,6 +39,9 @@ function showHelp(plugins: SheriffPlugin[]): void {
   );
   cli.log(
     '  sheriff verify [main.ts]: runs the verification process for the project.',
+  );
+  cli.log(
+    '  sheriff verify [main.ts] --files <files>: verifies rules originating from listed files.',
   );
   cli.log(
     '  sheriff verify --watch [main.ts]: re-runs the verification on file changes.',

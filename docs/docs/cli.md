@@ -18,9 +18,9 @@ See [Entry Files and Entry Points](#entry-files-and-entry-points) for configurat
 
 ## `verify [main.ts] --files <files>`
 
-Use `npx sheriff verify --files <files>` for one-shot pre-commit and lint-staged hooks. Sheriff checks only the listed changed files against the full project graph, so it skips the per-file check loop over the rest of the project.
+Use `npx sheriff verify --files <files>` for one-shot pre-commit and lint-staged hooks. Sheriff checks only rules where a listed changed file is the source of the import, encapsulation, or dependency check. It does not report violations that only appear in files importing a listed file; use full `verify` without `--files` or CI for complete coverage.
 
-A cold one-shot `verify --files` still builds the full project graph (via `init()`) on every run. The sub-second speed-up applies to the warm daemon / `verify --watch` path, where the already-built graph is reused; a cold run mainly saves the per-file checks, not the parse.
+A cold one-shot `verify --files` builds project graphs incrementally. With one configured entry point, that project is initialized as usual. With multiple entry points, Sheriff initializes them one at a time until it finds the project graphs that own all requested files, so later entry points that are not needed are not initialized. Because ownership cannot always be inferred from directory structure, Sheriff may initialize earlier candidates while confirming which project owns a file.
 
 It exits with a non-zero status when a listed file violates a rule.
 
@@ -107,10 +107,7 @@ export const config: SheriffConfig = {
   depRules: {
     feature: 'shared',
   },
-  plugins: [
-    new SheriffUiPlugin(),
-    new JunitReporterPlugin({ junitVersion: 1, reporters: ['html'] }),
-  ],
+  plugins: [new SheriffUiPlugin(), new JunitReporterPlugin({ junitVersion: 1, reporters: ['html'] })],
 };
 ```
 
@@ -163,14 +160,11 @@ export class WatchPlugin implements SheriffPlugin {
     const runOnce = () => {
       // First call pays the cold cost; later calls hit the warm cache.
       const { result, ms: verifyMs } = timed(() => api.verify());
-      const { result: projectData, ms: dataMs } = timed(() =>
-        api.getProjectData(),
-      );
+      const { result: projectData, ms: dataMs } = timed(() => api.getProjectData());
       // ProjectData is keyed by file path (one node per file), so this is
       // a file/node count — not a module count.
       api.log(
-        `success=${result.success} files=${Object.keys(projectData).length} ` +
-          `verify=${verifyMs}ms data=${dataMs}ms`,
+        `success=${result.success} files=${Object.keys(projectData).length} ` + `verify=${verifyMs}ms data=${dataMs}ms`,
       );
     };
 

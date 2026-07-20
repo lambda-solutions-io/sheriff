@@ -8,6 +8,7 @@ import { mockCli } from './helpers/mock-cli';
 import * as verifyFile from '../verify';
 import * as verifyWatchFile from '../verify-watch';
 import getFs from '../../fs/getFs';
+import * as initFile from '../../main/init';
 
 describe('verify', () => {
   beforeEach(() => {
@@ -217,6 +218,69 @@ describe('verify', () => {
       expect(mockedCli.endProcessOk).not.toHaveBeenCalled();
     });
 
+    it('initializes only the single configured entry point', () => {
+      const { mockedCli } = mockCli();
+      const initSpy = vitest.spyOn(initFile, 'init');
+
+      createProject({
+        'tsconfig.json': tsConfig(),
+        'sheriff.config.ts': sheriffConfig({
+          entryFile: 'src/main.ts',
+          depRules: {},
+        }),
+        src: {
+          'main.ts': ['./app'],
+          'app.ts': [],
+        },
+      });
+
+      verifyFile.verify([], { files: ['src/app.ts'] });
+
+      expect(initSpy).toHaveBeenCalledOnce();
+      expect(initSpy).toHaveBeenCalledWith('/project/src/main.ts');
+      expect(mockedCli.endProcessOk).toHaveBeenCalledOnce();
+    });
+
+    it('stops initializing entry points once the requested file is owned', () => {
+      const { mockedCli } = mockCli();
+      const initSpy = vitest.spyOn(initFile, 'init');
+
+      createProject({
+        'tsconfig.json': tsConfig(),
+        'sheriff.config.ts': sheriffConfig({
+          entryPoints: {
+            'project-i': 'projects/project-i/src/main.ts',
+            'project-ii': 'projects/project-ii/src/main.ts',
+          },
+          depRules: {},
+        }),
+        projects: {
+          'project-i': {
+            src: {
+              'main.ts': ['./app'],
+              'app.ts': [],
+            },
+          },
+          'project-ii': {
+            src: {
+              'main.ts': ['./app'],
+              'app.ts': [],
+            },
+          },
+        },
+      });
+
+      verifyFile.verify([], {
+        files: ['projects/project-i/src/app.ts'],
+      });
+
+      expect(initSpy).toHaveBeenCalledOnce();
+      expect(initSpy).toHaveBeenCalledWith(
+        '/project/projects/project-i/src/main.ts',
+      );
+      expect(mockedCli.endProcessOk).toHaveBeenCalledOnce();
+    });
+
     it('errors when a listed file exists on disk but is not in the project graph', () => {
       const { allLogs, mockedCli } = mockCli();
 
@@ -284,6 +348,7 @@ describe('verify', () => {
         files: ['/symlinked/src/orders/orders.component.ts'],
       });
 
+      expect(realpathSpy).toHaveBeenCalledOnce();
       realpathSpy.mockRestore();
 
       expect(allLogs()).toContain('|-- src/orders/orders.component.ts');
@@ -294,12 +359,14 @@ describe('verify', () => {
 
     it('is a successful no-op when --files resolves to an empty list', () => {
       const { allLogs, mockedCli } = mockCli();
+      const initSpy = vitest.spyOn(initFile, 'init');
       createProjectWithFileViolations();
 
       verifyFile.verify(['src/main.ts'], { files: [] });
 
       expect(allLogs()).toContain('No files to verify.');
       expect(allLogs()).not.toContain('Verification Report');
+      expect(initSpy).not.toHaveBeenCalled();
       expect(mockedCli.endProcessOk).toHaveBeenCalledOnce();
       expect(mockedCli.endProcessError).not.toHaveBeenCalled();
     });
@@ -415,13 +482,7 @@ describe('verify', () => {
         .spyOn(verifyWatchFile, 'verifyWatch')
         .mockImplementation(() => undefined);
 
-      main(
-        'verify',
-        'src/main.ts',
-        '--files',
-        'a.ts,b.ts',
-        '--watch',
-      );
+      main('verify', 'src/main.ts', '--files', 'a.ts,b.ts', '--watch');
 
       expect(verifyWatchSpy).toHaveBeenCalledWith(['src/main.ts']);
       expect(verifySpy).not.toHaveBeenCalled();

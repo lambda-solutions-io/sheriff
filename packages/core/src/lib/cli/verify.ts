@@ -15,9 +15,10 @@ import {
   checkForExternalRuleViolation,
   ExternalRuleViolation,
 } from '../checks/check-for-external-rule-violation';
-import { ProjectInfo } from '../main/init';
-import { FsPath } from '../file-info/fs-path';
+import { init, ProjectInfo } from '../main/init';
+import { FsPath, toFsPath } from '../file-info/fs-path';
 import { Fs } from '../fs/fs';
+import { EntryWithProjectInfo } from './internal/entry';
 
 type ValidationsMap = Record<
   string,
@@ -40,12 +41,89 @@ type ProjectValidation = {
 };
 
 export function verify(args: string[], options: { files?: string[] } = {}) {
-  const fs = getFs();
-  const projectEntries = getEntriesFromCliOrConfig(args[0]);
-  logInfoForMissingSheriffConfig(projectEntries[0].projectInfo);
+  if (options.files?.length === 0) {
+    // `--files` was supplied but resolved to zero files (e.g. no changed
+    // TS files in a hook). This must happen before any project is initialized.
+    cli.log('No files to verify.');
+    cli.endProcessOk();
+    return;
+  }
 
-  // Keep track of overall status to determine final process exit code
+  const fs = getFs();
+  let projectEntries: EntryWithProjectInfo[];
+  const projectFilePaths = new Map<string, Map<string, FsPath>>();
   let hasAnyProjectError = false;
+
+  if (options.files) {
+    const entries = getEntriesFromCliOrConfig(args[0], false);
+
+    // Canonicalize only requested paths. FileInfo paths are already absolute
+    // paths produced by project parsing, so graph-wide realpath calls are not
+    // needed for identity comparisons.
+    const requestedFilePaths = Array.from(
+      new Set(
+        options.files.map((file) =>
+          canonicalize(resolveFilePath(file, fs), fs),
+        ),
+      ),
+    );
+
+    if (requestedFilePaths.length === 0) {
+      cli.log('No files to verify.');
+      cli.endProcessOk();
+      return;
+    }
+
+    const unresolvedFilePaths = new Set<string>();
+    for (const requestedFilePath of requestedFilePaths) {
+      if (fs.exists(requestedFilePath)) {
+        unresolvedFilePaths.add(requestedFilePath);
+      } else {
+        const relativePath = fs.relativeTo(fs.cwd(), requestedFilePath);
+        cli.log(`Warning: ${relativePath} does not exist; skipping.`);
+      }
+    }
+
+    projectEntries = [];
+
+    // Entry points can import files outside their own directory, so ownership
+    // cannot be inferred safely from path prefixes. Initialize candidates one
+    // at a time and stop as soon as every existing requested file is owned.
+    for (const entry of entries) {
+      if (unresolvedFilePaths.size === 0) {
+        break;
+      }
+
+      const projectInfo = init(toFsPath(fs.join(fs.cwd(), entry.entryFile)));
+      const projectEntry = { ...entry, projectInfo };
+      const knownFilePaths = new Map<string, FsPath>();
+
+      projectEntries.push(projectEntry);
+      projectFilePaths.set(entry.projectName, knownFilePaths);
+
+      for (const { fileInfo } of traverseFileInfo(projectInfo.fileInfo)) {
+        if (unresolvedFilePaths.delete(fileInfo.path)) {
+          knownFilePaths.set(fileInfo.path, fileInfo.path);
+        }
+      }
+    }
+
+    // Only after every possible owner has been checked can an existing file
+    // be reported as absent from all project graphs.
+    for (const unresolvedFilePath of unresolvedFilePaths) {
+      const relativePath = fs.relativeTo(fs.cwd(), unresolvedFilePath);
+      cli.log(
+        `Error: ${relativePath} exists on disk but is not part of the project graph.`,
+      );
+      hasAnyProjectError = true;
+    }
+  } else {
+    projectEntries = getEntriesFromCliOrConfig(args[0]);
+  }
+
+  if (projectEntries.length > 0) {
+    logInfoForMissingSheriffConfig(projectEntries[0].projectInfo);
+  }
 
   // Store validation results for each project
   const projectValidations = new Map<string, ProjectValidation>();
@@ -67,76 +145,14 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
   }
 
   if (options.files) {
-    if (options.files.length === 0) {
-      // `--files` was supplied but resolved to zero files (e.g. no changed
-      // TS files in a hook). Short-circuit to a successful no-op instead of
-      // falling through to a full-project verification.
-      cli.log('No files to verify.');
-      cli.endProcessOk();
-      return;
-    }
-
-    // Canonicalize each requested path so membership is compared by file
-    // identity, not raw byte-string equality. Without this, an
-    // equivalent-but-different string (macOS /tmp vs /private/tmp symlink,
-    // a symlinked workspace, or case-insensitive-FS casing) would miss the
-    // graph and be silently skipped -> false pass in a pre-commit gate.
-    const requestedFilePaths = Array.from(
-      new Set(options.files.map((file) => canonicalize(resolveFilePath(file, fs), fs))),
-    );
-    const projectFilePaths = new Map<string, Map<string, FsPath>>();
-    const allKnownFilePaths = new Set<string>();
-
-    for (const projectEntry of projectEntries) {
-      const knownFilePaths = new Map<string, FsPath>();
-      for (const { fileInfo } of traverseFileInfo(
-        projectEntry.projectInfo.fileInfo,
-      )) {
-        // Canonicalize graph paths too, so both sides of the comparison
-        // are in the same canonical form.
-        const canonicalPath = canonicalize(fileInfo.path, fs);
-        knownFilePaths.set(canonicalPath, fileInfo.path);
-        allKnownFilePaths.add(canonicalPath);
-      }
-      projectFilePaths.set(projectEntry.projectName, knownFilePaths);
-    }
-
-    const validRequestedFilePaths = requestedFilePaths.filter(
-      (requestedFilePath) => {
-        if (allKnownFilePaths.has(requestedFilePath)) {
-          return true;
-        }
-
-        const relativePath = fs.relativeTo(fs.cwd(), requestedFilePath);
-        if (fs.exists(requestedFilePath)) {
-          // The file exists on disk but is not in the project graph. In a
-          // pre-commit gate this almost always means a resolution bug or a
-          // brand-new file the user expects to be checked. Silently passing
-          // is dangerous, so treat it as an error rather than a skip.
-          cli.log(
-            `Error: ${relativePath} exists on disk but is not part of the project graph.`,
-          );
-          hasAnyProjectError = true;
-        } else {
-          // The file does not exist (deleted/renamed). Skipping is benign.
-          cli.log(
-            `Warning: ${relativePath} does not exist; skipping.`,
-          );
-        }
-        return false;
-      },
-    );
-
     for (const projectEntry of projectEntries) {
       const projectValidation = projectValidations.get(
         projectEntry.projectName,
       )!;
       const knownFilePaths = projectFilePaths.get(projectEntry.projectName)!;
 
-      for (const requestedFilePath of validRequestedFilePaths) {
-        const fileInfoPath = knownFilePaths.get(requestedFilePath);
+      for (const fileInfoPath of knownFilePaths.values()) {
         if (
-          fileInfoPath &&
           runChecksForFile(
             fileInfoPath,
             projectEntry.projectInfo,
@@ -306,9 +322,7 @@ function runChecksForFile(
   const dependencyRules = dependencyRuleViolations.map(
     formatDependencyRuleViolation,
   );
-  const externalRules = externalRuleViolations.map(
-    formatExternalRuleViolation,
-  );
+  const externalRules = externalRuleViolations.map(formatExternalRuleViolation);
   const relativePath = fs.relativeTo(fs.cwd(), fileInfoPath);
   projectValidation.validationsMap[relativePath] = {
     encapsulations,
