@@ -41,12 +41,33 @@ describe('Sheriff LSP server', () => {
     }
   });
 
+  it('does not diagnose documents opened before initialization', async () => {
+    const createDiagnostics = vi.fn(() => [testDiagnostic]);
+    const harness = await createServer({
+      createDiagnostics,
+      initialize: false,
+    });
+
+    await harness.client.sendNotification('textDocument/didOpen', {
+      textDocument: {
+        uri: 'file:///test.ts',
+        languageId: 'typescript',
+        version: 1,
+        text: 'opened',
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(createDiagnostics).not.toHaveBeenCalled();
+    expect(harness.diagnostics).toEqual([]);
+  });
+
   it('advertises incremental sync and diagnoses unsaved ranged changes', async () => {
     const project = createFixtureProject({ withConfig: true });
     const uri = filePathToUri(join(project, 'src/app/main.ts'));
     const harness = await createServer();
 
-    expect(harness.initializeResult.capabilities.textDocumentSync).toBe(
+    expect(harness.initializeResult?.capabilities.textDocumentSync).toBe(
       TextDocumentSyncKind.Incremental,
     );
 
@@ -173,6 +194,112 @@ describe('Sheriff LSP server', () => {
     expect(harness.diagnostics).toHaveLength(2);
   });
 
+  it('does not publish queued diagnostics after shutdown', async () => {
+    const createDiagnostics = vi.fn(() => [testDiagnostic]);
+    const harness = await createServer({
+      changeDebounceMs: 20,
+      createDiagnostics,
+    });
+    const uri = 'file:///test.ts';
+
+    const opened = harness.nextDiagnostics();
+    await harness.client.sendNotification('textDocument/didOpen', {
+      textDocument: {
+        uri,
+        languageId: 'typescript',
+        version: 1,
+        text: 'opened',
+      },
+    });
+    await opened;
+
+    await harness.client.sendNotification('textDocument/didChange', {
+      textDocument: { uri, version: 2 },
+      contentChanges: [{ text: 'changed' }],
+    });
+    await harness.client.sendRequest('shutdown');
+    await harness.client.sendNotification('textDocument/didOpen', {
+      textDocument: {
+        uri: 'file:///after-shutdown.ts',
+        languageId: 'typescript',
+        version: 1,
+        text: 'ignored',
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+
+    expect(createDiagnostics).toHaveBeenCalledTimes(1);
+    expect(harness.diagnostics).toHaveLength(1);
+  });
+
+  it('drops stale overlapping analysis results and preserves their versions', async () => {
+    const slowAnalysis = deferred<Diagnostic[]>();
+    const freshDiagnostic = { ...testDiagnostic, message: 'fresh' };
+    const createDiagnostics = vi.fn((_uri: string, text: string) =>
+      text === 'old' ? slowAnalysis.promise : [freshDiagnostic],
+    );
+    const harness = await createServer({ createDiagnostics });
+    const uri = 'file:///test.ts';
+
+    await harness.client.sendNotification('textDocument/didOpen', {
+      textDocument: {
+        uri,
+        languageId: 'typescript',
+        version: 1,
+        text: 'old',
+      },
+    });
+    await vi.waitFor(() => expect(createDiagnostics).toHaveBeenCalledTimes(1));
+
+    const fresh = harness.nextDiagnostics();
+    await harness.client.sendNotification('textDocument/didChange', {
+      textDocument: { uri, version: 2 },
+      contentChanges: [{ text: 'new' }],
+    });
+    expect(await fresh).toEqual({
+      uri,
+      version: 2,
+      diagnostics: [freshDiagnostic],
+    });
+
+    slowAnalysis.resolve([testDiagnostic]);
+    await slowAnalysis.promise;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(harness.diagnostics).toEqual([
+      { uri, version: 2, diagnostics: [freshDiagnostic] },
+    ]);
+  });
+
+  it('does not republish an in-flight analysis after close', async () => {
+    const analysis = deferred<Diagnostic[]>();
+    const createDiagnostics = vi.fn(() => analysis.promise);
+    const harness = await createServer({ createDiagnostics });
+    const uri = 'file:///test.ts';
+
+    await harness.client.sendNotification('textDocument/didOpen', {
+      textDocument: {
+        uri,
+        languageId: 'typescript',
+        version: 1,
+        text: 'opened',
+      },
+    });
+    await vi.waitFor(() => expect(createDiagnostics).toHaveBeenCalledOnce());
+
+    const closed = harness.nextDiagnostics();
+    await harness.client.sendNotification('textDocument/didClose', {
+      textDocument: { uri },
+    });
+    expect(await closed).toEqual({ uri, diagnostics: [] });
+
+    analysis.resolve([testDiagnostic]);
+    await analysis.promise;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(harness.diagnostics).toEqual([{ uri, diagnostics: [] }]);
+  });
+
   it('ignores changes for documents that were never opened', async () => {
     const createDiagnostics = vi.fn(() => []);
     const harness = await createServer({ createDiagnostics });
@@ -226,6 +353,7 @@ describe('Sheriff LSP server', () => {
         text: string,
       ) => Diagnostic[] | Promise<Diagnostic[]>;
       changeDebounceMs?: number;
+      initialize?: boolean;
     } = {},
   ): Promise<ServerHarness> {
     const clientToServer = new PassThrough();
@@ -238,9 +366,10 @@ describe('Sheriff LSP server', () => {
       new StreamMessageReader(serverToClient),
       new StreamMessageWriter(clientToServer),
     );
+    const { initialize = true, ...serverOptions } = options;
     const sheriffServer = createSheriffLspServer({
       connection: serverConnection,
-      ...options,
+      ...serverOptions,
     });
     const diagnostics: PublishDiagnosticsParams[] = [];
     const diagnosticsWaiters: ((params: PublishDiagnosticsParams) => void)[] =
@@ -253,15 +382,16 @@ describe('Sheriff LSP server', () => {
     serverConnection.listen();
     client.listen();
 
-    const initializeResult = await client.sendRequest<InitializeResult>(
-      'initialize',
-      {
-        processId: null,
-        rootUri: null,
-        capabilities: {},
-      },
-    );
-    await client.sendNotification('initialized', {});
+    const initializeResult = initialize
+      ? await client.sendRequest<InitializeResult>('initialize', {
+          processId: null,
+          rootUri: null,
+          capabilities: {},
+        })
+      : undefined;
+    if (initialize) {
+      await client.sendNotification('initialized', {});
+    }
 
     const harness: ServerHarness = {
       client,
@@ -285,7 +415,7 @@ describe('Sheriff LSP server', () => {
 interface ServerHarness {
   client: MessageConnection;
   diagnostics: PublishDiagnosticsParams[];
-  initializeResult: InitializeResult;
+  initializeResult?: InitializeResult;
   nextDiagnostics(): Promise<PublishDiagnosticsParams>;
   dispose(): void;
 }
@@ -299,3 +429,14 @@ const testDiagnostic: Diagnostic = {
   source: 'sheriff',
   message: 'violation',
 };
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T): void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
