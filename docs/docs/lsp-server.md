@@ -54,17 +54,20 @@ Attach the server to TypeScript and JavaScript file types in a project that has
 
 ## Capabilities
 
-The server currently implements:
+The server uses `vscode-languageserver` for the JSON-RPC/LSP connection and
+`vscode-languageserver-textdocument` for document state. Both are runtime
+dependencies of the published server.
 
-- `initialize` with `textDocumentSync: 1`
-- `initialized`
-- `shutdown`
-- `exit`
+Sheriff handles these document notifications and publishes diagnostics:
+
 - `textDocument/didOpen`
 - `textDocument/didChange`
-- `textDocument/didSave`
 - `textDocument/didClose`
 - `textDocument/publishDiagnostics`
+
+The initialize response advertises incremental synchronization with
+`textDocumentSync: 2`. The language-server library owns framing, lifecycle
+semantics, request bookkeeping, cancellation, and standard protocol errors.
 
 Diagnostics use severity `Error` and source `sheriff`. The diagnostic range
 covers the module specifier in the import or export statement. Unsaved editor
@@ -73,16 +76,6 @@ buffer.
 
 Files outside a TypeScript project or without a `sheriff.config.ts` beside the
 nearest `tsconfig.json` publish an empty diagnostics list.
-
-## Stdio contract
-
-The transport is plain JSON-RPC 2.0 over stdio with LSP headers:
-
-```text
-Content-Length: <utf8-byte-length>\r\n
-\r\n
-<json-rpc-message>
-```
 
 The implementation is intentionally in-process today. A Sheriff daemon bridge
 can be added behind the diagnostics creation function later without changing
