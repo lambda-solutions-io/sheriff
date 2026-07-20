@@ -1,6 +1,7 @@
 export type JsonRpcMessage = Record<string, unknown>;
 
 const headerSeparator = Buffer.from('\r\n\r\n');
+const contentLengthMarker = 'content-length:';
 
 export class JsonRpcMessageReader {
   private buffer = Buffer.alloc(0);
@@ -17,12 +18,18 @@ export class JsonRpcMessageReader {
       }
 
       const header = this.buffer.subarray(0, headerEnd).toString('ascii');
-      const contentLength = parseContentLength(header);
+      const { contentLength, valid } = parseHeaders(header);
       const bodyStart = headerEnd + headerSeparator.length;
-      if (contentLength === undefined) {
-        // a header block without Content-Length can never be completed;
-        // skip it instead of wedging the stream forever.
-        this.buffer = this.buffer.subarray(bodyStart);
+      if (!valid || contentLength === undefined) {
+        if (contentLength !== undefined) {
+          const malformedFrameEnd = bodyStart + contentLength;
+          if (this.buffer.length < malformedFrameEnd) {
+            return messages;
+          }
+          this.buffer = this.buffer.subarray(malformedFrameEnd);
+        } else if (!this.resynchronize(bodyStart)) {
+          return messages;
+        }
         continue;
       }
       const messageEnd = bodyStart + contentLength;
@@ -41,6 +48,28 @@ export class JsonRpcMessageReader {
       }
     }
   }
+
+  private resynchronize(searchStart: number): boolean {
+    const ascii = this.buffer.toString('ascii').toLowerCase();
+    const nextHeader = ascii.indexOf(contentLengthMarker, searchStart);
+    if (nextHeader !== -1) {
+      this.buffer = this.buffer.subarray(nextHeader);
+      return true;
+    }
+
+    let retainedLength = Math.min(
+      contentLengthMarker.length - 1,
+      this.buffer.length,
+    );
+    while (
+      retainedLength > 0 &&
+      !contentLengthMarker.startsWith(ascii.slice(-retainedLength))
+    ) {
+      retainedLength--;
+    }
+    this.buffer = this.buffer.subarray(this.buffer.length - retainedLength);
+    return false;
+  }
 }
 
 export function encodeJsonRpcMessage(message: JsonRpcMessage): Buffer {
@@ -51,21 +80,38 @@ export function encodeJsonRpcMessage(message: JsonRpcMessage): Buffer {
   );
 }
 
-function parseContentLength(header: string): number | undefined {
+function parseHeaders(header: string): {
+  contentLength: number | undefined;
+  valid: boolean;
+} {
+  let contentLength: number | undefined;
+  let valid = header.length > 0;
+
   for (const line of header.split('\r\n')) {
     const separatorIndex = line.indexOf(':');
-    if (separatorIndex === -1) {
+    if (separatorIndex <= 0) {
+      valid = false;
       continue;
     }
 
     const name = line.slice(0, separatorIndex).trim().toLowerCase();
+    if (!/^[!#$%&'*+\-.^_`|~0-9a-z]+$/.test(name)) {
+      valid = false;
+      continue;
+    }
     if (name === 'content-length') {
-      const value = Number(line.slice(separatorIndex + 1).trim());
-      if (Number.isInteger(value) && value >= 0) {
-        return value;
+      const rawValue = line.slice(separatorIndex + 1).trim();
+      const value = Number(rawValue);
+      if (/^\d+$/.test(rawValue) && Number.isSafeInteger(value)) {
+        if (contentLength !== undefined) {
+          valid = false;
+        }
+        contentLength = value;
+      } else {
+        valid = false;
       }
     }
   }
 
-  return undefined;
+  return { contentLength, valid: valid && contentLength !== undefined };
 }

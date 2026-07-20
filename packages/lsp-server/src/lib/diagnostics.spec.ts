@@ -4,6 +4,7 @@ import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { clearProjectCache } from '@lambda-solutions/sheriff-core';
 import { useDefaultFs } from '../../../core/src/lib/fs/getFs';
+import { extractImportSpecifiers } from './diagnostics';
 import { createSheriffLspServer } from './lsp-server';
 import { JsonRpcMessage } from './message-codec';
 import { filePathToUri } from './uri';
@@ -34,6 +35,7 @@ describe('diagnostics handler', () => {
         exit: () => undefined,
       },
     });
+    initialize(server);
 
     server.handleMessage({
       jsonrpc: '2.0',
@@ -79,6 +81,7 @@ describe('diagnostics handler', () => {
         exit: () => undefined,
       },
     });
+    initialize(server);
 
     server.handleMessage({
       jsonrpc: '2.0',
@@ -96,7 +99,59 @@ describe('diagnostics handler', () => {
     expect(getLastDiagnostics(messages)).toEqual([]);
   });
 
-  function createFixtureProject(options: { withConfig: boolean }): string {
+  it('uses the root config discovered through an extended tsconfig', () => {
+    const project = createFixtureProject({
+      withConfig: true,
+      withNestedTsconfig: true,
+    });
+    const uri = filePathToUri(join(project, 'src/app/main.ts'));
+    const messages: JsonRpcMessage[] = [];
+    const server = createSheriffLspServer({
+      connection: {
+        send: (message) => messages.push(message),
+        exit: () => undefined,
+      },
+    });
+    initialize(server);
+
+    server.handleMessage({
+      jsonrpc: '2.0',
+      method: 'textDocument/didOpen',
+      params: {
+        textDocument: {
+          uri,
+          languageId: 'typescript',
+          version: 1,
+          text: "import '../shared';\n",
+        },
+      },
+    });
+
+    expect(getLastDiagnostics(messages)).toHaveLength(1);
+  });
+
+  it('extracts real imports without matching comments or strings', () => {
+    const text = [
+      "// import '../commented';",
+      `const source = "export * from '../string';";`,
+      "const lazy = import(/* webpackChunkName: 'real' */ '../real');",
+    ].join('\n');
+
+    expect(extractImportSpecifiers(text)).toEqual([
+      {
+        value: '../real',
+        range: {
+          start: { line: 2, character: 52 },
+          end: { line: 2, character: 59 },
+        },
+      },
+    ]);
+  });
+
+  function createFixtureProject(options: {
+    withConfig: boolean;
+    withNestedTsconfig?: boolean;
+  }): string {
     const project = mkdtempSync(join(tmpdir(), 'sheriff-lsp-'));
     tmpDirs.push(project);
 
@@ -112,6 +167,12 @@ describe('diagnostics handler', () => {
         },
       }),
     );
+    if (options.withNestedTsconfig) {
+      writeFileSync(
+        join(project, 'src/app/tsconfig.json'),
+        JSON.stringify({ extends: '../../tsconfig.json' }),
+      );
+    }
     if (options.withConfig) {
       writeFileSync(
         join(project, 'sheriff.config.ts'),
@@ -135,6 +196,15 @@ describe('diagnostics handler', () => {
     return project;
   }
 });
+
+function initialize(server: ReturnType<typeof createSheriffLspServer>): void {
+  server.handleMessage({
+    jsonrpc: '2.0',
+    id: 0,
+    method: 'initialize',
+    params: {},
+  });
+}
 
 function getLastDiagnostics(messages: JsonRpcMessage[]): unknown[] {
   const message = messages.at(-1) as

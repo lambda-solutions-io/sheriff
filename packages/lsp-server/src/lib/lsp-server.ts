@@ -10,7 +10,10 @@ export interface LspConnection {
 
 export interface SheriffLspServerOptions {
   connection: LspConnection;
-  createDiagnostics?: (uri: string, text: string) => Diagnostic[];
+  createDiagnostics?: (
+    uri: string,
+    text: string,
+  ) => Diagnostic[] | Promise<Diagnostic[]>;
   /**
    * Delay before diagnostics run after didChange, coalescing keystroke
    * storms. 0 (default) publishes synchronously — used by tests; main.ts
@@ -51,20 +54,21 @@ interface DidCloseTextDocumentParams {
 }
 
 type RequestId = string | number | null;
+type ServerState = 'uninitialized' | 'initialized' | 'shutdown';
 
 export class SheriffLspServer {
   private readonly connection: LspConnection;
   private readonly createDiagnostics: (
     uri: string,
     text: string,
-  ) => Diagnostic[];
+  ) => Diagnostic[] | Promise<Diagnostic[]>;
   private readonly documents = new Map<string, TextDocumentItem>();
   private readonly pendingDiagnostics = new Map<
     string,
     ReturnType<typeof setTimeout>
   >();
   private readonly changeDebounceMs: number;
-  private shutdownRequested = false;
+  private state: ServerState = 'uninitialized';
 
   constructor(options: SheriffLspServerOptions) {
     this.connection = options.connection;
@@ -74,12 +78,16 @@ export class SheriffLspServer {
   }
 
   handleMessage(message: JsonRpcMessage): void {
+    const request = isRequest(message);
     const method = message['method'];
     if (typeof method !== 'string') {
+      if (request) {
+        this.sendError(message['id'], -32600, 'Invalid Request');
+      }
       return;
     }
 
-    const id = isRequest(message) ? message['id'] : undefined;
+    const id = request ? message['id'] : undefined;
     try {
       this.dispatch(method, id, message);
     } catch (error) {
@@ -101,8 +109,15 @@ export class SheriffLspServer {
     id: RequestId | undefined,
     message: JsonRpcMessage,
   ): void {
-    switch (method) {
-      case 'initialize':
+    const request = id !== undefined;
+    if (method === 'exit' && !request) {
+      this.connection.exit(this.state === 'shutdown' ? 0 : 1);
+      return;
+    }
+
+    if (this.state === 'uninitialized') {
+      if (method === 'initialize' && request) {
+        this.state = 'initialized';
         this.respond(id, {
           capabilities: {
             textDocumentSync: {
@@ -116,38 +131,54 @@ export class SheriffLspServer {
             version: '1.0.0',
           },
         });
-        break;
+      } else if (request) {
+        this.sendError(id, -32002, 'Server not initialized');
+      }
+      return;
+    }
+
+    if (this.state === 'shutdown') {
+      if (request) {
+        this.sendError(id, -32600, 'Invalid Request');
+      }
+      return;
+    }
+
+    switch (method) {
+      case 'initialize':
       case 'initialized':
+      case 'exit':
+        if (request) {
+          this.sendError(id, -32600, 'Invalid Request');
+        }
         break;
       case 'shutdown':
-        this.shutdownRequested = true;
-        this.respond(id, null);
-        break;
-      case 'exit':
-        this.connection.exit(this.shutdownRequested ? 0 : 1);
+        if (request) {
+          this.state = 'shutdown';
+          this.respond(id, null);
+        }
         break;
       case 'textDocument/didOpen':
-        this.didOpen(message['params']);
-        break;
       case 'textDocument/didChange':
-        this.didChange(message['params']);
-        break;
       case 'textDocument/didSave':
-        this.didSave(message['params']);
-        break;
       case 'textDocument/didClose':
-        this.didClose(message['params']);
+        if (request) {
+          this.sendError(id, -32600, 'Invalid Request');
+          break;
+        }
+        if (method === 'textDocument/didOpen') {
+          this.didOpen(message['params']);
+        } else if (method === 'textDocument/didChange') {
+          this.didChange(message['params']);
+        } else if (method === 'textDocument/didSave') {
+          this.didSave(message['params']);
+        } else {
+          this.didClose(message['params']);
+        }
         break;
       default:
-        if (id !== undefined) {
-          this.connection.send({
-            jsonrpc: '2.0',
-            id,
-            error: {
-              code: -32601,
-              message: `Method not found: ${method}`,
-            },
-          });
+        if (request) {
+          this.sendError(id, -32601, `Method not found: ${method}`);
         }
     }
   }
@@ -176,15 +207,15 @@ export class SheriffLspServer {
     }
 
     const existingDocument = this.documents.get(uri);
+    if (!existingDocument) {
+      return;
+    }
     const document = {
       uri,
       text: change.text,
       version: typedParams?.textDocument?.version,
     };
-    this.documents.set(document.uri, {
-      ...existingDocument,
-      ...document,
-    });
+    this.documents.set(document.uri, { ...existingDocument, ...document });
     this.schedulePublishDiagnostics(
       document.uri,
       document.text,
@@ -222,7 +253,7 @@ export class SheriffLspServer {
     }
     this.cancelPendingDiagnostics(uri);
     this.documents.delete(uri);
-    this.sendDiagnostics(uri, []);
+    this.sendDiagnosticsSafely(uri, []);
   }
 
   private schedulePublishDiagnostics(
@@ -237,12 +268,16 @@ export class SheriffLspServer {
 
     this.cancelPendingDiagnostics(uri);
     const timer = setTimeout(() => {
-      this.pendingDiagnostics.delete(uri);
-      // publish the latest stored text, not the captured one, in case
-      // didSave updated the document while the timer was pending
-      const document = this.documents.get(uri);
-      if (document) {
-        this.publishDiagnostics(uri, document.text, document.version);
+      try {
+        this.pendingDiagnostics.delete(uri);
+        // publish the latest stored text, not the captured one, in case
+        // didSave updated the document while the timer was pending
+        const document = this.documents.get(uri);
+        if (document) {
+          this.publishDiagnostics(uri, document.text, document.version);
+        }
+      } catch {
+        this.sendDiagnosticsSafely(uri, [], version);
       }
     }, this.changeDebounceMs);
     timer.unref?.();
@@ -262,24 +297,40 @@ export class SheriffLspServer {
     text: string,
     version?: number | null,
   ): void {
-    const diagnostics = this.createDiagnostics(uri, text);
-    this.sendDiagnostics(uri, diagnostics, version);
+    try {
+      const diagnostics = this.createDiagnostics(uri, text);
+      if (diagnostics instanceof Promise) {
+        void diagnostics.then(
+          (resolvedDiagnostics) =>
+            this.sendDiagnosticsSafely(uri, resolvedDiagnostics, version),
+          () => this.sendDiagnosticsSafely(uri, [], version),
+        );
+      } else {
+        this.sendDiagnosticsSafely(uri, diagnostics, version);
+      }
+    } catch {
+      this.sendDiagnosticsSafely(uri, [], version);
+    }
   }
 
-  private sendDiagnostics(
+  private sendDiagnosticsSafely(
     uri: string,
     diagnostics: Diagnostic[],
     version?: number | null,
   ): void {
-    this.connection.send({
-      jsonrpc: '2.0',
-      method: 'textDocument/publishDiagnostics',
-      params: {
-        uri,
-        version,
-        diagnostics,
-      },
-    });
+    try {
+      this.connection.send({
+        jsonrpc: '2.0',
+        method: 'textDocument/publishDiagnostics',
+        params: {
+          uri,
+          version,
+          diagnostics,
+        },
+      });
+    } catch {
+      // A diagnostics failure must never terminate the stdio server.
+    }
   }
 
   private respond(id: RequestId | undefined, result: unknown): void {
@@ -291,6 +342,14 @@ export class SheriffLspServer {
       jsonrpc: '2.0',
       id,
       result,
+    });
+  }
+
+  private sendError(id: RequestId, code: number, message: string): void {
+    this.connection.send({
+      jsonrpc: '2.0',
+      id,
+      error: { code, message },
     });
   }
 }
