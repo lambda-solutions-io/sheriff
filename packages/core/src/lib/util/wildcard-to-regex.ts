@@ -14,6 +14,11 @@ export const wildcardToRegex = (wildcardRule: string): RegExp => {
     .split('*')
     .map(escapeRegex)
     .join('.*')}$`;
+  // patterns come from user config; the guard keeps pathological
+  // configs from growing the cache without bound.
+  if (wildcardRegexCache.size >= 10_000) {
+    wildcardRegexCache.clear();
+  }
   const regex = new RegExp(regexpString);
   wildcardRegexCache.set(wildcardRule, regex);
   return regex;
