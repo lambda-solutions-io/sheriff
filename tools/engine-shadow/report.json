@@ -31,6 +31,14 @@
       {
         "name": "scoped-package-subpath",
         "passed": true
+      },
+      {
+        "name": "paths-alias-package",
+        "passed": true
+      },
+      {
+        "name": "nested-node-modules-package",
+        "passed": true
       }
     ]
   },
@@ -45,8 +53,11 @@
     "fallbackRate": {
       "fixturesFellBack": 0,
       "fixturesChecked": 8,
-      "percentage": 0,
-      "summary": "0/8 fixtures fell back"
+      "percentageOfChecked": 0,
+      "percentageOfDiscovered": 0,
+      "baseline": 0,
+      "regressedFixtures": [],
+      "summary": "0/8 checked fixtures fell back; 0/8 discovered fixtures fell back"
     },
     "divergences": {
       "kindMismatch": 0,

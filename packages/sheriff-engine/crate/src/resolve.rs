@@ -427,6 +427,8 @@ pub fn resolve_module_name_for_shadow(
         context.module_resolution.as_deref(),
     );
     let containing_file = Path::new(&input.containing_file);
+    let (alias, _) =
+        resolve_ts_path_alias(&resolver, containing_file, &input.specifier, &context.paths);
     let manifest_path = (!is_relative_import(&input.specifier)
         && !Path::new(&input.specifier).is_absolute())
     .then(|| {
@@ -435,14 +437,17 @@ pub fn resolve_module_name_for_shadow(
         })
     })
     .flatten();
-    let resolved_path = normal_resolve(
-        &resolver,
-        containing_file,
-        &input.specifier,
-        &context,
-        manifest_path.as_deref(),
-    )
-    .map(|path| path.to_string_lossy().into_owned());
+    let resolved_path = alias
+        .or_else(|| {
+            normal_resolve(
+                &resolver,
+                containing_file,
+                &input.specifier,
+                &context,
+                manifest_path.as_deref(),
+            )
+        })
+        .map(|path| path.to_string_lossy().into_owned());
     Ok(ResolveModuleOutput {
         schema_version: 1,
         resolved_path,
@@ -492,45 +497,56 @@ pub fn resolve_project(
     let mut files = Vec::with_capacity(input.files.len());
     let mut import_count = 0;
     let mut reached_packages = HashSet::new();
+    let mut processing_error = None;
 
     if !initial_fallback || input.shadow_mode {
         for file in input.files {
-            let path = PathBuf::from(&file);
-            let source = fs::read_to_string(&path)
-                .map_err(|error| format!("could not read {}: {error}", path.display()))?;
-            if source.len() > MAX_STRING_BYTES {
-                return Err(ResolveProjectError::LimitExceeded(format!(
-                    "source file {} exceeds the {MAX_STRING_BYTES} byte string/path limit",
-                    relative_for_oracle(&context.root_dir, &path)
-                )));
-            }
-            let extracted = extract_imports(&path, &source)?;
-            import_count = checked_import_total(import_count, extracted.imports.len())?;
-            if !extracted.fallback_reasons.is_empty() {
-                let file = relative_for_oracle(&context.root_dir, &path);
-                context.fallback_reasons.extend(
-                    extracted
-                        .fallback_reasons
-                        .into_iter()
-                        .map(|reason| format!("{reason} ({file})")),
-                );
-                if !input.shadow_mode {
-                    files.clear();
-                    break;
+            let result = (|| -> Result<(), ResolveProjectError> {
+                let path = PathBuf::from(&file);
+                let source = fs::read_to_string(&path)
+                    .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+                if source.len() > MAX_STRING_BYTES {
+                    return Err(ResolveProjectError::LimitExceeded(format!(
+                        "source file {} exceeds the {MAX_STRING_BYTES} byte string/path limit",
+                        relative_for_oracle(&context.root_dir, &path)
+                    )));
                 }
+                let extracted = extract_imports(&path, &source)?;
+                import_count = checked_import_total(import_count, extracted.imports.len())?;
+                if !extracted.fallback_reasons.is_empty() {
+                    let file = relative_for_oracle(&context.root_dir, &path);
+                    context.fallback_reasons.extend(
+                        extracted
+                            .fallback_reasons
+                            .into_iter()
+                            .map(|reason| format!("{reason} ({file})")),
+                    );
+                    if !input.shadow_mode {
+                        files.clear();
+                        return Ok(());
+                    }
+                }
+                let imports = resolve_imports(
+                    &path,
+                    extracted.imports,
+                    &ignored,
+                    &context,
+                    &resolver,
+                    &mut reached_packages,
+                )?;
+                files.push(ResolvedFile {
+                    file: relative_for_oracle(&context.root_dir, &path),
+                    imports,
+                });
+                Ok(())
+            })();
+            if let Err(error) = result {
+                processing_error = Some(error);
+                break;
             }
-            let imports = resolve_imports(
-                &path,
-                extracted.imports,
-                &ignored,
-                &context,
-                &resolver,
-                &mut reached_packages,
-            )?;
-            files.push(ResolvedFile {
-                file: relative_for_oracle(&context.root_dir, &path),
-                imports,
-            });
+            if !context.fallback_reasons.is_empty() && !input.shadow_mode {
+                break;
+            }
         }
         files.sort_by(|left, right| left.file.cmp(&right.file));
     }
@@ -547,8 +563,11 @@ pub fn resolve_project(
     context.fallback_reasons.sort();
     context.fallback_reasons.dedup();
     let fallback = !context.fallback_reasons.is_empty();
-    if fallback && !input.shadow_mode {
+    if processing_error.is_some() || (fallback && !input.shadow_mode) {
         files.clear();
+    }
+    if let Some(error) = processing_error {
+        return Err(error);
     }
 
     Ok(ResolveProjectOutput {
@@ -1008,31 +1027,34 @@ fn resolve_imports(
             installed_package_manifest.as_deref(),
         );
         let normal_is_none = normal.is_none();
-        let resolved_package_manifest = normal
-            .as_deref()
-            .filter(|path| is_node_modules_path(path))
-            .and_then(|path| package_manifest_from_resolved_path(path, &import.raw));
-        let alias = resolve_potential_ts_path(&import.raw, &context.paths, |rewritten| {
-            resolver
-                .resolve_file(importing_file, rewritten)
-                .ok()
-                .map(|resolution| resolution.into_path_buf())
-        });
+        let normal_package = normal.as_deref().and_then(reached_package_from_path);
+        let (alias, alias_package) =
+            resolve_ts_path_alias(resolver, importing_file, &import.raw, &context.paths);
         let alias_is_none = alias.is_none();
 
         let (kind, resolved) = classify(&import.raw, alias, normal, &context.root_dir, &universe)?;
-        let package_manifest = resolved_package_manifest.or_else(|| {
-            // typesVersions can make oxc fail before it returns a resolved path.
-            // An installed bare package still counts as reached in that case.
-            (is_bare_import && (kind == ImportKind::External || (alias_is_none && normal_is_none)))
-                .then_some(installed_package_manifest)
-                .flatten()
-        });
-        if kind == ImportKind::External || package_manifest.is_some() {
-            let package = extract_package_name(&import.raw);
+        if let Some(package) = alias_package {
+            reached_packages.insert(package);
+        }
+        if alias_is_none && let Some(package) = normal_package {
+            reached_packages.insert(package);
+        }
+        if is_bare_import
+            && (kind == ImportKind::External || (alias_is_none && normal_is_none))
+            && let Some(manifest_path) = installed_package_manifest
+        {
             reached_packages.insert(ReachedPackage {
-                manifest_path: package_manifest,
-                name: package,
+                name: extract_package_name(&import.raw),
+                manifest_path: Some(manifest_path),
+            });
+        } else if kind == ImportKind::External
+            && !reached_packages
+                .iter()
+                .any(|package| package.name == extract_package_name(&import.raw))
+        {
+            reached_packages.insert(ReachedPackage {
+                name: extract_package_name(&import.raw),
+                manifest_path: None,
             });
         }
         if kind == ImportKind::External && !external_seen.insert(import.raw.clone()) {
@@ -1047,6 +1069,59 @@ fn resolve_imports(
         });
     }
     Ok(output)
+}
+
+fn resolve_ts_path_alias(
+    resolver: &Resolver,
+    importing_file: &Path,
+    specifier: &str,
+    paths: &[MaterializedPath],
+) -> (Option<PathBuf>, Option<ReachedPackage>) {
+    let mut reached_package = None;
+    let resolved = resolve_potential_ts_path(specifier, paths, |rewritten| {
+        let rewritten_path = Path::new(rewritten);
+        let package = reached_package_from_path(rewritten_path);
+        if let Some(package) = &package {
+            reached_package = Some(package.clone());
+            if let Some(manifest_path) = &package.manifest_path {
+                let package_specifier = package_specifier_for_path(package, rewritten_path);
+                if let Ok(Some(mapped)) = resolve_types_versions(
+                    resolver,
+                    importing_file,
+                    &package_specifier,
+                    manifest_path,
+                ) {
+                    return Some(mapped);
+                }
+            }
+        }
+        resolver
+            .resolve_file(importing_file, rewritten)
+            .ok()
+            .map(|resolution| resolution.into_path_buf())
+    });
+    if let Some(package) = resolved.as_deref().and_then(reached_package_from_path) {
+        reached_package = Some(package);
+    }
+    (resolved, reached_package)
+}
+
+fn package_specifier_for_path(package: &ReachedPackage, path: &Path) -> String {
+    let Some(package_root) = package.manifest_path.as_deref().and_then(Path::parent) else {
+        return package.name.clone();
+    };
+    let Ok(subpath) = path.strip_prefix(package_root) else {
+        return package.name.clone();
+    };
+    if subpath.as_os_str().is_empty() {
+        package.name.clone()
+    } else {
+        format!(
+            "{}/{}",
+            package.name,
+            subpath.to_string_lossy().replace('\\', "/")
+        )
+    }
 }
 
 fn normal_resolve(
@@ -1801,14 +1876,42 @@ fn validate_types_versions_paths(paths: &[(String, OrderedJson)]) -> Result<(), 
     Ok(())
 }
 
-fn package_manifest_from_resolved_path(resolved: &Path, specifier: &str) -> Option<PathBuf> {
-    let package_root_suffix = Path::new("node_modules").join(extract_package_name(specifier));
+fn reached_package_from_path(resolved: &Path) -> Option<ReachedPackage> {
     for ancestor in resolved.ancestors() {
-        if ancestor.ends_with(&package_root_suffix) {
-            let manifest = ancestor.join("package.json");
-            if manifest.is_file() {
-                return Some(manifest);
-            }
+        let parent = ancestor.parent()?;
+        let (package_root, name) = if parent
+            .file_name()
+            .is_some_and(|name| name == "node_modules")
+        {
+            (
+                ancestor,
+                ancestor.file_name()?.to_string_lossy().into_owned(),
+            )
+        } else if parent
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == "node_modules")
+            && parent
+                .file_name()
+                .is_some_and(|scope| scope.to_string_lossy().starts_with('@'))
+        {
+            (
+                ancestor,
+                format!(
+                    "{}/{}",
+                    parent.file_name()?.to_string_lossy(),
+                    ancestor.file_name()?.to_string_lossy()
+                ),
+            )
+        } else {
+            continue;
+        };
+        let manifest_path = package_root.join("package.json");
+        if manifest_path.is_file() {
+            return Some(ReachedPackage {
+                name,
+                manifest_path: Some(manifest_path),
+            });
         }
     }
     None
@@ -2386,6 +2489,105 @@ mod tests {
         assert!(!output.fallback);
         assert!(output.fallback_reasons.is_empty());
         assert_eq!(output.files[0].imports[0].kind, ImportKind::External);
+    }
+
+    #[test]
+    fn paths_alias_into_node_modules_maps_reached_package_types_versions() {
+        let temp = TestDir::new();
+        let config = temp.write(
+            "tsconfig.json",
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"alias":["node_modules/tv-pkg"]}}}"#,
+        );
+        temp.write(
+            "node_modules/tv-pkg/package.json",
+            r#"{"name":"tv-pkg","types":"index.d.ts","typesVersions":{"*":{"*":["modern/*"]}}}"#,
+        );
+        temp.write("node_modules/tv-pkg/index.d.ts", "");
+        temp.write("node_modules/tv-pkg/modern/index.d.ts", "");
+        let source = temp.write("src/main.ts", r#"import "alias";"#);
+        let output = resolve_project(ResolveProjectInput {
+            schema_version: 1,
+            ts_config_path: config.to_string_lossy().into_owned(),
+            files: vec![source.to_string_lossy().into_owned()],
+            ignore_file_extensions: Vec::new(),
+            shadow_mode: false,
+        })
+        .unwrap();
+
+        assert!(!output.fallback);
+        assert_eq!(output.files.len(), 1);
+        assert_eq!(output.files[0].imports[0].kind, ImportKind::Module);
+        assert_eq!(
+            output.files[0].imports[0].resolved_path.as_deref(),
+            Some("node_modules/tv-pkg/modern/index.d.ts")
+        );
+    }
+
+    #[test]
+    fn unresolved_paths_alias_uses_reached_package_types_versions() {
+        let temp = TestDir::new();
+        let config = temp.write(
+            "tsconfig.json",
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"alias":["node_modules/tv-pkg"]}}}"#,
+        );
+        temp.write(
+            "node_modules/tv-pkg/package.json",
+            r#"{"name":"tv-pkg","typesVersions":{"*":{"*":["modern/*"]}}}"#,
+        );
+        temp.write("node_modules/tv-pkg/modern/index.d.ts", "");
+        let source = temp.write("src/main.ts", r#"import "alias";"#);
+        let output = resolve_project(ResolveProjectInput {
+            schema_version: 1,
+            ts_config_path: config.to_string_lossy().into_owned(),
+            files: vec![source.to_string_lossy().into_owned()],
+            ignore_file_extensions: Vec::new(),
+            shadow_mode: false,
+        })
+        .unwrap();
+
+        assert!(!output.fallback);
+        assert_eq!(output.files.len(), 1);
+        assert_eq!(output.files[0].imports[0].kind, ImportKind::Module);
+        assert_eq!(
+            output.files[0].imports[0].resolved_path.as_deref(),
+            Some("node_modules/tv-pkg/modern/index.d.ts")
+        );
+    }
+
+    #[test]
+    fn nested_node_modules_alias_audits_the_innermost_package() {
+        let temp = TestDir::new();
+        let config = temp.write(
+            "tsconfig.json",
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"outer/node_modules/inner":["node_modules/outer/node_modules/inner"]}}}"#,
+        );
+        temp.write("node_modules/outer/package.json", r#"{"name":"outer"}"#);
+        temp.write(
+            "node_modules/outer/node_modules/inner/package.json",
+            r#"{"name":"inner","types":"index.d.ts","typesVersions":{"*":{"*":["modern/*"]}}}"#,
+        );
+        temp.write("node_modules/outer/node_modules/inner/index.d.ts", "");
+        temp.write(
+            "node_modules/outer/node_modules/inner/modern/index.d.ts",
+            "",
+        );
+        let source = temp.write("src/main.ts", r#"import "outer/node_modules/inner";"#);
+        let output = resolve_project(ResolveProjectInput {
+            schema_version: 1,
+            ts_config_path: config.to_string_lossy().into_owned(),
+            files: vec![source.to_string_lossy().into_owned()],
+            ignore_file_extensions: Vec::new(),
+            shadow_mode: false,
+        })
+        .unwrap();
+
+        assert!(!output.fallback);
+        assert_eq!(output.files.len(), 1);
+        assert_eq!(output.files[0].imports[0].kind, ImportKind::Module);
+        assert_eq!(
+            output.files[0].imports[0].resolved_path.as_deref(),
+            Some("node_modules/outer/node_modules/inner/modern/index.d.ts")
+        );
     }
 
     #[test]

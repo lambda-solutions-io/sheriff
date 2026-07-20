@@ -6,12 +6,15 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const { resolveModuleNameForEngineShadow, resolveProjectImports } = require(
-  '../../packages/sheriff-engine/index.js',
-);
+const {
+  resolveModuleNameForEngineShadow,
+  resolveProjectImports,
+} = require('../../packages/sheriff-engine/index.js');
 const toolDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(toolDir, '../..');
-const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sheriff-types-versions-'));
+const tempRoot = fs.mkdtempSync(
+  path.join(os.tmpdir(), 'sheriff-types-versions-'),
+);
 
 try {
   const cases = createCases(tempRoot);
@@ -44,7 +47,9 @@ try {
     };
   });
 
-  const unimported = cases.find((testCase) => testCase.name === 'unimported-package');
+  const unimported = cases.find(
+    (testCase) => testCase.name === 'unimported-package',
+  );
   const unimportedProject = JSON.parse(
     resolveProjectImports({
       schemaVersion: 1,
@@ -71,14 +76,31 @@ try {
         .join('\n')}`,
     );
   }
-  process.stdout.write(`${JSON.stringify({ compilerVersion: typescript.compilerVersion, results })}\n`);
+  process.stdout.write(
+    `${JSON.stringify({ compilerVersion: typescript.compilerVersion, results })}\n`,
+  );
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true });
 }
 
 function createCases(root) {
   const synthetic = path.join(root, 'synthetic');
-  write(path.join(synthetic, 'tsconfig.json'), '{}');
+  const syntheticCompilerOptions = {
+    baseUrl: synthetic,
+    paths: {
+      alias: ['node_modules/aliased-versioned'],
+      'outer/node_modules/inner': ['node_modules/outer/node_modules/inner'],
+    },
+  };
+  write(
+    path.join(synthetic, 'tsconfig.json'),
+    JSON.stringify({
+      compilerOptions: {
+        baseUrl: '.',
+        paths: syntheticCompilerOptions.paths,
+      },
+    }),
+  );
   write(
     path.join(synthetic, 'src/main.ts'),
     [
@@ -87,6 +109,8 @@ function createCases(root) {
       "import 'best-pattern/feature/deep/item';",
       "import 'invalid-range';",
       "import '@scope/versioned/subpath';",
+      "import 'alias';",
+      "import 'outer/node_modules/inner';",
       '',
     ].join('\n'),
   );
@@ -124,42 +148,97 @@ function createCases(root) {
     typesVersions: { '*': { '*': ['types/*'] } },
     files: ['types/subpath.d.ts'],
   });
+  packageFixture(synthetic, 'aliased-versioned', {
+    types: 'index.d.ts',
+    typesVersions: { '*': { '*': ['modern/*'] } },
+    files: ['index.d.ts', 'modern/index.d.ts'],
+  });
+  packageFixture(synthetic, 'outer', {
+    files: [],
+  });
+  packageFixture(synthetic, 'outer/node_modules/inner', {
+    name: 'inner',
+    types: 'index.d.ts',
+    typesVersions: { '*': { '*': ['modern/*'] } },
+    files: ['index.d.ts', 'modern/index.d.ts'],
+  });
 
   const realContainingFile = path.join(
     repoRoot,
     'test-projects/angular-i/tests/customers-container.deep-import.component.ts',
   );
-  const realConfig = path.join(repoRoot, 'test-projects/angular-i/tsconfig.json');
+  const realConfig = path.join(
+    repoRoot,
+    'test-projects/angular-i/tsconfig.json',
+  );
   const syntheticConfig = path.join(synthetic, 'tsconfig.json');
   const syntheticContainingFile = path.join(synthetic, 'src/main.ts');
   return [
     caseOf('rxjs-root', realConfig, realContainingFile, 'rxjs'),
     caseOf('rxjs-subpath', realConfig, realContainingFile, 'rxjs/operators'),
-    caseOf('first-matching-range', syntheticConfig, syntheticContainingFile, 'first-match'),
+    caseOf(
+      'first-matching-range',
+      syntheticConfig,
+      syntheticContainingFile,
+      'first-match',
+    ),
     caseOf(
       'longest-pattern-prefix',
       syntheticConfig,
       syntheticContainingFile,
       'best-pattern/feature/deep/item',
     ),
-    caseOf('invalid-range-skipped', syntheticConfig, syntheticContainingFile, 'invalid-range'),
-    caseOf('unimported-package', syntheticConfig, syntheticContainingFile, './local'),
+    caseOf(
+      'invalid-range-skipped',
+      syntheticConfig,
+      syntheticContainingFile,
+      'invalid-range',
+    ),
+    caseOf(
+      'unimported-package',
+      syntheticConfig,
+      syntheticContainingFile,
+      './local',
+    ),
     caseOf(
       'scoped-package-subpath',
       syntheticConfig,
       syntheticContainingFile,
       '@scope/versioned/subpath',
     ),
+    caseOf(
+      'paths-alias-package',
+      syntheticConfig,
+      syntheticContainingFile,
+      'alias',
+      syntheticCompilerOptions,
+    ),
+    caseOf(
+      'nested-node-modules-package',
+      syntheticConfig,
+      syntheticContainingFile,
+      'outer/node_modules/inner',
+      syntheticCompilerOptions,
+    ),
   ];
 }
 
-function caseOf(name, tsConfigPath, containingFile, specifier) {
-  return { name, tsConfigPath, containingFile, specifier };
+function caseOf(
+  name,
+  tsConfigPath,
+  containingFile,
+  specifier,
+  compilerOptions,
+) {
+  return { name, tsConfigPath, containingFile, specifier, compilerOptions };
 }
 
 function packageFixture(root, name, { files, ...manifest }) {
   const packageRoot = path.join(root, 'node_modules', name);
-  write(path.join(packageRoot, 'package.json'), JSON.stringify({ name, ...manifest }));
+  write(
+    path.join(packageRoot, 'package.json'),
+    JSON.stringify({ name, ...manifest }),
+  );
   for (const file of files) write(path.join(packageRoot, file), 'export {};\n');
 }
 
@@ -190,7 +269,9 @@ function dumpTypeScript(cases) {
     },
   );
   if (result.status !== 0) {
-    throw new Error(`TypeScript resolver failed: ${result.stderr || result.stdout}`);
+    throw new Error(
+      `TypeScript resolver failed: ${result.stderr || result.stdout}`,
+    );
   }
   return JSON.parse(result.stdout);
 }

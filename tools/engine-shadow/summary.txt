@@ -1,8 +1,8 @@
 Sheriff Rust engine R2 shadow report
 
 Fixtures: 8 passed, 0 project fallbacks, 0 skipped (8 discovered)
-Fallback rate: 0/8 fixtures fell back (0.0%)
-typesVersions parity: 7/7 passed against TypeScript 5.9.3
+Fallback rate: 0/8 checked fixtures fell back; 0/8 discovered fixtures fell back (0.0% of checked; 0.0% of discovered); baseline=0
+typesVersions parity: 9/9 passed against TypeScript 5.9.3
 Coverage: 434 source files; 1357 TS edges; 1357 Rust edges
 Divergences: kind=0, path=0, missing=0, extra=0
 

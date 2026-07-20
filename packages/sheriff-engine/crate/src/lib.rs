@@ -181,6 +181,52 @@ mod tests {
     }
 
     #[test]
+    fn resolve_project_error_never_leaks_results_created_before_late_audit() {
+        let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "sheriff-r2-lib-late-audit-{}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir_all(directory.join("src")).unwrap();
+        fs::create_dir_all(directory.join("node_modules/tv-pkg/modern")).unwrap();
+        let config = directory.join("tsconfig.json");
+        let first_source = directory.join("src/a.ts");
+        let oversized_source = directory.join("src/b.ts");
+        fs::write(
+            &config,
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"alias":["node_modules/tv-pkg"]}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            directory.join("node_modules/tv-pkg/package.json"),
+            r#"{"name":"tv-pkg","types":"index.d.ts","typesVersions":{"*":{"*":["modern/*"]}}}"#,
+        )
+        .unwrap();
+        fs::write(directory.join("node_modules/tv-pkg/index.d.ts"), "").unwrap();
+        fs::write(directory.join("node_modules/tv-pkg/modern/index.d.ts"), "").unwrap();
+        fs::write(&first_source, r#"import "alias";"#).unwrap();
+        fs::write(&oversized_source, " ".repeat(MAX_STRING_BYTES + 1)).unwrap();
+
+        for shadow_mode in [false, true] {
+            let output = resolve_project_imports(
+                serde_json::json!({
+                    "schemaVersion": 1,
+                    "tsConfigPath": config,
+                    "files": [&first_source, &oversized_source],
+                    "shadowMode": shadow_mode,
+                })
+                .to_string(),
+            );
+            let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(value["error"]["code"], "SHERIFF_ENGINE_LIMIT_EXCEEDED");
+            assert!(value.get("files").is_none(), "shadowMode={shadow_mode}");
+            assert!(value.get("fallback").is_none(), "shadowMode={shadow_mode}");
+        }
+
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn cyclic_tsconfigs_use_the_structured_user_error_code() {
         let cases = [
             (

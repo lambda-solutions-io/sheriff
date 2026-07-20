@@ -14,13 +14,16 @@ Rust API. The TypeScript side calls a narrow test seam around Sheriff's real
 and exits non-zero for any divergence or skipped fixture. Differences are classified as kind mismatch,
 path mismatch, missing edge, or extra edge; occurrence order and duplicates are
 part of the comparison. Both reports show whether each fixture triggered the
-engine fallback, its reasons, and the overall fixture fallback rate.
+engine fallback, its reasons, and the overall fixture fallback rate against both
+checked and discovered fixtures. The runner fails if the fallback count exceeds
+the committed baseline in `run.mjs`; its diagnostic names every regressed fixture.
 
 Before fixture comparison, `run.mjs` executes a direct `typesVersions`
 differential. It invokes the installed compiler's real `ts.resolveModuleName`
 through `dump-typescript.cjs` and compares canonical resolved paths with the
 Rust shadow seam for `rxjs`, range-key ordering, path-pattern specificity,
-invalid ranges, unimported packages, and scoped-package subpaths.
+invalid ranges, unimported packages, scoped-package subpaths, aliases into
+`node_modules`, and nested packages.
 
 The harness enumerates JavaScript and TypeScript files directly from disk,
 whereas production starts at an entry file and discovers the project by

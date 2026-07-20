@@ -16,6 +16,7 @@ const repoRoot = path.resolve(toolDir, '../..');
 const fixturesRoot = path.join(repoRoot, 'test-projects');
 const reportPath = path.join(toolDir, 'report.json');
 const summaryPath = path.join(toolDir, 'summary.txt');
+const expectedFallbackFixtureCount = 0;
 
 // Mirrors packages/core/src/lib/config/default-file-extensions.ts. Shadow mode
 // intentionally tests the shipped default, not fixture-specific test configs.
@@ -127,7 +128,10 @@ const totals = projects.reduce(
     fallbackRate: {
       fixturesFellBack: 0,
       fixturesChecked: 0,
-      percentage: 0,
+      percentageOfChecked: 0,
+      percentageOfDiscovered: 0,
+      baseline: expectedFallbackFixtureCount,
+      regressedFixtures: [],
       summary: '',
     },
     divergences: {
@@ -138,13 +142,25 @@ const totals = projects.reduce(
     },
   },
 );
-totals.fallbackRate.percentage =
+totals.fallbackRate.percentageOfChecked =
   totals.fallbackRate.fixturesChecked === 0
     ? 0
     : (totals.fallbackRate.fixturesFellBack /
         totals.fallbackRate.fixturesChecked) *
       100;
-totals.fallbackRate.summary = `${totals.fallbackRate.fixturesFellBack}/${totals.fallbackRate.fixturesChecked} fixtures fell back`;
+totals.fallbackRate.percentageOfDiscovered =
+  totals.fixturesDiscovered === 0
+    ? 0
+    : (totals.fallbackRate.fixturesFellBack / totals.fixturesDiscovered) * 100;
+totals.fallbackRate.regressedFixtures = projects
+  .filter(
+    (project) =>
+      project.engineFallback.checked && project.engineFallback.fellBack,
+  )
+  .map((project) => project.project);
+totals.fallbackRate.summary =
+  `${totals.fallbackRate.fixturesFellBack}/${totals.fallbackRate.fixturesChecked} checked fixtures fell back; ` +
+  `${totals.fallbackRate.fixturesFellBack}/${totals.fixturesDiscovered} discovered fixtures fell back`;
 
 const report = {
   schemaVersion: 1,
@@ -163,7 +179,15 @@ const divergenceCount = Object.values(totals.divergences).reduce(
   (sum, count) => sum + count,
   0,
 );
-if (divergenceCount > 0 || totals.skipped > 0) process.exitCode = 1;
+const fallbackBaselineExceeded =
+  totals.fallbackRate.fixturesFellBack > expectedFallbackFixtureCount;
+if (fallbackBaselineExceeded) {
+  process.stderr.write(
+    `Engine fallback baseline exceeded: baseline=${expectedFallbackFixtureCount}, actual=${totals.fallbackRate.fixturesFellBack}, regressed fixtures=${totals.fallbackRate.regressedFixtures.join(', ') || '(none)'}\n`,
+  );
+}
+if (divergenceCount > 0 || totals.skipped > 0 || fallbackBaselineExceeded)
+  process.exitCode = 1;
 
 function runFixture(name, fixtureDir) {
   const sourceFiles = findSourceFiles(fixtureDir);
@@ -446,7 +470,7 @@ function renderSummary(report) {
     'Sheriff Rust engine R2 shadow report',
     '',
     `Fixtures: ${report.totals.passed} passed, ${report.totals.fallback} project fallbacks, ${report.totals.skipped} skipped (${report.totals.fixturesDiscovered} discovered)`,
-    `Fallback rate: ${report.totals.fallbackRate.summary} (${report.totals.fallbackRate.percentage.toFixed(1)}%)`,
+    `Fallback rate: ${report.totals.fallbackRate.summary} (${report.totals.fallbackRate.percentageOfChecked.toFixed(1)}% of checked; ${report.totals.fallbackRate.percentageOfDiscovered.toFixed(1)}% of discovered); baseline=${report.totals.fallbackRate.baseline}`,
     `typesVersions parity: ${report.typesVersionsParity.cases.filter(({ passed }) => passed).length}/${report.typesVersionsParity.cases.length} passed against TypeScript ${report.typesVersionsParity.compilerVersion}`,
     `Coverage: ${report.totals.filesCompared} source files; ${report.totals.typescriptEdges} TS edges; ${report.totals.rustEdges} Rust edges`,
     `Divergences: kind=${report.totals.divergences.kindMismatch}, path=${report.totals.divergences.pathMismatch}, missing=${report.totals.divergences.missingEdge}, extra=${report.totals.divergences.extraEdge}`,
