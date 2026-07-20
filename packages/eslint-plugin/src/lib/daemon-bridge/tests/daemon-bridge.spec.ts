@@ -6,6 +6,7 @@ import {
 } from '../daemon-bridge';
 import type { DaemonLintResult } from '../daemon-bridge';
 import {
+  clearDaemonLintCacheForTests,
   daemonDependencyMessage,
   daemonEncapsulationMessage,
 } from '../daemon-lint-cache';
@@ -32,6 +33,7 @@ describe('daemon bridge', () => {
     synckitMocks.createSyncFn.mockReset();
     synckitMocks.runAsWorker.mockReset();
     resetDaemonBridgeForTests();
+    clearDaemonLintCacheForTests();
   });
 
   afterEach(() => {
@@ -41,6 +43,7 @@ describe('daemon bridge', () => {
       process.env['SHERIFF_DAEMON'] = originalSheriffDaemon;
     }
     resetDaemonBridgeForTests();
+    clearDaemonLintCacheForTests();
   });
 
   it('reads the opt-in environment variable at call time', () => {
@@ -195,6 +198,63 @@ describe('daemon bridge', () => {
       ),
     ).toBe('');
     expect(syncLintFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares one daemon request between both rules first run for the same content', () => {
+    process.env['SHERIFF_DAEMON'] = '1';
+    const syncLintFile = vi.fn(() => emptyLintResult);
+    synckitMocks.createSyncFn.mockReturnValue(syncLintFile);
+
+    daemonDependencyMessage(
+      '/project/shared-file.ts',
+      '@app/data',
+      true,
+      'import data from "@app/data";',
+    );
+    daemonEncapsulationMessage(
+      '/project/shared-file.ts',
+      '@app/data',
+      true,
+      'import data from "@app/data";',
+    );
+
+    expect(syncLintFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('refetches daemon messages when the same filename has new content', () => {
+    process.env['SHERIFF_DAEMON'] = '1';
+    const changedLintResult: DaemonLintResult = {
+      ...emptyLintResult,
+      encapsulationViolations: ['@app/other'],
+    };
+    const syncLintFile = vi
+      .fn()
+      .mockReturnValueOnce(emptyLintResult)
+      .mockReturnValueOnce(changedLintResult);
+    synckitMocks.createSyncFn.mockReturnValue(syncLintFile);
+
+    daemonDependencyMessage(
+      '/project/edited-file.ts',
+      '@app/data',
+      true,
+      'import data from "@app/data";',
+    );
+    expect(
+      daemonEncapsulationMessage(
+        '/project/edited-file.ts',
+        '@app/other',
+        true,
+        'import other from "@app/other";',
+      ),
+    ).toBe("'@app/other' cannot be imported. It is encapsulated.");
+
+    expect(syncLintFile).toHaveBeenCalledTimes(2);
+    expect(syncLintFile).toHaveBeenNthCalledWith(
+      2,
+      process.cwd(),
+      '/project/edited-file.ts',
+      'import other from "@app/other";',
+    );
   });
 
   it('reports unresolvable relative imports with the in-process wording', () => {

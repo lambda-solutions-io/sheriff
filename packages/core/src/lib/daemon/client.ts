@@ -31,6 +31,7 @@ export type DaemonClientOptions = {
  */
 export class DaemonClient {
   #socket: net.Socket;
+  #isConnected = true;
   #nextRequestId = 1;
   #pending = new Map<
     number,
@@ -43,10 +44,14 @@ export class DaemonClient {
     socket.setEncoding('utf-8');
     const decode = createLineDecoder((line) => this.#handleResponseLine(line));
     socket.on('data', decode);
-    socket.on('error', (error) => this.#rejectAllPending(error));
-    socket.on('close', () =>
-      this.#rejectAllPending(new Error('daemon connection closed')),
-    );
+    socket.on('error', (error) => {
+      this.#isConnected = false;
+      this.#rejectAllPending(error);
+    });
+    socket.on('close', () => {
+      this.#isConnected = false;
+      this.#rejectAllPending(new Error('daemon connection closed'));
+    });
   }
 
   static async connect(
@@ -94,6 +99,10 @@ export class DaemonClient {
     method: string,
     params: Record<string, unknown> = {},
   ): Promise<unknown> {
+    if (!this.#isConnected) {
+      return Promise.reject(new Error('daemon connection closed'));
+    }
+
     const id = this.#nextRequestId++;
     return new Promise((resolve, reject) => {
       this.#pending.set(id, { resolve, reject });
@@ -102,7 +111,13 @@ export class DaemonClient {
   }
 
   close(): void {
+    this.#isConnected = false;
     this.#socket.destroy();
+  }
+
+  /** Whether the underlying daemon socket is still usable. */
+  get isConnected(): boolean {
+    return this.#isConnected;
   }
 
   #handleResponseLine(line: string): void {

@@ -14,28 +14,33 @@ interface DaemonLintMessages {
   encapsulation: Map<string, string>;
 }
 
+interface DaemonLintCacheEntry {
+  sourceCode: string;
+  messages: DaemonLintMessages;
+}
+
 // Bound the per-process cache so a long-running ESLint session linting many
 // files does not grow it without limit; the oldest entry is evicted first.
 const MAX_CACHED_FILES = 512;
-const messagesByFilename = new Map<string, DaemonLintMessages>();
+const messagesByFilename = new Map<string, DaemonLintCacheEntry>();
 
 export function daemonDependencyMessage(
   filename: string,
   importValue: string,
-  isFirstRun: boolean,
+  _isFirstRun: boolean,
   sourceCode: string,
 ): string | undefined {
-  const messages = getDaemonLintMessages(filename, isFirstRun, sourceCode);
+  const messages = getDaemonLintMessages(filename, sourceCode);
   return messages?.dependency.get(importValue) ?? (messages ? '' : undefined);
 }
 
 export function daemonEncapsulationMessage(
   filename: string,
   importValue: string,
-  isFirstRun: boolean,
+  _isFirstRun: boolean,
   sourceCode: string,
 ): string | undefined {
-  const messages = getDaemonLintMessages(filename, isFirstRun, sourceCode);
+  const messages = getDaemonLintMessages(filename, sourceCode);
   return (
     messages?.encapsulation.get(importValue) ?? (messages ? '' : undefined)
   );
@@ -43,40 +48,48 @@ export function daemonEncapsulationMessage(
 
 function getDaemonLintMessages(
   filename: string,
-  isFirstRun: boolean,
   sourceCode: string,
 ): DaemonLintMessages | undefined {
   if (!isDaemonBridgeEnabled()) {
     return undefined;
   }
 
-  if (isFirstRun) {
-    const result = lintFileViaDaemon(filename, sourceCode);
-    if (!result) {
-      messagesByFilename.delete(filename);
-      return undefined;
-    }
-
-    // The worker return value is an unchecked cast over the wire; a malformed
-    // daemon response must never throw into ESLint's createRule. On any
-    // structurally invalid result, treat it as a bridge failure: disable the
-    // bridge and fall back in-process instead of surfacing a spurious
-    // "(internal error)" diagnostic.
-    let messages: DaemonLintMessages;
-    try {
-      messages = buildDaemonLintMessages(result);
-    } catch {
-      disableDaemonBridge();
-      messagesByFilename.delete(filename);
-      return undefined;
-    }
-
-    messagesByFilename.set(filename, messages);
-    evictOldestWhenOverCapacity();
-    return messages;
+  const cached = messagesByFilename.get(filename);
+  // Both ESLint rules report `isFirstRun` independently. The source buffer is
+  // the shared identity that distinguishes their duplicate first calls from a
+  // later lint pass after the editor content changed.
+  if (cached?.sourceCode === sourceCode) {
+    return cached.messages;
   }
 
-  return messagesByFilename.get(filename);
+  const result = lintFileViaDaemon(filename, sourceCode);
+  if (!result) {
+    messagesByFilename.delete(filename);
+    return undefined;
+  }
+
+  // The worker return value is an unchecked cast over the wire; a malformed
+  // daemon response must never throw into ESLint's createRule. On any
+  // structurally invalid result, treat it as a bridge failure: disable the
+  // bridge and fall back in-process instead of surfacing a spurious
+  // "(internal error)" diagnostic.
+  let messages: DaemonLintMessages;
+  try {
+    messages = buildDaemonLintMessages(result);
+  } catch {
+    disableDaemonBridge();
+    messagesByFilename.delete(filename);
+    return undefined;
+  }
+
+  messagesByFilename.set(filename, { sourceCode, messages });
+  evictOldestWhenOverCapacity();
+  return messages;
+}
+
+/** Test-only: prevents retained daemon messages from leaking between specs. */
+export function clearDaemonLintCacheForTests(): void {
+  messagesByFilename.clear();
 }
 
 function evictOldestWhenOverCapacity(): void {
