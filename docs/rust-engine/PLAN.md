@@ -134,7 +134,7 @@ node tools/perf/run-bench.mjs
 | R2.1: narrow `typesVersions` fallback | **done** | `9d99e3e` |
 | R2.2: implement `typesVersions` mapping | **done** | `64746ac` |
 | R2.3: review round (4 findings) | **done** | `1a21352` |
-| R3: function-rule materialisation | **in progress** | |
+| R3: function-rule materialisation | **done** (review pending) | `a2f1e45` |
 | R4: incremental ProjectHandle | not started | |
 | R5: consumer cutover + packaging | not started | |
 
@@ -580,6 +580,37 @@ silently wrong verdicts; a false "impure" verdict only costs speed.
 with a deliberately impure callback is either rejected or routed to the
 compatibility path.
 
+**Result (`a2f1e45`)**: both previously-skipped fn-rule fixtures now **run** and
+pass with oracle snapshots untouched. 81 rust tests, 15 conformance (0 skipped,
+was 2), 583 TS tests, harness 8/8 / 0 fallback / 0 divergences, parity 9/9.
+
+Protocol as designed: Node swaps supported functions for stable matcher ids (a
+`{__sheriffEngineCallbackId}` wire sentinel); Rust emits tag candidates → Node
+batch-evaluates → Rust emits rule candidates for the **realised** graph only →
+Node batch-evaluates → Rust does final checks under rayon. Decision keys are
+candidate array positions, so distinct candidates cannot collide.
+
+**Contract detail the original plan omitted**: `externalRules` are **AND**-combined
+across matching key patterns (`check-for-external-rule-violation.ts:91` returns
+`false` on the first denying key) — the *opposite* of `depRules`/`denyRules`
+OR-combination. Reproducing this backwards is an easy, silent bug; it now has a
+dedicated regression test.
+
+**KNOWN GAP — the compatibility path is a handoff contract, not automatic
+routing.** Impure callbacks throw `SHERIFF_ENGINE_IMPURE_CALLBACK` with
+`fallback: true`; nothing routes to TS automatically, because nothing consumes
+`analyzeProject` yet — there is no call site to route. **R5's consumer cutover
+must honour `fallback: true`**, or impure configs will hard-error instead of
+falling back. Do not mark the owner's "detect + compat path" decision satisfied
+until that wiring exists.
+
+The detector is explicitly heuristic, not sound. Stated false negatives: hidden
+state reached through helper calls, getters/proxies, mutations that return equal
+values twice, later-call-only changes, and obfuscated/dynamic code. It is
+deliberately over-eager (any `=` assignment in the source trips it), per the
+owner's rule that a false "impure" costs only speed while a false "pure" produces
+silently wrong verdicts.
+
 ---
 
 ## R4 — incremental ProjectHandle
@@ -615,6 +646,10 @@ engines.
 - CLI `verify` and the ESLint rules call the engine directly, behind an opt-in
   flag first (`SHERIFF_ENGINE=1`), with automatic fallback to TS when the native
   artefact is missing or the config is unsupported.
+- **Honour `fallback: true` from R3.** `SHERIFF_ENGINE_IMPURE_CALLBACK` is
+  currently a handoff contract with no consumer. Every new call site must catch it
+  and route to the TS engine, or an impure callback hard-errors instead of falling
+  back — which would break configs that work today.
 - The daemon hosts a `ProjectHandle` and keeps its existing RPC surface, so
   mcp-server and the LSP branch need no changes.
 - Packaging with `@napi-rs/cli` (npm deps are allowed now): per-platform
