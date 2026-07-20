@@ -51,14 +51,33 @@ node $PROJECT_DIR$/tools/scripts/run-lsp-local.mjs --stdio
 ```
 
 For a separate consumer project, use absolute paths to Node and the built
-repository's `tools/scripts/run-lsp-local.mjs`. Add file-name mappings for
-`*.ts` / `typescript`, `*.tsx` / `typescriptreact`, `*.js` / `javascript`, and
-`*.jsx` / `javascriptreact`. No initialization options are needed.
+repository's `tools/scripts/run-lsp-local.mjs`. Set the working directory to the
+project root that contains the TypeScript project and Sheriff configuration.
 
-After applying the settings, inspect **View | Tool Windows | LSP Consoles**.
-Opening or editing a mapped file should show `didOpen` or `didChange`, followed
-by `publishDiagnostics`. Diagnostics update from unsaved content. See the
-package README for a concrete fixture and troubleshooting checklist.
+Under **Mappings | File name patterns**, add `*.ts` / `typescript`, `*.tsx` /
+`typescriptreact`, `*.js` / `javascript`, and `*.jsx` / `javascriptreact`. Use
+the **File name patterns** tab rather than **Language**: with some
+IntelliJ/LSP4IJ combinations, a `TypeScript` language mapping starts and
+initializes the server without attaching open files. In that state the server
+receives no `textDocument/didOpen` notifications and cannot publish
+diagnostics. No initialization options are needed.
+
+After applying the settings, open
+`test-projects/angular-iv/src/app/customers/feature/components/customers-container.component.ts`
+and temporarily import
+`../../../bookings/overview/overview.component`. The **Problems** tool window
+should show both a dependency-rule violation and a deep-import violation from
+source `sheriff`. These entries have no `ESLint:` prefix; equivalent prefixed
+entries can also appear when the Sheriff ESLint rule is enabled. Diagnostics
+update from unsaved content.
+
+The default **LSP Consoles | Logs** view is server stdout/stderr and can retain
+historical launcher errors. To inspect protocol messages, set **Debug | Trace**
+to `verbose`, apply the setting, and close and reopen a mapped file. The trace
+should contain `textDocument/didOpen` or `textDocument/didChange`, followed by
+`textDocument/publishDiagnostics`. If the server initializes but `didOpen` is
+absent, recheck the **File name patterns** mapping. See the package README for
+the full local verification and troubleshooting checklist.
 
 ## Capabilities
 

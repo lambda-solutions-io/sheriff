@@ -57,8 +57,10 @@ add a user-defined server with:
 
 - Command when IntelliJ opened a separate consumer project: use absolute paths
   for both Node and this repository's `tools/scripts/run-lsp-local.mjs`.
+- Working directory: the repository root for this checkout, or the consumer
+  project root when testing Sheriff in another project.
 
-In **Mappings | File name patterns**, add:
+In **Mappings | File name patterns**, add these associations:
 
 | Pattern | Language ID       |
 | ------- | ----------------- |
@@ -66,6 +68,12 @@ In **Mappings | File name patterns**, add:
 | `*.tsx` | `typescriptreact` |
 | `*.js`  | `javascript`      |
 | `*.jsx` | `javascriptreact` |
+
+Use the **File name patterns** tab, not the **Language** tab. With some
+IntelliJ/LSP4IJ combinations, a `TypeScript` entry under **Language** starts and
+initializes the server but does not attach open files. The server then receives
+no `textDocument/didOpen` notifications and cannot publish diagnostics. An
+explicit `*.ts` / `typescript` file-name mapping avoids that failure mode.
 
 File-name mappings also work in IntelliJ editions that use TextMate for
 TypeScript and preserve that syntax highlighting. No initialization options or
@@ -81,20 +89,29 @@ YARN_IGNORE_PATH=1 corepack yarn build:all
 `YARN_IGNORE_PATH=1` ensures this Yarn 1 repository is not redirected by a
 user-level Yarn 4 configuration.
 
-To verify this checkout, open
-`test-projects/angular-iv/src/app/app.component.ts` and temporarily add this
-unsaved import:
+To verify dependency rules and encapsulation together, open
+`test-projects/angular-iv/src/app/customers/feature/components/customers-container.component.ts`
+and temporarily add this unsaved import:
 
 ```ts
-import { MessageService } from './shared/ui-messaging/message/message.service';
+import { OverviewComponent } from '../../../bookings/overview/overview.component';
 ```
 
-The module specifier should receive a red `sheriff` diagnostic explaining that
-it is a deep import. Removing the line should clear the diagnostic without
-saving. Use **View | Tool Windows | LSP Consoles** to inspect `initialize`,
-`textDocument/didOpen` or `textDocument/didChange`, and
-`textDocument/publishDiagnostics` messages. Set the server's trace level to
-`verbose` in its **Debug** tab when troubleshooting.
+The **Problems** tool window should gain two diagnostics at the import: a
+dependency-rule violation saying that `customers/feature` cannot access
+`bookings`, and a deep-import violation. Diagnostics from this language server
+have source `sheriff` and appear without an `ESLint:` prefix. If the Sheriff
+ESLint rule is enabled too, IntelliJ can show equivalent `ESLint:`-prefixed
+entries alongside them. Removing the line should clear the Sheriff diagnostics
+without saving.
+
+The default **LSP Consoles | Logs** view contains the server process's
+stdout/stderr, so it can retain old launcher stack traces and does not by itself
+prove whether diagnostics were published. For protocol troubleshooting, open
+the server's **Debug** tab, set **Trace** to `verbose`, apply the setting, and
+close and reopen a mapped file. Then use **View | Tool Windows | LSP Consoles**
+to inspect `initialize`, `textDocument/didOpen` or `textDocument/didChange`, and
+`textDocument/publishDiagnostics` messages.
 
 If LSP4IJ cannot find `node`, replace it with the result of `command -v node`.
 If the server reports a missing module, rebuild and confirm that both
@@ -102,6 +119,9 @@ If the server reports a missing module, rebuild and confirm that both
 `dist/packages/lsp-server/src/lib/diagnostics-worker.js` exist. Empty
 diagnostics usually mean the opened file has no nearest `tsconfig.json` or no
 Sheriff config discoverable from that TypeScript project.
+If the process initializes but the protocol trace contains no
+`textDocument/didOpen`, check that the association is under **File name
+patterns** and includes `*.ts` / `typescript`.
 
 ## Performance model
 
