@@ -1,6 +1,5 @@
 import {
-  init,
-  toFsPath,
+  lintDocument,
   violatesDependencyRule,
   violatesEncapsulationRule,
 } from '@lambda-solutions/sheriff-core';
@@ -66,12 +65,13 @@ export function createSheriffDiagnostics(
   }
 
   try {
-    const projectInfo = init(toFsPath(filename), {
-      traverse: false,
-      entryFileContent: text,
-      returnOnMissingConfig: true,
-    });
-    if (!projectInfo) {
+    // The default adapters share the lintDocument analysis. Priming it here
+    // both avoids one init per rule family and preserves the LSP's no-config
+    // behavior without a separate project discovery pass.
+    if (
+      checkers === defaultCheckers &&
+      lintDocument(filename, text).configFileIsMissing
+    ) {
       return [];
     }
 
