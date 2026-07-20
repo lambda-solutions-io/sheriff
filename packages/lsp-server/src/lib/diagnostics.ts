@@ -137,7 +137,10 @@ function fallbackRange(
 function createLineStarts(text: string): number[] {
   const lineStarts = [0];
   for (let index = 0; index < text.length; index++) {
-    if (text[index] === '\n') {
+    if (text[index] === '\r' && text[index + 1] === '\n') {
+      lineStarts.push(index + 2);
+      index++;
+    } else if (text[index] === '\r' || text[index] === '\n') {
       lineStarts.push(index + 1);
     }
   }

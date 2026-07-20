@@ -1,237 +1,301 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Diagnostic } from './diagnostics';
-import { createSheriffLspServer, SheriffLspServer } from './lsp-server';
-import { JsonRpcMessage } from './message-codec';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { PassThrough } from 'stream';
+import { clearProjectCache } from '@lambda-solutions/sheriff-core';
+import {
+  createConnection,
+  createMessageConnection,
+  InitializeResult,
+  MessageConnection,
+  PublishDiagnosticsNotification,
+  PublishDiagnosticsParams,
+  StreamMessageReader,
+  StreamMessageWriter,
+  TextDocumentSyncKind,
+} from 'vscode-languageserver/node';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useDefaultFs } from '../../../core/src/lib/fs/getFs';
+import { Diagnostic, DiagnosticSeverity } from './diagnostics';
+import { createSheriffLspServer } from './lsp-server';
+import { filePathToUri } from './uri';
 
-describe('SheriffLspServer lifecycle', () => {
+describe('Sheriff LSP server', () => {
+  let harnesses: ServerHarness[] = [];
+  let tmpDirs: string[] = [];
+
+  beforeEach(() => {
+    harnesses = [];
+    tmpDirs = [];
+    useDefaultFs();
+    clearProjectCache();
+  });
+
   afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('rejects requests and drops notifications before initialize', () => {
-    const { server, messages, exitCodes, createDiagnostics } = createServer();
-
-    server.handleMessage({ jsonrpc: '2.0', id: 1, method: 'workspace/test' });
-    server.handleMessage({
-      jsonrpc: '2.0',
-      method: 'textDocument/didOpen',
-      params: {
-        textDocument: { uri: 'file:///test.ts', text: '', version: 1 },
-      },
-    });
-    server.handleMessage({ jsonrpc: '2.0', id: 2, method: 'shutdown' });
-
-    expect(messages).toEqual([
-      errorResponse(1, -32002, 'Server not initialized'),
-      errorResponse(2, -32002, 'Server not initialized'),
-    ]);
-    expect(createDiagnostics).not.toHaveBeenCalled();
-
-    server.handleMessage({ jsonrpc: '2.0', method: 'exit' });
-    expect(exitCodes).toEqual([1]);
-  });
-
-  it('responds exactly once to requests and enforces shutdown state', () => {
-    const { server, messages, exitCodes, createDiagnostics } = createServer();
-    initialize(server);
-
-    server.handleMessage({ jsonrpc: '2.0', id: 1, method: 'initialize' });
-    server.handleMessage({
-      jsonrpc: '2.0',
-      id: 2,
-      method: 'textDocument/didOpen',
-    });
-    server.handleMessage({ jsonrpc: '2.0', id: 3, method: 'unknown/method' });
-    server.handleMessage({ jsonrpc: '2.0', id: 6, method: 'exit' });
-    server.handleMessage({ jsonrpc: '2.0', id: 4, method: 'shutdown' });
-    server.handleMessage({ jsonrpc: '2.0', id: 5, method: 'unknown/after' });
-    server.handleMessage({
-      jsonrpc: '2.0',
-      method: 'textDocument/didOpen',
-      params: {
-        textDocument: { uri: 'file:///ignored.ts', text: '', version: 1 },
-      },
-    });
-
-    for (const id of [0, 1, 2, 3, 4, 5, 6]) {
-      expect(messages.filter((message) => message['id'] === id)).toHaveLength(
-        1,
-      );
+    clearProjectCache();
+    for (const harness of harnesses) {
+      harness.dispose();
     }
-    expect(messages.find((message) => message['id'] === 1)).toEqual(
-      errorResponse(1, -32600, 'Invalid Request'),
+    for (const dir of tmpDirs) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('advertises incremental sync and diagnoses unsaved ranged changes', async () => {
+    const project = createFixtureProject({ withConfig: true });
+    const uri = filePathToUri(join(project, 'src/app/main.ts'));
+    const harness = await createServer();
+
+    expect(harness.initializeResult.capabilities.textDocumentSync).toBe(
+      TextDocumentSyncKind.Incremental,
     );
-    expect(messages.find((message) => message['id'] === 2)).toEqual(
-      errorResponse(2, -32600, 'Invalid Request'),
-    );
-    expect(messages.find((message) => message['id'] === 3)).toEqual(
-      errorResponse(3, -32601, 'Method not found: unknown/method'),
-    );
-    expect(messages.find((message) => message['id'] === 6)).toEqual(
-      errorResponse(6, -32600, 'Invalid Request'),
-    );
-    expect(messages.find((message) => message['id'] === 4)).toEqual({
-      jsonrpc: '2.0',
-      id: 4,
-      result: null,
+
+    const opened = harness.nextDiagnostics();
+    await harness.client.sendNotification('textDocument/didOpen', {
+      textDocument: {
+        uri,
+        languageId: 'typescript',
+        version: 1,
+        text: "import './local';\n",
+      },
     });
-    expect(messages.find((message) => message['id'] === 5)).toEqual(
-      errorResponse(5, -32600, 'Invalid Request'),
-    );
-    expect(createDiagnostics).not.toHaveBeenCalled();
+    expect((await opened).diagnostics).toEqual([]);
 
-    server.handleMessage({ jsonrpc: '2.0', method: 'exit' });
-    expect(exitCodes).toEqual([0]);
+    const changed = harness.nextDiagnostics();
+    await harness.client.sendNotification('textDocument/didChange', {
+      textDocument: { uri, version: 2 },
+      contentChanges: [
+        {
+          range: {
+            start: { line: 0, character: 8 },
+            end: { line: 0, character: 15 },
+          },
+          text: '../shared',
+        },
+      ],
+    });
+
+    expect((await changed).diagnostics).toEqual([
+      expect.objectContaining({
+        severity: DiagnosticSeverity.Error,
+        source: 'sheriff',
+        message: expect.stringContaining('cannot access'),
+        range: {
+          start: { line: 0, character: 8 },
+          end: { line: 0, character: 17 },
+        },
+      }),
+    ]);
   });
 
-  it('exits with code 1 when exit follows initialize without shutdown', () => {
-    const { server, exitCodes } = createServer();
-    initialize(server);
+  it('publishes empty diagnostics when no Sheriff config is present', async () => {
+    const project = createFixtureProject({ withConfig: false });
+    const uri = filePathToUri(join(project, 'src/app/main.ts'));
+    const harness = await createServer();
 
-    server.handleMessage({ jsonrpc: '2.0', method: 'exit' });
+    const published = harness.nextDiagnostics();
+    await harness.client.sendNotification('textDocument/didOpen', {
+      textDocument: {
+        uri,
+        languageId: 'typescript',
+        version: 1,
+        text: "import '../shared';\n",
+      },
+    });
 
-    expect(exitCodes).toEqual([1]);
+    expect((await published).diagnostics).toEqual([]);
   });
-});
 
-describe('SheriffLspServer diagnostics scheduling', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('contains deferred throws and rejections so later requests still work', async () => {
-    vi.useFakeTimers();
+  it('contains thrown and rejected analysis and stays responsive', async () => {
     const createDiagnostics = vi.fn((_uri: string, text: string) => {
       if (text === 'throw') {
         throw new Error('diagnostics failed');
       }
-      if (text === 'reject') {
-        return Promise.reject(new Error('diagnostics rejected'));
-      }
-      return [];
+      return Promise.reject(new Error('diagnostics rejected'));
     });
-    const { server, messages, exitCodes } = createServer({
-      createDiagnostics,
-      changeDebounceMs: 10,
+    const harness = await createServer({ createDiagnostics });
+    const uri = 'file:///test.ts';
+
+    const thrown = harness.nextDiagnostics();
+    await harness.client.sendNotification('textDocument/didOpen', {
+      textDocument: {
+        uri,
+        languageId: 'typescript',
+        version: 1,
+        text: 'throw',
+      },
     });
-    initialize(server);
-    open(server, 'file:///test.ts', 'safe');
-    messages.length = 0;
+    expect((await thrown).diagnostics).toEqual([]);
 
-    change(server, 'file:///test.ts', 'throw', 2);
-    await vi.advanceTimersByTimeAsync(10);
-    expect(lastDiagnostics(messages)).toEqual([]);
+    const rejected = harness.nextDiagnostics();
+    await harness.client.sendNotification('textDocument/didChange', {
+      textDocument: { uri, version: 2 },
+      contentChanges: [{ text: 'reject' }],
+    });
+    expect((await rejected).diagnostics).toEqual([]);
 
-    change(server, 'file:///test.ts', 'reject', 3);
-    await vi.advanceTimersByTimeAsync(10);
-    expect(lastDiagnostics(messages)).toEqual([]);
-
-    server.handleMessage({ jsonrpc: '2.0', id: 9, method: 'still/alive' });
-    expect(messages.find((message) => message['id'] === 9)).toEqual(
-      errorResponse(9, -32601, 'Method not found: still/alive'),
-    );
-    expect(exitCodes).toEqual([]);
+    await expect(
+      harness.client.sendRequest('workspace/stillAlive'),
+    ).rejects.toMatchObject({ code: -32601 });
   });
 
-  it('ignores didChange for a document that was never opened', async () => {
-    vi.useFakeTimers();
-    const { server, messages, createDiagnostics } = createServer({
+  it('clears diagnostics on close and cancels pending analysis', async () => {
+    const createDiagnostics = vi.fn(() => [testDiagnostic]);
+    const harness = await createServer({
       changeDebounceMs: 10,
+      createDiagnostics,
     });
-    initialize(server);
-    messages.length = 0;
+    const uri = 'file:///test.ts';
 
-    change(server, 'file:///unknown.ts', 'changed', 1);
-    await vi.advanceTimersByTimeAsync(20);
+    const opened = harness.nextDiagnostics();
+    await harness.client.sendNotification('textDocument/didOpen', {
+      textDocument: {
+        uri,
+        languageId: 'typescript',
+        version: 1,
+        text: 'opened',
+      },
+    });
+    expect((await opened).diagnostics).toEqual([testDiagnostic]);
+
+    await harness.client.sendNotification('textDocument/didChange', {
+      textDocument: { uri, version: 2 },
+      contentChanges: [{ text: 'changed' }],
+    });
+    const closed = harness.nextDiagnostics();
+    await harness.client.sendNotification('textDocument/didClose', {
+      textDocument: { uri },
+    });
+    expect((await closed).diagnostics).toEqual([]);
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(createDiagnostics).toHaveBeenCalledTimes(1);
+    expect(harness.diagnostics).toHaveLength(2);
+  });
+
+  it('ignores changes for documents that were never opened', async () => {
+    const createDiagnostics = vi.fn(() => []);
+    const harness = await createServer({ createDiagnostics });
+
+    await harness.client.sendNotification('textDocument/didChange', {
+      textDocument: { uri: 'file:///unknown.ts', version: 1 },
+      contentChanges: [{ text: 'changed' }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(createDiagnostics).not.toHaveBeenCalled();
-    expect(messages).toEqual([]);
+    expect(harness.diagnostics).toEqual([]);
   });
 
-  it('cancels a pending change diagnostic when the document closes', async () => {
-    vi.useFakeTimers();
-    const { server, messages, createDiagnostics } = createServer({
-      changeDebounceMs: 10,
-    });
-    initialize(server);
-    open(server, 'file:///test.ts', 'opened');
-    messages.length = 0;
+  function createFixtureProject(options: { withConfig: boolean }): string {
+    const project = mkdtempSync(join(tmpdir(), 'sheriff-lsp-'));
+    tmpDirs.push(project);
 
-    change(server, 'file:///test.ts', 'changed', 2);
-    server.handleMessage({
-      jsonrpc: '2.0',
-      method: 'textDocument/didClose',
-      params: { textDocument: { uri: 'file:///test.ts' } },
-    });
-    await vi.advanceTimersByTimeAsync(20);
+    mkdirSync(join(project, 'src/app'), { recursive: true });
+    mkdirSync(join(project, 'src/shared'), { recursive: true });
+    writeFileSync(
+      join(project, 'tsconfig.json'),
+      JSON.stringify({ compilerOptions: { module: 'commonjs' } }),
+    );
+    if (options.withConfig) {
+      writeFileSync(
+        join(project, 'sheriff.config.ts'),
+        `export const config = {
+  modules: {
+    'src/app': 'app',
+    'src/shared': 'shared',
+  },
+  depRules: {
+    app: [],
+  },
+  enableBarrelLess: true,
+};`,
+      );
+    }
 
-    expect(createDiagnostics).toHaveBeenCalledTimes(1);
-    expect(messages).toHaveLength(1);
-    expect(lastDiagnostics(messages)).toEqual([]);
-  });
+    writeFileSync(join(project, 'src/app/main.ts'), "import './local';\n");
+    writeFileSync(join(project, 'src/app/local.ts'), '');
+    writeFileSync(join(project, 'src/shared/index.ts'), '');
+    return project;
+  }
+
+  async function createServer(
+    options: {
+      createDiagnostics?: (
+        uri: string,
+        text: string,
+      ) => Diagnostic[] | Promise<Diagnostic[]>;
+      changeDebounceMs?: number;
+    } = {},
+  ): Promise<ServerHarness> {
+    const clientToServer = new PassThrough();
+    const serverToClient = new PassThrough();
+    const serverConnection = createConnection(
+      new StreamMessageReader(clientToServer),
+      new StreamMessageWriter(serverToClient),
+    );
+    const client = createMessageConnection(
+      new StreamMessageReader(serverToClient),
+      new StreamMessageWriter(clientToServer),
+    );
+    const sheriffServer = createSheriffLspServer({
+      connection: serverConnection,
+      ...options,
+    });
+    const diagnostics: PublishDiagnosticsParams[] = [];
+    const diagnosticsWaiters: ((params: PublishDiagnosticsParams) => void)[] =
+      [];
+
+    client.onNotification(PublishDiagnosticsNotification.type, (params) => {
+      diagnostics.push(params);
+      diagnosticsWaiters.shift()?.(params);
+    });
+    serverConnection.listen();
+    client.listen();
+
+    const initializeResult = await client.sendRequest<InitializeResult>(
+      'initialize',
+      {
+        processId: null,
+        rootUri: null,
+        capabilities: {},
+      },
+    );
+    await client.sendNotification('initialized', {});
+
+    const harness: ServerHarness = {
+      client,
+      diagnostics,
+      initializeResult,
+      nextDiagnostics: () =>
+        new Promise((resolve) => diagnosticsWaiters.push(resolve)),
+      dispose: () => {
+        sheriffServer.dispose();
+        client.dispose();
+        serverConnection.dispose();
+        clientToServer.destroy();
+        serverToClient.destroy();
+      },
+    };
+    harnesses.push(harness);
+    return harness;
+  }
 });
 
-function createServer(
-  options: {
-    createDiagnostics?: (
-      uri: string,
-      text: string,
-    ) => Diagnostic[] | Promise<Diagnostic[]>;
-    changeDebounceMs?: number;
-  } = {},
-) {
-  const messages: JsonRpcMessage[] = [];
-  const exitCodes: number[] = [];
-  const createDiagnostics = options.createDiagnostics ?? vi.fn(() => []);
-  const server = createSheriffLspServer({
-    changeDebounceMs: options.changeDebounceMs,
-    createDiagnostics,
-    connection: {
-      send: (message) => messages.push(message),
-      exit: (code) => exitCodes.push(code),
-    },
-  });
-  return { server, messages, exitCodes, createDiagnostics };
+interface ServerHarness {
+  client: MessageConnection;
+  diagnostics: PublishDiagnosticsParams[];
+  initializeResult: InitializeResult;
+  nextDiagnostics(): Promise<PublishDiagnosticsParams>;
+  dispose(): void;
 }
 
-function initialize(server: SheriffLspServer): void {
-  server.handleMessage({
-    jsonrpc: '2.0',
-    id: 0,
-    method: 'initialize',
-    params: {},
-  });
-}
-
-function open(server: SheriffLspServer, uri: string, text: string): void {
-  server.handleMessage({
-    jsonrpc: '2.0',
-    method: 'textDocument/didOpen',
-    params: { textDocument: { uri, text, version: 1 } },
-  });
-}
-
-function change(
-  server: SheriffLspServer,
-  uri: string,
-  text: string,
-  version: number,
-): void {
-  server.handleMessage({
-    jsonrpc: '2.0',
-    method: 'textDocument/didChange',
-    params: {
-      textDocument: { uri, version },
-      contentChanges: [{ text }],
-    },
-  });
-}
-
-function errorResponse(id: number, code: number, message: string) {
-  return { jsonrpc: '2.0', id, error: { code, message } };
-}
-
-function lastDiagnostics(messages: JsonRpcMessage[]): unknown {
-  return (messages.at(-1)?.['params'] as { diagnostics?: unknown })
-    ?.diagnostics;
-}
+const testDiagnostic: Diagnostic = {
+  range: {
+    start: { line: 0, character: 0 },
+    end: { line: 0, character: 1 },
+  },
+  severity: DiagnosticSeverity.Error,
+  source: 'sheriff',
+  message: 'violation',
+};

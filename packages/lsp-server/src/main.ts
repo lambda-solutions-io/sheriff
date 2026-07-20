@@ -1,8 +1,5 @@
 #!/usr/bin/env node
-import {
-  JsonRpcMessageReader,
-  encodeJsonRpcMessage,
-} from './lib/message-codec';
+import { createConnection } from 'vscode-languageserver/node';
 import { createSheriffLspServer } from './lib/lsp-server';
 
 function main(): void {
@@ -19,31 +16,12 @@ function main(): void {
     return;
   }
 
-  const reader = new JsonRpcMessageReader();
-  const server = createSheriffLspServer({
+  const connection = createConnection(process.stdin, process.stdout);
+  createSheriffLspServer({
     changeDebounceMs: 150,
-    connection: {
-      send: (message) => {
-        process.stdout.write(encodeJsonRpcMessage(message));
-      },
-      exit: (code) => {
-        process.exit(code);
-      },
-    },
+    connection,
   });
-
-  process.stdin.on('data', (chunk: Buffer) => {
-    // isolate failures per message so one bad payload cannot drop the
-    // remaining messages decoded from the same chunk
-    for (const message of reader.push(chunk)) {
-      try {
-        server.handleMessage(message);
-      } catch (error) {
-        const text = error instanceof Error ? error.message : String(error);
-        process.stderr.write(`Failed to process LSP message: ${text}\n`);
-      }
-    }
-  });
+  connection.listen();
 }
 
 main();

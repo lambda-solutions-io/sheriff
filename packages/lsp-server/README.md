@@ -2,7 +2,11 @@
 
 `@lambda-solutions/lsp-server-sheriff` exposes Sheriff dependency-rule and
 encapsulation violations through the Language Server Protocol. It runs
-in-process and communicates over stdio using JSON-RPC 2.0 framing.
+in-process and communicates over stdio.
+
+The server uses `vscode-languageserver` for the protocol connection and
+`vscode-languageserver-textdocument` for incremental document synchronization.
+Both packages are runtime dependencies of the published server.
 
 ## Usage
 
@@ -53,26 +57,25 @@ Map the server to TypeScript and JavaScript file types in the project that has
 
 ## Protocol
 
-The server implements these LSP methods:
+The server handles these document notifications:
 
-- `initialize`
-- `initialized`
-- `shutdown`
-- `exit`
 - `textDocument/didOpen`
 - `textDocument/didChange`
-- `textDocument/didSave`
 - `textDocument/didClose`
 
-The initialize response advertises full text document sync:
+The initialize response advertises incremental text document sync:
 
 ```json
 {
   "capabilities": {
-    "textDocumentSync": 1
+    "textDocumentSync": 2
   }
 }
 ```
+
+`vscode-languageserver` owns JSON-RPC/LSP framing, initialize and shutdown
+lifecycle semantics, request bookkeeping, cancellation, and standard error
+responses.
 
 Diagnostics are published with `textDocument/publishDiagnostics`, severity
 `Error`, and source `sheriff`. The range covers the module specifier inside the
@@ -80,20 +83,6 @@ import or export statement. If the file is outside a TypeScript project or no
 `sheriff.config.ts` is found by Sheriff's core project discovery, the server
 publishes an empty diagnostics array.
 
-Messages use standard LSP stdio framing:
-
-```text
-Content-Length: <utf8-byte-length>\r\n
-\r\n
-<json-rpc-message>
-```
-
 The current implementation uses the same in-process core API as the ESLint
 plugin. A daemon-backed implementation can be added behind the diagnostics
 creation function later without changing the LSP transport.
-
-## Known limitations
-
-- Files that use lone carriage returns (`\r`) as line endings are unsupported.
-  Use LF (`\n`) or CRLF (`\r\n`) so diagnostic line and character positions
-  match the editor document.
