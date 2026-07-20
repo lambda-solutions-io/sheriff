@@ -57,9 +57,11 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
   if (options.files) {
     const entries = getEntriesFromCliOrConfig(args[0], false);
 
-    // Canonicalize only requested paths. FileInfo paths are already absolute
-    // paths produced by project parsing, so graph-wide realpath calls are not
-    // needed for identity comparisons.
+    // Canonicalize requested paths so membership is compared by file
+    // identity. Graph paths are canonicalized on the other side of the
+    // comparison too: absolute is not the same as canonical, and a symlink
+    // anywhere on the path (macOS /tmp -> /private/tmp, symlinked workspace
+    // packages) would otherwise make an owned file look missing.
     const requestedFilePaths = Array.from(
       new Set(
         options.files.map((file) =>
@@ -74,6 +76,7 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
       return;
     }
 
+    const requestedFilePathSet = new Set(requestedFilePaths);
     const unresolvedFilePaths = new Set<string>();
     for (const requestedFilePath of requestedFilePaths) {
       if (fs.exists(requestedFilePath)) {
@@ -87,13 +90,14 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
     projectEntries = [];
 
     // Entry points can import files outside their own directory, so ownership
-    // cannot be inferred safely from path prefixes. Initialize candidates one
-    // at a time and stop as soon as every existing requested file is owned.
+    // cannot be inferred safely from path prefixes: every entry point is a
+    // candidate owner and is initialized.
+    //
+    // A file reachable from several entry points must be checked under each
+    // of them — their configs can differ, so one permissive owner must not
+    // hide a violation reported by another. Ownership is therefore recorded
+    // per entry point and never consumed globally.
     for (const entry of entries) {
-      if (unresolvedFilePaths.size === 0) {
-        break;
-      }
-
       const projectInfo = init(toFsPath(fs.join(fs.cwd(), entry.entryFile)));
       const projectEntry = { ...entry, projectInfo };
       const knownFilePaths = new Map<string, FsPath>();
@@ -102,8 +106,12 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
       projectFilePaths.set(entry.projectName, knownFilePaths);
 
       for (const { fileInfo } of traverseFileInfo(projectInfo.fileInfo)) {
-        if (unresolvedFilePaths.delete(fileInfo.path)) {
-          knownFilePaths.set(fileInfo.path, fileInfo.path);
+        // Canonicalize the graph side as well, so both sides of the
+        // comparison are in the same form.
+        const canonicalPath = canonicalize(fileInfo.path, fs);
+        if (requestedFilePathSet.has(canonicalPath)) {
+          knownFilePaths.set(canonicalPath, fileInfo.path);
+          unresolvedFilePaths.delete(canonicalPath);
         }
       }
     }

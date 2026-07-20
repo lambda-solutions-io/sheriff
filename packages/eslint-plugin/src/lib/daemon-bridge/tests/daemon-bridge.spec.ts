@@ -221,6 +221,42 @@ describe('daemon bridge', () => {
     expect(syncLintFile).toHaveBeenCalledTimes(1);
   });
 
+  it('refetches on a later lint pass over unchanged content', () => {
+    // Results depend on more than this file's text: a changed
+    // sheriff.config.ts or a moved dependency changes the verdict while the
+    // source stays byte-identical. A new pass must therefore ask the daemon
+    // again instead of serving the previous pass's cached answer.
+    process.env['SHERIFF_DAEMON'] = '1';
+    const violatingLintResult: DaemonLintResult = {
+      ...emptyLintResult,
+      encapsulationViolations: ['@app/data'],
+    };
+    const syncLintFile = vi
+      .fn()
+      .mockReturnValueOnce(emptyLintResult)
+      .mockReturnValue(violatingLintResult);
+    synckitMocks.createSyncFn.mockReturnValue(syncLintFile);
+
+    const source = 'import data from "@app/data";';
+
+    // First pass: both rules share a single request.
+    daemonDependencyMessage('/project/stable.ts', '@app/data', true, source);
+    daemonEncapsulationMessage('/project/stable.ts', '@app/data', true, source);
+    expect(syncLintFile).toHaveBeenCalledTimes(1);
+
+    // Second pass over identical content: the config changed underneath, so
+    // the newly reported violation must surface.
+    expect(
+      daemonEncapsulationMessage(
+        '/project/stable.ts',
+        '@app/data',
+        true,
+        source,
+      ),
+    ).toBe("'@app/data' cannot be imported. It is encapsulated.");
+    expect(syncLintFile).toHaveBeenCalledTimes(2);
+  });
+
   it('refetches daemon messages when the same filename has new content', () => {
     process.env['SHERIFF_DAEMON'] = '1';
     const changedLintResult: DaemonLintResult = {

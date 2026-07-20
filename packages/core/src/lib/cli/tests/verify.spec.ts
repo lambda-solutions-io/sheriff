@@ -241,7 +241,7 @@ describe('verify', () => {
       expect(mockedCli.endProcessOk).toHaveBeenCalledOnce();
     });
 
-    it('stops initializing entry points once the requested file is owned', () => {
+    it('checks every entry point that owns a requested file', () => {
       const { mockedCli } = mockCli();
       const initSpy = vitest.spyOn(initFile, 'init');
 
@@ -274,11 +274,75 @@ describe('verify', () => {
         files: ['projects/project-i/src/app.ts'],
       });
 
-      expect(initSpy).toHaveBeenCalledOnce();
+      // Every entry point is a candidate owner: a file reachable from more
+      // than one of them must be checked under each, because their configs
+      // can differ and a permissive owner must not mask another's violation.
       expect(initSpy).toHaveBeenCalledWith(
         '/project/projects/project-i/src/main.ts',
       );
+      expect(initSpy).toHaveBeenCalledWith(
+        '/project/projects/project-ii/src/main.ts',
+      );
       expect(mockedCli.endProcessOk).toHaveBeenCalledOnce();
+    });
+
+    it('reports a violation from a later entry point for a shared file', () => {
+      const { allLogs, mockedCli } = mockCli();
+
+      // The same file is reachable from both entry points, but only the
+      // second one forbids the import. Claiming the file for the first
+      // (permissive) owner and skipping the rest would be a silent false
+      // pass in a pre-commit gate.
+      createProject({
+        'tsconfig.json': tsConfig(),
+        'sheriff.config.ts': sheriffConfig({
+          entryPoints: {
+            'project-i': 'projects/project-i/src/main.ts',
+            'project-ii': 'projects/project-ii/src/main.ts',
+          },
+          modules: {
+            'projects/project-ii': {
+              'src/shared': ['shared'],
+              'src/forbidden': ['forbidden'],
+            },
+          },
+          depRules: {
+            root: ['shared', 'forbidden', 'noTag'],
+            shared: [],
+            forbidden: [],
+            noTag: ['noTag'],
+          },
+        }),
+        projects: {
+          'project-i': {
+            src: {
+              // Reaches the shared file directly, so project-i is the first
+              // entry point that can claim it while walking the graph.
+              'main.ts': [
+                '../../project-ii/src/shared/shared.component',
+              ],
+            },
+          },
+          'project-ii': {
+            src: {
+              'main.ts': ['./shared'],
+              shared: {
+                'index.ts': ['./shared.component'],
+                'shared.component.ts': ['../forbidden'],
+              },
+              forbidden: { 'index.ts': [] },
+            },
+          },
+        },
+      });
+
+      verifyFile.verify([], {
+        files: ['projects/project-ii/src/shared/shared.component.ts'],
+      });
+
+      expect(allLogs()).toContain('shared.component.ts');
+      expect(mockedCli.endProcessError).toHaveBeenCalledOnce();
+      expect(mockedCli.endProcessOk).not.toHaveBeenCalled();
     });
 
     it('errors when a listed file exists on disk but is not in the project graph', () => {
@@ -348,7 +412,15 @@ describe('verify', () => {
         files: ['/symlinked/src/orders/orders.component.ts'],
       });
 
-      expect(realpathSpy).toHaveBeenCalledOnce();
+      // Both sides of the membership comparison are canonicalized: the
+      // requested path AND the graph paths. Canonicalizing only the request
+      // would leave the symlinked path unmatched and silently skipped.
+      expect(realpathSpy).toHaveBeenCalledWith(
+        '/symlinked/src/orders/orders.component.ts',
+      );
+      expect(realpathSpy).toHaveBeenCalledWith(
+        '/project/src/orders/orders.component.ts',
+      );
       realpathSpy.mockRestore();
 
       expect(allLogs()).toContain('|-- src/orders/orders.component.ts');

@@ -17,6 +17,12 @@ interface DaemonLintMessages {
 interface DaemonLintCacheEntry {
   sourceCode: string;
   messages: DaemonLintMessages;
+  /**
+   * Whether this entry was produced during the ESLint pass that is still
+   * running. Set when the first rule fetches it, cleared once a rule opens a
+   * new pass for the file, so a later pass always refetches.
+   */
+  fetchedInPass: boolean;
 }
 
 // Bound the per-process cache so a long-running ESLint session linting many
@@ -27,20 +33,20 @@ const messagesByFilename = new Map<string, DaemonLintCacheEntry>();
 export function daemonDependencyMessage(
   filename: string,
   importValue: string,
-  _isFirstRun: boolean,
+  isFirstRun: boolean,
   sourceCode: string,
 ): string | undefined {
-  const messages = getDaemonLintMessages(filename, sourceCode);
+  const messages = getDaemonLintMessages(filename, isFirstRun, sourceCode);
   return messages?.dependency.get(importValue) ?? (messages ? '' : undefined);
 }
 
 export function daemonEncapsulationMessage(
   filename: string,
   importValue: string,
-  _isFirstRun: boolean,
+  isFirstRun: boolean,
   sourceCode: string,
 ): string | undefined {
-  const messages = getDaemonLintMessages(filename, sourceCode);
+  const messages = getDaemonLintMessages(filename, isFirstRun, sourceCode);
   return (
     messages?.encapsulation.get(importValue) ?? (messages ? '' : undefined)
   );
@@ -48,6 +54,7 @@ export function daemonEncapsulationMessage(
 
 function getDaemonLintMessages(
   filename: string,
+  isFirstRun: boolean,
   sourceCode: string,
 ): DaemonLintMessages | undefined {
   if (!isDaemonBridgeEnabled()) {
@@ -55,10 +62,29 @@ function getDaemonLintMessages(
   }
 
   const cached = messagesByFilename.get(filename);
-  // Both ESLint rules report `isFirstRun` independently. The source buffer is
-  // the shared identity that distinguishes their duplicate first calls from a
-  // later lint pass after the editor content changed.
-  if (cached?.sourceCode === sourceCode) {
+
+  // Both rules report `isFirstRun` independently for the same file, and the
+  // second one must reuse the first one's result — that is what collapses the
+  // duplicate RPC. But a *later* ESLint pass over the same unchanged file has
+  // to refetch: results depend on more than this file's text, so a changed
+  // sheriff.config.ts or a moved dependency must not stay masked by a cache
+  // entry whose source never changed.
+  //
+  // `fetchedInPass` distinguishes the two. A rule opening a new pass
+  // (isFirstRun) consumes the flag: the first one to arrive finds it false
+  // and refetches, and the second finds the flag the refetch just set and
+  // reuses. Non-first-run calls within a pass always reuse.
+  const isReusableWithinPass =
+    cached !== undefined &&
+    cached.sourceCode === sourceCode &&
+    (!isFirstRun || cached.fetchedInPass);
+
+  if (isReusableWithinPass) {
+    // Consume the flag so the NEXT pass's first rule refetches rather than
+    // reusing this pass's result for an unchanged but possibly stale file.
+    if (isFirstRun && cached) {
+      cached.fetchedInPass = false;
+    }
     return cached.messages;
   }
 
@@ -82,7 +108,11 @@ function getDaemonLintMessages(
     return undefined;
   }
 
-  messagesByFilename.set(filename, { sourceCode, messages });
+  messagesByFilename.set(filename, {
+    sourceCode,
+    messages,
+    fetchedInPass: true,
+  });
   evictOldestWhenOverCapacity();
   return messages;
 }
