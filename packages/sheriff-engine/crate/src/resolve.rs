@@ -10,7 +10,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::extract::{ExtractedImport, extract_imports};
-use crate::input::OrderedMap;
+use crate::input::{MAX_CONFIG_NESTING, MAX_FILES, MAX_IMPORTS, MAX_STRING_BYTES, OrderedMap};
+use crate::js_replacement;
 
 const SUPPORTED_COMPILER_OPTIONS: &[&str] = &[
     "allowJs",
@@ -184,13 +185,38 @@ pub enum ImportKind {
     Unresolvable,
 }
 
-pub fn resolve_project(input: ResolveProjectInput) -> Result<ResolveProjectOutput, String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolveProjectError {
+    Resolution(String),
+    LimitExceeded(String),
+}
+
+impl std::fmt::Display for ResolveProjectError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Resolution(message) | Self::LimitExceeded(message) => {
+                formatter.write_str(message)
+            }
+        }
+    }
+}
+
+impl From<String> for ResolveProjectError {
+    fn from(message: String) -> Self {
+        Self::Resolution(message)
+    }
+}
+
+pub fn resolve_project(
+    input: ResolveProjectInput,
+) -> Result<ResolveProjectOutput, ResolveProjectError> {
     if input.schema_version != 1 {
-        return Err(format!(
+        return Err(ResolveProjectError::Resolution(format!(
             "unsupported resolve-project schemaVersion {}; expected 1",
             input.schema_version
-        ));
+        )));
     }
+    validate_input_strings(&input)?;
 
     let mut context = get_ts_config_context(Path::new(&input.ts_config_path))?;
     context
@@ -201,7 +227,7 @@ pub fn resolve_project(input: ResolveProjectInput) -> Result<ResolveProjectOutpu
         ));
     context.fallback_reasons.sort();
     context.fallback_reasons.dedup();
-    let fallback = !context.fallback_reasons.is_empty();
+    let initial_fallback = !context.fallback_reasons.is_empty();
     let resolver = create_resolver(
         Some(Path::new(&input.ts_config_path)),
         context.module_resolution.as_deref(),
@@ -212,14 +238,35 @@ pub fn resolve_project(input: ResolveProjectInput) -> Result<ResolveProjectOutpu
         .map(|extension| extension.to_lowercase())
         .collect();
     let mut files = Vec::with_capacity(input.files.len());
+    let mut import_count = 0;
 
-    if !fallback || input.shadow_mode {
+    if !initial_fallback || input.shadow_mode {
         for file in input.files {
             let path = PathBuf::from(&file);
             let source = fs::read_to_string(&path)
                 .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+            if source.len() > MAX_STRING_BYTES {
+                return Err(ResolveProjectError::LimitExceeded(format!(
+                    "source file {} exceeds the {MAX_STRING_BYTES} byte string/path limit",
+                    relative_for_oracle(&context.root_dir, &path)
+                )));
+            }
             let extracted = extract_imports(&path, &source)?;
-            let imports = resolve_imports(&path, extracted, &ignored, &context, &resolver)?;
+            import_count = checked_import_total(import_count, extracted.imports.len())?;
+            if !extracted.fallback_reasons.is_empty() {
+                let file = relative_for_oracle(&context.root_dir, &path);
+                context.fallback_reasons.extend(
+                    extracted
+                        .fallback_reasons
+                        .into_iter()
+                        .map(|reason| format!("{reason} ({file})")),
+                );
+                if !input.shadow_mode {
+                    files.clear();
+                    break;
+                }
+            }
+            let imports = resolve_imports(&path, extracted.imports, &ignored, &context, &resolver)?;
             files.push(ResolvedFile {
                 file: relative_for_oracle(&context.root_dir, &path),
                 imports,
@@ -227,6 +274,10 @@ pub fn resolve_project(input: ResolveProjectInput) -> Result<ResolveProjectOutpu
         }
         files.sort_by(|left, right| left.file.cmp(&right.file));
     }
+
+    context.fallback_reasons.sort();
+    context.fallback_reasons.dedup();
+    let fallback = !context.fallback_reasons.is_empty();
 
     Ok(ResolveProjectOutput {
         schema_version: 1,
@@ -242,7 +293,54 @@ pub fn resolve_project(input: ResolveProjectInput) -> Result<ResolveProjectOutpu
     })
 }
 
-pub fn get_ts_config_context(ts_config_path: &Path) -> Result<TsConfigContext, String> {
+fn validate_input_strings(input: &ResolveProjectInput) -> Result<(), ResolveProjectError> {
+    if input.files.len() > MAX_FILES {
+        return Err(ResolveProjectError::LimitExceeded(format!(
+            "files count {} exceeds the {MAX_FILES} limit",
+            input.files.len()
+        )));
+    }
+    for (name, value) in std::iter::once(("tsConfigPath".to_owned(), &input.ts_config_path))
+        .chain(
+            input
+                .files
+                .iter()
+                .enumerate()
+                .map(|(index, file)| (format!("files[{index}]"), file)),
+        )
+        .chain(
+            input
+                .ignore_file_extensions
+                .iter()
+                .enumerate()
+                .map(|(index, extension)| (format!("ignoreFileExtensions[{index}]"), extension)),
+        )
+    {
+        if value.len() > MAX_STRING_BYTES {
+            return Err(ResolveProjectError::LimitExceeded(format!(
+                "{name} exceeds the {MAX_STRING_BYTES} byte string/path limit"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn checked_import_total(current: usize, additional: usize) -> Result<usize, ResolveProjectError> {
+    let total = current
+        .checked_add(additional)
+        .ok_or_else(|| ResolveProjectError::LimitExceeded("import count overflowed".to_owned()))?;
+    if total > MAX_IMPORTS {
+        Err(ResolveProjectError::LimitExceeded(format!(
+            "imports count {total} exceeds the {MAX_IMPORTS} limit"
+        )))
+    } else {
+        Ok(total)
+    }
+}
+
+pub fn get_ts_config_context(
+    ts_config_path: &Path,
+) -> Result<TsConfigContext, ResolveProjectError> {
     let mut current_path = ts_config_path.to_path_buf();
     let mut current_dir = parent(&current_path)?;
     let mut paths: Vec<MaterializedPath> = Vec::new();
@@ -250,9 +348,20 @@ pub fn get_ts_config_context(ts_config_path: &Path) -> Result<TsConfigContext, S
     let mut module_resolution = None;
     let mut source_config_paths = Vec::new();
     let mut fallback_reasons = Vec::new();
+    let mut unique_config_paths = HashSet::new();
     let resolver = create_resolver(None, None);
 
     loop {
+        // Preserve Sheriff's current behavior for cyclic extends chains: a
+        // repeated path is not counted toward the acyclic chain cap, so this
+        // guard does not turn the cross-engine hang into a Rust-only error.
+        if unique_config_paths.insert(current_path.clone())
+            && unique_config_paths.len() > MAX_CONFIG_NESTING
+        {
+            return Err(ResolveProjectError::LimitExceeded(format!(
+                "tsconfig extends chain exceeds the {MAX_CONFIG_NESTING} level limit"
+            )));
+        }
         source_config_paths.push(current_path.clone());
         let config = read_ts_config(&current_path)?;
 
@@ -274,10 +383,10 @@ pub fn get_ts_config_context(ts_config_path: &Path) -> Result<TsConfigContext, S
 
         for (key, targets) in config.compiler_options.paths.0 {
             let Some(value) = targets.first() else {
-                return Err(format!(
+                return Err(ResolveProjectError::Resolution(format!(
                     "invalid path mapping {key} in {}: target array is empty",
                     current_path.display()
-                ));
+                )));
             };
             let value_for_path = value.strip_suffix("/*").unwrap_or(value);
             let mapping_base = config.compiler_options.base_url.as_deref().unwrap_or("./");
@@ -289,16 +398,16 @@ pub fn get_ts_config_context(ts_config_path: &Path) -> Result<TsConfigContext, S
                 if ts_candidate.exists() {
                     ts_candidate
                 } else {
-                    return Err(format!(
+                    return Err(ResolveProjectError::Resolution(format!(
                         "invalid path mapping {key} -> {value} in {}",
                         current_path.display()
-                    ));
+                    )));
                 }
             } else {
-                return Err(format!(
+                return Err(ResolveProjectError::Resolution(format!(
                     "invalid path mapping {key} -> {value} in {}",
                     current_path.display()
-                ));
+                )));
             };
 
             // Bug-compatible with sheriff: assignment while walking toward the
@@ -315,10 +424,10 @@ pub fn get_ts_config_context(ts_config_path: &Path) -> Result<TsConfigContext, S
             break;
         };
         let Some(extends) = extends_value.as_str() else {
-            return Err(format!(
+            return Err(ResolveProjectError::Resolution(format!(
                 "unsupported non-string extends in {}",
                 current_path.display()
-            ));
+            )));
         };
 
         let literal = node_join(&current_dir, extends);
@@ -337,15 +446,20 @@ pub fn get_ts_config_context(ts_config_path: &Path) -> Result<TsConfigContext, S
                 .map(|resolution| resolution.into_path_buf())
         });
         let Some(extended) = extended else {
-            return Err(format!(
+            return Err(ResolveProjectError::Resolution(format!(
                 "cannot resolve extends {extends} from {}",
                 current_path.display()
-            ));
+            )));
         };
         current_path = extended;
         current_dir = parent(&current_path)?;
     }
 
+    let root_prefix = format!("{}{}", current_dir.display(), std::path::MAIN_SEPARATOR);
+    fallback_reasons = fallback_reasons
+        .into_iter()
+        .map(|reason| reason.replace(&root_prefix, ""))
+        .collect();
     fallback_reasons.sort();
     fallback_reasons.dedup();
     Ok(TsConfigContext {
@@ -421,12 +535,20 @@ fn validate_option_value(
     }
 }
 
-fn read_ts_config(path: &Path) -> Result<RawTsConfig, String> {
-    let raw = fs::read_to_string(path)
-        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+fn read_ts_config(path: &Path) -> Result<RawTsConfig, ResolveProjectError> {
+    let raw = fs::read_to_string(path).map_err(|error| {
+        ResolveProjectError::Resolution(format!("could not read {}: {error}", path.display()))
+    })?;
+    if raw.len() > MAX_STRING_BYTES {
+        return Err(ResolveProjectError::LimitExceeded(format!(
+            "tsconfig {} exceeds the {MAX_STRING_BYTES} byte string/path limit",
+            path.display()
+        )));
+    }
     let sanitized = sanitize_jsonc(&raw);
-    serde_json::from_str(&sanitized)
-        .map_err(|error| format!("invalid tsconfig {}: {error}", path.display()))
+    serde_json::from_str(&sanitized).map_err(|error| {
+        ResolveProjectError::Resolution(format!("invalid tsconfig {}: {error}", path.display()))
+    })
 }
 
 fn sanitize_jsonc(source: &str) -> String {
@@ -510,8 +632,7 @@ fn sanitize_jsonc(source: &str) -> String {
     String::from_utf8(output).expect("JSONC sanitization preserves UTF-8")
 }
 
-fn create_resolver(ts_config_path: Option<&Path>, module_resolution: Option<&str>) -> Resolver {
-    let bundler = module_resolution.is_some_and(|value| value.eq_ignore_ascii_case("bundler"));
+fn create_resolver(ts_config_path: Option<&Path>, _module_resolution: Option<&str>) -> Resolver {
     Resolver::new(ResolveOptions {
         tsconfig: ts_config_path.map(|config_file| {
             TsconfigDiscovery::Manual(TsconfigOptions {
@@ -519,25 +640,13 @@ fn create_resolver(ts_config_path: Option<&Path>, module_resolution: Option<&str
                 references: TsconfigReferences::Disabled,
             })
         }),
-        condition_names: if bundler {
-            vec![
-                "types".to_owned(),
-                "import".to_owned(),
-                "default".to_owned(),
-            ]
-        } else {
-            Vec::new()
-        },
-        exports_fields: if bundler {
-            vec![vec!["exports".to_owned()]]
-        } else {
-            Vec::new()
-        },
-        imports_fields: if bundler {
-            vec![vec!["imports".to_owned()]]
-        } else {
-            Vec::new()
-        },
+        // Sheriff currently passes the full ts.readConfigFile result instead
+        // of its `config` member to parseJsonConfigFileContent. Consequently,
+        // ts.resolveModuleName sees none of the parsed compiler options and
+        // uses its default condition set even when the raw config says bundler.
+        condition_names: Vec::new(),
+        exports_fields: Vec::new(),
+        imports_fields: Vec::new(),
         extensions: vec![
             ".ts".to_owned(),
             ".tsx".to_owned(),
@@ -548,7 +657,6 @@ fn create_resolver(ts_config_path: Option<&Path>, module_resolution: Option<&str
             ".jsx".to_owned(),
             ".mjs".to_owned(),
             ".cjs".to_owned(),
-            ".json".to_owned(),
         ],
         extension_alias: vec![
             (
@@ -627,6 +735,15 @@ fn normal_resolve(
     specifier: &str,
     context: &TsConfigContext,
 ) -> Option<PathBuf> {
+    // resolveJsonModule never reaches Sheriff's ts.resolveModuleName call (see
+    // create_resolver), while oxc resolves an explicit existing .json path even
+    // when .json is absent from the extension probe list.
+    if specifier
+        .rsplit_once('.')
+        .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("json"))
+    {
+        return None;
+    }
     if !is_relative_import(specifier)
         && !Path::new(specifier).is_absolute()
         && let Some(base_url) = &context.base_url
@@ -660,8 +777,11 @@ pub fn resolve_potential_ts_path(
         if wildcard && module_name.starts_with(cleared) {
             // JS String.replace replaces the first occurrence only. The
             // startsWith check intentionally has no path-separator boundary.
-            unpathed_import =
-                Some(module_name.replacen(cleared, &mapping.target.to_string_lossy(), 1));
+            unpathed_import = Some(js_replacement::replace_first(
+                module_name,
+                cleared,
+                mapping.target.to_string_lossy().as_ref(),
+            ));
         } else if mapping.key == module_name {
             unpathed_import = Some(mapping.target.to_string_lossy().into_owned());
         }
@@ -747,48 +867,94 @@ fn dependency_universe(file_dir: &Path, root_dir: &Path) -> HashSet<String> {
 }
 
 fn types_versions_fallback_reasons(files: &[String], root_dir: &Path) -> Vec<String> {
-    let mut checked = HashSet::new();
     let mut reasons = Vec::new();
 
-    for file in files {
-        let path = Path::new(file);
-        let Some(file_dir) = path.parent() else {
-            continue;
-        };
-        for package in dependency_universe(file_dir, root_dir) {
-            if !checked.insert(package.clone()) {
-                continue;
-            }
-            let mut current = file_dir.to_path_buf();
-            loop {
-                let manifest_path = current
-                    .join("node_modules")
-                    .join(&package)
-                    .join("package.json");
-                if manifest_path.is_file() {
-                    if fs::read_to_string(&manifest_path)
-                        .ok()
-                        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-                        .is_some_and(|manifest| manifest.get("typesVersions").is_some())
-                    {
-                        reasons.push(format!(
-                            "package {package} declares unsupported typesVersions ({})",
-                            manifest_path.display()
-                        ));
-                    }
-                    break;
-                }
-                if current == root_dir {
-                    break;
-                }
-                let Some(parent) = current.parent() else {
-                    break;
-                };
-                current = parent.to_path_buf();
-            }
+    for (package, manifest_path) in installed_package_manifests(files, root_dir) {
+        if fs::read_to_string(&manifest_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            .is_some_and(|manifest| manifest.get("typesVersions").is_some())
+        {
+            reasons.push(format!(
+                "package {package} declares unsupported typesVersions ({})",
+                relative_for_oracle(root_dir, &manifest_path)
+            ));
         }
     }
     reasons
+}
+
+fn installed_package_manifests(files: &[String], root_dir: &Path) -> Vec<(String, PathBuf)> {
+    let mut checked_node_modules = HashSet::new();
+    let mut checked_manifests = HashSet::new();
+    let mut manifests = Vec::new();
+
+    for file in files {
+        let Some(mut current) = Path::new(file).parent().map(Path::to_path_buf) else {
+            continue;
+        };
+        if current.strip_prefix(root_dir).is_err() {
+            continue;
+        }
+        loop {
+            let node_modules = current.join("node_modules");
+            if checked_node_modules.insert(node_modules.clone()) && node_modules.is_dir() {
+                collect_package_manifests(&node_modules, &mut checked_manifests, &mut manifests);
+            }
+            if current == root_dir {
+                break;
+            }
+            let Some(parent) = current.parent() else {
+                break;
+            };
+            current = parent.to_path_buf();
+        }
+    }
+    manifests.sort_by(|left, right| left.1.cmp(&right.1));
+    manifests
+}
+
+fn collect_package_manifests(
+    node_modules: &Path,
+    checked: &mut HashSet<PathBuf>,
+    output: &mut Vec<(String, PathBuf)>,
+) {
+    let Ok(entries) = fs::read_dir(node_modules) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') || !entry.path().is_dir() {
+            continue;
+        }
+        if name.starts_with('@') {
+            let Ok(scoped_entries) = fs::read_dir(entry.path()) else {
+                continue;
+            };
+            for package_entry in scoped_entries.flatten() {
+                let package_name = package_entry.file_name().to_string_lossy().into_owned();
+                collect_package_manifest(
+                    format!("{name}/{package_name}"),
+                    package_entry.path().join("package.json"),
+                    checked,
+                    output,
+                );
+            }
+        } else {
+            collect_package_manifest(name, entry.path().join("package.json"), checked, output);
+        }
+    }
+}
+
+fn collect_package_manifest(
+    package: String,
+    manifest: PathBuf,
+    checked: &mut HashSet<PathBuf>,
+    output: &mut Vec<(String, PathBuf)>,
+) {
+    if manifest.is_file() && checked.insert(manifest.clone()) {
+        output.push((package, manifest));
+    }
 }
 
 fn parse_dependency_universe(path: &Path) -> HashSet<String> {
@@ -809,7 +975,9 @@ fn extract_package_name(specifier: &str) -> String {
     let mut segments = specifier.split('/');
     let first = segments.next().unwrap_or_default();
     if first.starts_with('@') {
-        format!("{first}/{}", segments.next().unwrap_or_default())
+        segments
+            .next()
+            .map_or_else(|| first.to_owned(), |second| format!("{first}/{second}"))
     } else {
         first.to_owned()
     }
@@ -881,10 +1049,12 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{
-        ImportKind, MaterializedPath, ResolveProjectInput, classify, dependency_universe,
-        extract_package_name, get_ts_config_context, node_join, resolve_potential_ts_path,
-        resolve_project, sanitize_jsonc,
+        ImportKind, MaterializedPath, ResolveProjectError, ResolveProjectInput,
+        checked_import_total, classify, dependency_universe, extract_package_name,
+        get_ts_config_context, node_join, resolve_potential_ts_path, resolve_project,
+        sanitize_jsonc,
     };
+    use crate::input::{MAX_CONFIG_NESTING, MAX_IMPORTS, MAX_STRING_BYTES};
 
     static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
@@ -1038,6 +1208,161 @@ mod tests {
     }
 
     #[test]
+    fn json_imports_are_not_resolved_even_when_raw_config_enables_them() {
+        // Sheriff currently drops parsed compiler options before calling
+        // ts.resolveModuleName, so resolveJsonModule never reaches the resolver.
+        for compiler_options in [
+            "",
+            r#""resolveJsonModule":false"#,
+            r#""resolveJsonModule":true"#,
+        ] {
+            let temp = TestDir::new();
+            let config = temp.write(
+                "tsconfig.json",
+                &format!(r#"{{"compilerOptions":{{{compiler_options}}}}}"#),
+            );
+            temp.write("src/data.json", "{}");
+            let source = temp.write("src/main.ts", r#"import "./data.json";"#);
+            let output = resolve_project(ResolveProjectInput {
+                schema_version: 1,
+                ts_config_path: config.to_string_lossy().into_owned(),
+                files: vec![source.to_string_lossy().into_owned()],
+                ignore_file_extensions: Vec::new(),
+                shadow_mode: false,
+            })
+            .unwrap();
+
+            assert!(!output.fallback);
+            assert_eq!(output.files[0].imports[0].kind, ImportKind::Unresolvable);
+            assert_eq!(output.files[0].imports[0].resolved_path, None);
+        }
+    }
+
+    #[test]
+    fn json_imports_are_absent_with_sheriffs_default_ignore_filter() {
+        let temp = TestDir::new();
+        let config = temp.write("tsconfig.json", "{}");
+        temp.write("src/data.json", "{}");
+        let source = temp.write("src/main.ts", r#"import "./data.json";"#);
+        let output = resolve_project(ResolveProjectInput {
+            schema_version: 1,
+            ts_config_path: config.to_string_lossy().into_owned(),
+            files: vec![source.to_string_lossy().into_owned()],
+            ignore_file_extensions: vec!["json".to_owned()],
+            shadow_mode: false,
+        })
+        .unwrap();
+
+        assert!(output.files[0].imports.is_empty());
+    }
+
+    #[test]
+    fn bundler_config_uses_sheriffs_effective_default_exports_conditions() {
+        let temp = TestDir::new();
+        let config = temp.write(
+            "tsconfig.json",
+            r#"{"compilerOptions":{"module":"esnext","moduleResolution":"bundler"}}"#,
+        );
+        temp.write(
+            "node_modules/cond-pkg/package.json",
+            r#"{"name":"cond-pkg","main":"index.js","exports":{".":{"require":"./index.js"}}}"#,
+        );
+        temp.write("node_modules/cond-pkg/index.js", "");
+        temp.write(
+            "package.json",
+            r#"{"devDependencies":{"cond-pkg":"1.0.0"}}"#,
+        );
+        let source = temp.write("src/main.ts", r#"import "cond-pkg";"#);
+        let output = resolve_project(ResolveProjectInput {
+            schema_version: 1,
+            ts_config_path: config.to_string_lossy().into_owned(),
+            files: vec![source.to_string_lossy().into_owned()],
+            ignore_file_extensions: Vec::new(),
+            shadow_mode: false,
+        })
+        .unwrap();
+
+        assert!(!output.fallback);
+        assert_eq!(output.files[0].imports[0].kind, ImportKind::External);
+    }
+
+    #[test]
+    fn wildcard_alias_uses_javascript_replacement_string_semantics() {
+        let temp = TestDir::new();
+        let config = temp.write(
+            "tsconfig.json",
+            r#"{"compilerOptions":{"paths":{"@app/*":["literal-$&/*"]}}}"#,
+        );
+        temp.write("literal-$&/foo.ts", "");
+        temp.write("literal-@app/foo.ts", "");
+        let source = temp.write("src/main.ts", r#"import "@app/foo";"#);
+        let output = resolve_project(ResolveProjectInput {
+            schema_version: 1,
+            ts_config_path: config.to_string_lossy().into_owned(),
+            files: vec![source.to_string_lossy().into_owned()],
+            ignore_file_extensions: Vec::new(),
+            shadow_mode: false,
+        })
+        .unwrap();
+
+        assert_eq!(
+            output.files[0].imports[0].resolved_path.as_deref(),
+            Some("literal-@app/foo.ts")
+        );
+    }
+
+    #[test]
+    fn surrogate_pair_dynamic_import_matches_the_static_edge() {
+        let temp = TestDir::new();
+        let config = temp.write("tsconfig.json", "{}");
+        temp.write("src/😀.ts", "");
+        let source = temp.write(
+            "src/main.ts",
+            r#"import "./\uD83D\uDE00";
+               const dynamic = import("./\uD83D\uDE00");"#,
+        );
+        let output = resolve_project(ResolveProjectInput {
+            schema_version: 1,
+            ts_config_path: config.to_string_lossy().into_owned(),
+            files: vec![source.to_string_lossy().into_owned()],
+            ignore_file_extensions: Vec::new(),
+            shadow_mode: false,
+        })
+        .unwrap();
+
+        assert!(!output.fallback);
+        assert_eq!(output.files[0].imports.len(), 2);
+        for import in &output.files[0].imports {
+            assert_eq!(import.raw, "./😀");
+            assert_eq!(import.resolved_path.as_deref(), Some("src/😀.ts"));
+        }
+    }
+
+    #[test]
+    fn unpaired_surrogate_dynamic_import_triggers_project_fallback() {
+        let temp = TestDir::new();
+        let config = temp.write("tsconfig.json", "{}");
+        let source = temp.write("src/main.ts", r#"const dynamic = import("./\uD83D");"#);
+        let output = resolve_project(ResolveProjectInput {
+            schema_version: 1,
+            ts_config_path: config.to_string_lossy().into_owned(),
+            files: vec![source.to_string_lossy().into_owned()],
+            ignore_file_extensions: Vec::new(),
+            shadow_mode: false,
+        })
+        .unwrap();
+
+        assert!(output.fallback);
+        assert!(output.files.is_empty());
+        assert_eq!(
+            output.fallback_reasons,
+            [
+                "dynamic import contains an unpaired UTF-16 surrogate, which requires TypeScript (src/main.ts)"
+            ]
+        );
+    }
+
+    #[test]
     fn unsupported_options_in_parent_configs_trigger_project_fallback() {
         let temp = TestDir::new();
         temp.write(
@@ -1104,12 +1429,108 @@ mod tests {
     }
 
     #[test]
+    fn installed_dev_dependency_types_versions_trigger_project_fallback() {
+        let temp = TestDir::new();
+        let config = temp.write("tsconfig.json", "{}");
+        temp.write("package.json", r#"{"devDependencies":{"tv-pkg":"1.0.0"}}"#);
+        temp.write(
+            "node_modules/tv-pkg/package.json",
+            r#"{"typesVersions":{"*":{"*":["types/*"]}}}"#,
+        );
+        temp.write("node_modules/tv-pkg/types/foo.d.ts", "");
+        let source = temp.write("src/main.ts", r#"import "tv-pkg/foo";"#);
+        let output = resolve_project(ResolveProjectInput {
+            schema_version: 1,
+            ts_config_path: config.to_string_lossy().into_owned(),
+            files: vec![source.to_string_lossy().into_owned()],
+            ignore_file_extensions: Vec::new(),
+            shadow_mode: false,
+        })
+        .unwrap();
+
+        assert!(output.fallback);
+        assert!(output.files.is_empty());
+        assert_eq!(
+            output.fallback_reasons,
+            [
+                "package tv-pkg declares unsupported typesVersions (node_modules/tv-pkg/package.json)"
+            ]
+        );
+    }
+
+    #[test]
+    fn incomplete_scoped_dependency_name_matches_typescript() {
+        let temp = TestDir::new();
+        let config = temp.write("tsconfig.json", "{}");
+        temp.write("package.json", r#"{"dependencies":{"@scope":"1.0.0"}}"#);
+        let source = temp.write("src/main.ts", r#"import "@scope";"#);
+        let output = resolve_project(ResolveProjectInput {
+            schema_version: 1,
+            ts_config_path: config.to_string_lossy().into_owned(),
+            files: vec![source.to_string_lossy().into_owned()],
+            ignore_file_extensions: Vec::new(),
+            shadow_mode: false,
+        })
+        .unwrap();
+
+        assert_eq!(extract_package_name("@scope"), "@scope");
+        assert_eq!(output.files[0].imports[0].kind, ImportKind::External);
+    }
+
+    #[test]
+    fn disk_source_size_limit_is_enforced() {
+        let temp = TestDir::new();
+        let config = temp.write("tsconfig.json", "{}");
+        let source = temp.write("src/main.ts", &" ".repeat(MAX_STRING_BYTES + 1));
+        let error = resolve_project(ResolveProjectInput {
+            schema_version: 1,
+            ts_config_path: config.to_string_lossy().into_owned(),
+            files: vec![source.to_string_lossy().into_owned()],
+            ignore_file_extensions: Vec::new(),
+            shadow_mode: false,
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, ResolveProjectError::LimitExceeded(_)));
+        assert!(error.to_string().contains("source file src/main.ts"));
+    }
+
+    #[test]
+    fn import_count_limit_is_enforced() {
+        assert_eq!(
+            checked_import_total(MAX_IMPORTS - 1, 1).unwrap(),
+            MAX_IMPORTS
+        );
+        assert!(matches!(
+            checked_import_total(MAX_IMPORTS, 1),
+            Err(ResolveProjectError::LimitExceeded(_))
+        ));
+    }
+
+    #[test]
+    fn acyclic_tsconfig_chain_depth_limit_is_enforced() {
+        let temp = TestDir::new();
+        for index in 0..=MAX_CONFIG_NESTING {
+            let contents = if index == MAX_CONFIG_NESTING {
+                "{}".to_owned()
+            } else {
+                format!(r#"{{"extends":"./config-{}.json"}}"#, index + 1)
+            };
+            temp.write(&format!("config-{index}.json"), &contents);
+        }
+        let error = get_ts_config_context(&temp.0.join("config-0.json")).unwrap_err();
+        assert!(matches!(error, ResolveProjectError::LimitExceeded(_)));
+        assert!(error.to_string().contains("tsconfig extends chain"));
+    }
+
+    #[test]
     fn arrays_in_extends_are_rejected_like_sheriffs_string_only_walk() {
         let temp = TestDir::new();
         let config = temp.write("tsconfig.json", r#"{"extends":["./base.json"]}"#);
         assert!(
             get_ts_config_context(&config)
                 .unwrap_err()
+                .to_string()
                 .contains("unsupported non-string extends")
         );
     }

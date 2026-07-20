@@ -1,6 +1,7 @@
 use crate::input::{ConfigValue, OrderedMap};
 use crate::input::{MAX_CONFIG_NESTING, MAX_PLACEHOLDERS_PER_MATCHER};
 use crate::js_regex;
+use crate::js_replacement;
 
 type Placeholders = Vec<(String, String)>;
 
@@ -121,7 +122,7 @@ fn replace_tags(
         .map(|tag| {
             let mut replaced = tag.clone();
             for (placeholder, value) in placeholders {
-                replaced = replace_all_javascript(
+                replaced = js_replacement::replace_all(
                     &replaced,
                     &format!("<{placeholder}>"),
                     value,
@@ -177,73 +178,6 @@ fn match_segment(
         placeholders.push((name, capture));
     }
     Ok(Some(span))
-}
-
-fn replace_all_javascript(input: &str, needle: &str, replacement: &str) -> String {
-    let matches = input.match_indices(needle).collect::<Vec<_>>();
-    if matches.is_empty() {
-        return input.to_owned();
-    }
-
-    let mut output = String::new();
-    let mut copied_until = 0;
-    for (start, matched) in matches {
-        output.push_str(&input[copied_until..start]);
-        output.push_str(&expand_javascript_replacement(
-            replacement,
-            input,
-            start,
-            start + matched.len(),
-        ));
-        copied_until = start + matched.len();
-    }
-    output.push_str(&input[copied_until..]);
-    output
-}
-
-fn expand_javascript_replacement(
-    replacement: &str,
-    input: &str,
-    match_start: usize,
-    match_end: usize,
-) -> String {
-    let mut output = String::with_capacity(replacement.len());
-    let mut characters = replacement.char_indices().peekable();
-    while let Some((index, character)) = characters.next() {
-        if character != '$' {
-            output.push(character);
-            continue;
-        }
-        let Some(&(_, next)) = characters.peek() else {
-            output.push('$');
-            break;
-        };
-        match next {
-            '$' => {
-                output.push('$');
-                characters.next();
-            }
-            '&' => {
-                output.push_str(&input[match_start..match_end]);
-                characters.next();
-            }
-            '`' => {
-                output.push_str(&input[..match_start]);
-                characters.next();
-            }
-            '\'' => {
-                output.push_str(&input[match_end..]);
-                characters.next();
-            }
-            // The placeholder replacement RegExp has no capture groups, so JavaScript
-            // leaves every $n/$nn sequence untouched.
-            '0'..='9' => {
-                output.push_str(&replacement[index..characters.peek().unwrap().0]);
-            }
-            _ => output.push('$'),
-        }
-    }
-    output
 }
 
 fn find_placeholder(value: &str) -> Vec<String> {
@@ -517,15 +451,15 @@ mod tests {
             ["result:$"]
         );
         assert_eq!(
-            replace_all_javascript("pre<x>post", "<x>", "$`"),
+            js_replacement::replace_all("pre<x>post", "<x>", "$`"),
             "preprepost"
         );
         assert_eq!(
-            replace_all_javascript("pre<x>post", "<x>", "$'"),
+            js_replacement::replace_all("pre<x>post", "<x>", "$'"),
             "prepostpost"
         );
         assert_eq!(
-            replace_all_javascript("pre<x>post", "<x>", "$1"),
+            js_replacement::replace_all("pre<x>post", "<x>", "$1"),
             "pre$1post"
         );
     }

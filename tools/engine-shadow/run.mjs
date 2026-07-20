@@ -127,7 +127,6 @@ const totals = projects.reduce(
 
 const report = {
   schemaVersion: 1,
-  generatedAt: new Date().toISOString(),
   contract:
     'ts.preProcessFile + sheriff TypeScript resolution versus oxc_parser + oxc_resolver',
   totals,

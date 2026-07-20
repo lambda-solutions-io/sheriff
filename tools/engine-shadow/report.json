@@ -1,11 +1,10 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-07-20T08:48:46.823Z",
   "contract": "ts.preProcessFile + sheriff TypeScript resolution versus oxc_parser + oxc_resolver",
   "totals": {
     "fixturesDiscovered": 8,
-    "passed": 7,
-    "fallback": 1,
+    "passed": 6,
+    "fallback": 2,
     "skipped": 0,
     "filesCompared": 434,
     "typescriptEdges": 1357,
@@ -146,7 +145,20 @@
       "project": "angular-v-multi",
       "status": "fallback",
       "skipReasons": [
-        "package rxjs declares unsupported typesVersions (/Users/michaelberger/Documents/dev/_workspaces/sheriff/sheriff-rust-engine/test-projects/angular-v-multi/node_modules/rxjs/package.json)"
+        "package @babel/types declares unsupported typesVersions (node_modules/@babel/types/package.json)",
+        "package @types/node declares unsupported typesVersions (node_modules/@types/node/package.json)",
+        "package @typescript-eslint/parser declares unsupported typesVersions (node_modules/@typescript-eslint/parser/package.json)",
+        "package @typescript-eslint/scope-manager declares unsupported typesVersions (node_modules/@typescript-eslint/scope-manager/package.json)",
+        "package @typescript-eslint/type-utils declares unsupported typesVersions (node_modules/@typescript-eslint/type-utils/package.json)",
+        "package @typescript-eslint/types declares unsupported typesVersions (node_modules/@typescript-eslint/types/package.json)",
+        "package @typescript-eslint/typescript-estree declares unsupported typesVersions (node_modules/@typescript-eslint/typescript-estree/package.json)",
+        "package @typescript-eslint/utils declares unsupported typesVersions (node_modules/@typescript-eslint/utils/package.json)",
+        "package @typescript-eslint/visitor-keys declares unsupported typesVersions (node_modules/@typescript-eslint/visitor-keys/package.json)",
+        "package eslint declares unsupported typesVersions (node_modules/eslint/package.json)",
+        "package rxjs declares unsupported typesVersions (node_modules/rxjs/package.json)",
+        "package type-fest declares unsupported typesVersions (node_modules/type-fest/package.json)",
+        "package typescript-eslint declares unsupported typesVersions (node_modules/typescript-eslint/package.json)",
+        "package vite declares unsupported typesVersions (node_modules/vite/package.json)"
       ],
       "hasInstalledNodeModules": true,
       "filesCompared": 30,
@@ -177,12 +189,18 @@
     },
     {
       "project": "nextjs-i",
-      "status": "passed",
-      "skipReasons": [],
+      "status": "fallback",
+      "skipReasons": [
+        "package @rushstack/eslint-patch declares unsupported typesVersions (node_modules/@rushstack/eslint-patch/package.json)",
+        "package @types/node declares unsupported typesVersions (node_modules/@types/node/package.json)",
+        "package @types/react declares unsupported typesVersions (node_modules/@types/react/package.json)",
+        "package eslint declares unsupported typesVersions (node_modules/eslint/package.json)",
+        "package jiti declares unsupported typesVersions (node_modules/jiti/package.json)"
+      ],
       "hasInstalledNodeModules": true,
+      "filesCompared": 10,
       "sourceFilesDiscovered": 10,
       "tsconfigGroups": 1,
-      "filesCompared": 10,
       "edges": {
         "typescript": 16,
         "rust": 16

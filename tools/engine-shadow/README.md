@@ -15,6 +15,12 @@ and exits non-zero for any divergence or skipped fixture. Differences are classi
 path mismatch, missing edge, or extra edge; occurrence order and duplicates are
 part of the comparison.
 
+The harness enumerates JavaScript and TypeScript files directly from disk,
+whereas production starts at an entry file and discovers the project by
+traversing resolved imports. Its per-file coverage is therefore a superset of
+the files production normally reaches, but it does **not** test Rust parity for
+graph discovery itself. Graph-discovery parity remains deferred to R4/R5.
+
 Only `nextjs-i` and `angular-v-multi` contain fixture-local `node_modules` and
 therefore exercise installed packages and real `exports` maps. The other six
 fixtures exercise dependency-universe classification for their unresolved bare

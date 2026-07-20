@@ -2,6 +2,7 @@ mod engine;
 mod extract;
 mod input;
 mod js_regex;
+mod js_replacement;
 mod paths;
 mod resolve;
 mod rules;
@@ -61,7 +62,12 @@ pub fn resolve_project_imports(input_json: String) -> String {
     let result = catch_unwind(AssertUnwindSafe(|| resolve_imports_inner(&input_json)));
     match result {
         Ok(Ok(output)) => output,
-        Ok(Err(message)) => error_json("SHERIFF_ENGINE_RESOLUTION_ERROR", message),
+        Ok(Err(resolve::ResolveProjectError::Resolution(message))) => {
+            error_json("SHERIFF_ENGINE_RESOLUTION_ERROR", message)
+        }
+        Ok(Err(resolve::ResolveProjectError::LimitExceeded(message))) => {
+            error_json("SHERIFF_ENGINE_LIMIT_EXCEEDED", message)
+        }
         Err(payload) => error_json("SHERIFF_ENGINE_PANIC", panic_message(payload)),
     }
 }
@@ -74,14 +80,17 @@ fn analyze_inner(input_json: &str) -> Result<String, String> {
     serde_json::to_string(&output).map_err(|error| format!("could not serialize output: {error}"))
 }
 
-fn resolve_imports_inner(input_json: &str) -> Result<String, String> {
-    let input: resolve::ResolveProjectInput = serde_json::from_str(input_json)
-        .map_err(|error| format!("invalid ResolveProjectInput JSON: {error}"))?;
-    if input.files.len() > input::MAX_FILES {
-        return Err(format!("files exceeds the {} item limit", input::MAX_FILES));
-    }
+fn resolve_imports_inner(input_json: &str) -> Result<String, resolve::ResolveProjectError> {
+    let input: resolve::ResolveProjectInput =
+        serde_json::from_str(input_json).map_err(|error| {
+            resolve::ResolveProjectError::Resolution(format!(
+                "invalid ResolveProjectInput JSON: {error}"
+            ))
+        })?;
     let output = resolve::resolve_project(input)?;
-    serde_json::to_string(&output).map_err(|error| format!("could not serialize output: {error}"))
+    serde_json::to_string(&output).map_err(|error| {
+        resolve::ResolveProjectError::Resolution(format!("could not serialize output: {error}"))
+    })
 }
 
 fn error_json(code: &'static str, message: String) -> String {
@@ -100,4 +109,46 @@ fn panic_message(payload: Box<dyn Any + Send>) -> String {
         .map(|message| (*message).to_owned())
         .or_else(|| payload.downcast_ref::<String>().cloned())
         .unwrap_or_else(|| "Rust engine panicked with a non-string payload".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::resolve_project_imports;
+    use crate::input::MAX_STRING_BYTES;
+
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn resolve_project_disk_limits_use_the_structured_limit_code() {
+        let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+        let directory =
+            std::env::temp_dir().join(format!("sheriff-r2-lib-limit-{}-{id}", std::process::id()));
+        fs::create_dir_all(directory.join("src")).unwrap();
+        let config = directory.join("tsconfig.json");
+        let source = directory.join("src/main.ts");
+        fs::write(&config, "{}").unwrap();
+        fs::write(&source, " ".repeat(MAX_STRING_BYTES + 1)).unwrap();
+
+        let output = resolve_project_imports(
+            serde_json::json!({
+                "schemaVersion": 1,
+                "tsConfigPath": config,
+                "files": [source],
+            })
+            .to_string(),
+        );
+        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(value["error"]["code"], "SHERIFF_ENGINE_LIMIT_EXCEEDED");
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("source file")
+        );
+
+        fs::remove_dir_all(directory).unwrap();
+    }
 }
