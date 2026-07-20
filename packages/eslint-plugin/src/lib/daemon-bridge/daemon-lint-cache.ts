@@ -12,7 +12,13 @@ import type {
 interface DaemonLintMessages {
   dependency: Map<string, string>;
   encapsulation: Map<string, string>;
+  deepImport: Map<string, string>;
+  sourceCode: string;
+  lintRun: object | undefined;
+  firstRunConsumers: Set<DaemonRule>;
 }
+
+type DaemonRule = 'dependency' | 'encapsulation' | 'deep-import';
 
 // Bound the per-process cache so a long-running ESLint session linting many
 // files does not grow it without limit; the oldest entry is evicted first.
@@ -24,8 +30,15 @@ export function daemonDependencyMessage(
   importValue: string,
   isFirstRun: boolean,
   sourceCode: string,
+  lintRun?: object,
 ): string | undefined {
-  const messages = getDaemonLintMessages(filename, isFirstRun, sourceCode);
+  const messages = getDaemonLintMessages(
+    filename,
+    isFirstRun,
+    sourceCode,
+    'dependency',
+    lintRun,
+  );
   return messages?.dependency.get(importValue) ?? (messages ? '' : undefined);
 }
 
@@ -34,23 +47,62 @@ export function daemonEncapsulationMessage(
   importValue: string,
   isFirstRun: boolean,
   sourceCode: string,
+  lintRun?: object,
 ): string | undefined {
-  const messages = getDaemonLintMessages(filename, isFirstRun, sourceCode);
+  const messages = getDaemonLintMessages(
+    filename,
+    isFirstRun,
+    sourceCode,
+    'encapsulation',
+    lintRun,
+  );
   return (
     messages?.encapsulation.get(importValue) ?? (messages ? '' : undefined)
   );
+}
+
+export function daemonDeepImportMessage(
+  filename: string,
+  importValue: string,
+  isFirstRun: boolean,
+  sourceCode: string,
+  lintRun?: object,
+): string | undefined {
+  const messages = getDaemonLintMessages(
+    filename,
+    isFirstRun,
+    sourceCode,
+    'deep-import',
+    lintRun,
+  );
+  return messages?.deepImport.get(importValue) ?? (messages ? '' : undefined);
 }
 
 function getDaemonLintMessages(
   filename: string,
   isFirstRun: boolean,
   sourceCode: string,
+  consumer: DaemonRule,
+  lintRun: object | undefined,
 ): DaemonLintMessages | undefined {
   if (!isDaemonBridgeEnabled()) {
     return undefined;
   }
 
   if (isFirstRun) {
+    const cached = messagesByFilename.get(filename);
+    if (
+      cached?.sourceCode === sourceCode &&
+      cached.lintRun === lintRun &&
+      !cached.firstRunConsumers.has(consumer)
+    ) {
+      cached.firstRunConsumers.add(consumer);
+      // Touch the entry so the file cache is a true LRU rather than FIFO.
+      messagesByFilename.delete(filename);
+      messagesByFilename.set(filename, cached);
+      return cached;
+    }
+
     const result = lintFileViaDaemon(filename, sourceCode);
     if (!result) {
       messagesByFilename.delete(filename);
@@ -70,6 +122,10 @@ function getDaemonLintMessages(
       messagesByFilename.delete(filename);
       return undefined;
     }
+
+    messages.sourceCode = sourceCode;
+    messages.lintRun = lintRun;
+    messages.firstRunConsumers.add(consumer);
 
     messagesByFilename.set(filename, messages);
     evictOldestWhenOverCapacity();
@@ -99,6 +155,7 @@ function buildDaemonLintMessages(
 
   const dependency = new Map<string, string>();
   const encapsulation = new Map<string, string>();
+  const deepImport = new Map<string, string>();
 
   for (const violation of result.dependencyRuleViolations) {
     // The daemon omits module paths, so identify the import in the prefix.
@@ -122,6 +179,10 @@ function buildDaemonLintMessages(
       rawImport,
       `'${rawImport}' cannot be imported. It is encapsulated.`,
     );
+    deepImport.set(
+      rawImport,
+      "Deep import is not allowed. Use the module's index.ts or path.",
+    );
   }
 
   // Unresolvable relative imports must produce the SAME message the in-process
@@ -130,9 +191,21 @@ function buildDaemonLintMessages(
     const message = `import ${rawImport} cannot be resolved`;
     dependency.set(rawImport, message);
     encapsulation.set(rawImport, message);
+    deepImport.set(rawImport, message);
   }
 
-  return { dependency, encapsulation };
+  return {
+    dependency,
+    encapsulation,
+    deepImport,
+    sourceCode: '',
+    lintRun: undefined,
+    firstRunConsumers: new Set(),
+  };
+}
+
+export function resetDaemonLintCacheForTests(): void {
+  messagesByFilename.clear();
 }
 
 function assertValidLintResult(

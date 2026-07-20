@@ -1,5 +1,6 @@
 export { violatesEncapsulationRule } from './lib/eslint/violates-encapsulation-rule';
 export { violatesDependencyRule } from './lib/eslint/violates-dependency-rule';
+export { lintDocument, DocumentLintResult } from './lib/eslint/lint-document';
 export { anyTag } from './lib/checks/any-tag';
 export { sameTag } from './lib/checks/same-tag';
 export { noDependencies } from './lib/checks/no-dependencies';
@@ -21,11 +22,7 @@ export {
   ExternalRuleViolationInfo,
   ProjectDataOptions,
 } from './lib/plugin';
-export {
-  DaemonClient,
-  getDaemonStatus,
-  stopDaemon,
-} from './lib/daemon/client';
+export { DaemonClient, getDaemonStatus, stopDaemon } from './lib/daemon/client';
 export { startDaemonServer } from './lib/daemon/server';
 export {
   clearProjectCache,

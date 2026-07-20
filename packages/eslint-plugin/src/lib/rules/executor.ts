@@ -9,4 +9,5 @@ export type Executor = (
   isFirstRun: boolean,
   filename: string,
   sourceCode: string,
+  lintRun: object,
 ) => void;
