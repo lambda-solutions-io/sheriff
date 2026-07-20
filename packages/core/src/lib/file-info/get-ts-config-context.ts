@@ -3,6 +3,7 @@ import * as ts from 'typescript';
 import { FsPath, toFsPath } from './fs-path';
 import { TsConfig } from './ts-config';
 import {
+  CyclicTsConfigExtendsError,
   InvalidPathError,
   TsExtendsResolutionError,
 } from '../error/user-error';
@@ -42,9 +43,11 @@ export function getTsConfigContext(tsConfigPath: FsPath): TsConfigContext {
   const paths: Record<string, FsPath> = {};
   let baseUrl: FsPath | undefined = undefined;
   const sourceConfigPaths: FsPath[] = [];
+  const visitedConfigPaths = new Set<FsPath>();
 
   while (currentTsConfigPath) {
     sourceConfigPaths.push(currentTsConfigPath);
+    visitedConfigPaths.add(currentTsConfigPath);
     const configRawContent = fs.readFile(currentTsConfigPath);
     const configContent = ts.readConfigFile(
       currentTsConfigPath,
@@ -81,6 +84,7 @@ export function getTsConfigContext(tsConfigPath: FsPath): TsConfigContext {
     }
 
     if (config.extends) {
+      let parentTsConfigPath: FsPath;
       // try non-alias exports first
       const potentialExtendsFsPath = fs.join(
         fs.getParent(currentTsConfigPath),
@@ -88,21 +92,30 @@ export function getTsConfigContext(tsConfigPath: FsPath): TsConfigContext {
       );
 
       if (fs.exists(potentialExtendsFsPath)) {
-        currentTsConfigPath = toFsPath(potentialExtendsFsPath);
+        parentTsConfigPath = toFsPath(potentialExtendsFsPath);
       } else {
         // try if extends uses an alias
         const resolveFn: ResolveFn = (moduleName: string) =>
           ts.resolveModuleName(moduleName, currentTsConfigDir, {}, sys);
-        const parentTsConfigPath = resolvePotentialTsPath(
+        const resolvedParentTsConfigPath = resolvePotentialTsPath(
           config.extends,
           paths,
           resolveFn,
         );
-        if (!parentTsConfigPath) {
+        if (!resolvedParentTsConfigPath) {
           throw new TsExtendsResolutionError(tsConfigPath, config.extends);
         }
-        currentTsConfigPath = parentTsConfigPath;
+        parentTsConfigPath = resolvedParentTsConfigPath;
       }
+
+      if (visitedConfigPaths.has(parentTsConfigPath)) {
+        const cycleStart = sourceConfigPaths.indexOf(parentTsConfigPath);
+        throw new CyclicTsConfigExtendsError(currentTsConfigPath, [
+          ...sourceConfigPaths.slice(cycleStart),
+          parentTsConfigPath,
+        ]);
+      }
+      currentTsConfigPath = parentTsConfigPath;
     } else {
       break;
     }

@@ -189,14 +189,15 @@ pub enum ImportKind {
 pub enum ResolveProjectError {
     Resolution(String),
     LimitExceeded(String),
+    CyclicTsConfigExtends(String),
 }
 
 impl std::fmt::Display for ResolveProjectError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Resolution(message) | Self::LimitExceeded(message) => {
-                formatter.write_str(message)
-            }
+            Self::Resolution(message)
+            | Self::LimitExceeded(message)
+            | Self::CyclicTsConfigExtends(message) => formatter.write_str(message),
         }
     }
 }
@@ -352,12 +353,8 @@ pub fn get_ts_config_context(
     let resolver = create_resolver(None, None);
 
     loop {
-        // Preserve Sheriff's current behavior for cyclic extends chains: a
-        // repeated path is not counted toward the acyclic chain cap, so this
-        // guard does not turn the cross-engine hang into a Rust-only error.
-        if unique_config_paths.insert(current_path.clone())
-            && unique_config_paths.len() > MAX_CONFIG_NESTING
-        {
+        unique_config_paths.insert(current_path.clone());
+        if unique_config_paths.len() > MAX_CONFIG_NESTING {
             return Err(ResolveProjectError::LimitExceeded(format!(
                 "tsconfig extends chain exceeds the {MAX_CONFIG_NESTING} level limit"
             )));
@@ -431,26 +428,44 @@ pub fn get_ts_config_context(
         };
 
         let literal = node_join(&current_dir, extends);
-        if literal.exists() {
-            current_path = literal;
-            current_dir = parent(&current_path)?;
-            continue;
-        }
+        let extended = if literal.exists() {
+            literal
+        } else {
+            let extended = resolve_potential_ts_path(extends, &paths, |rewritten| {
+                resolver
+                    // Sheriff passes the config directory as TypeScript's
+                    // `containingFile`; preserve that oddity with resolve_file.
+                    .resolve_file(&current_dir, rewritten)
+                    .ok()
+                    .map(|resolution| resolution.into_path_buf())
+            });
+            let Some(extended) = extended else {
+                return Err(ResolveProjectError::Resolution(format!(
+                    "cannot resolve extends {extends} from {}",
+                    current_path.display()
+                )));
+            };
+            extended
+        };
 
-        let extended = resolve_potential_ts_path(extends, &paths, |rewritten| {
-            resolver
-                // Sheriff passes the config directory as TypeScript's
-                // `containingFile`; preserve that oddity with resolve_file.
-                .resolve_file(&current_dir, rewritten)
-                .ok()
-                .map(|resolution| resolution.into_path_buf())
-        });
-        let Some(extended) = extended else {
-            return Err(ResolveProjectError::Resolution(format!(
-                "cannot resolve extends {extends} from {}",
+        // A repeated path is a cycle even when the acyclic chain is near the
+        // nesting limit, so detect it before starting the next capped step.
+        if unique_config_paths.contains(&extended) {
+            let cycle_start = source_config_paths
+                .iter()
+                .position(|path| path == &extended)
+                .expect("visited config path must be present in source config paths");
+            let cycle_path = source_config_paths[cycle_start..]
+                .iter()
+                .chain(std::iter::once(&extended))
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            return Err(ResolveProjectError::CyclicTsConfigExtends(format!(
+                "Cyclic \"extends\" detected in {}: {cycle_path}. Please remove the cycle.",
                 current_path.display()
             )));
-        };
+        }
         current_path = extended;
         current_dir = parent(&current_path)?;
     }
@@ -1521,6 +1536,67 @@ mod tests {
         let error = get_ts_config_context(&temp.0.join("config-0.json")).unwrap_err();
         assert!(matches!(error, ResolveProjectError::LimitExceeded(_)));
         assert!(error.to_string().contains("tsconfig extends chain"));
+    }
+
+    fn assert_cyclic_tsconfig_error(config: &Path, offending: &Path, cycle: &[&Path]) {
+        let error = get_ts_config_context(config).unwrap_err();
+        let expected_cycle = cycle
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(" -> ");
+        assert_eq!(
+            error,
+            ResolveProjectError::CyclicTsConfigExtends(format!(
+                "Cyclic \"extends\" detected in {}: {expected_cycle}. Please remove the cycle.",
+                offending.display()
+            ))
+        );
+    }
+
+    #[test]
+    fn two_config_tsconfig_cycle_is_a_structured_error() {
+        let temp = TestDir::new();
+        let a = temp.write("a.json", r#"{"extends":"./b.json"}"#);
+        let b = temp.write("b.json", r#"{"extends":"./a.json"}"#);
+
+        assert_cyclic_tsconfig_error(&a, &b, &[&a, &b, &a]);
+    }
+
+    #[test]
+    fn self_extending_tsconfig_is_a_structured_error() {
+        let temp = TestDir::new();
+        let config = temp.write("tsconfig.json", r#"{"extends":"./tsconfig.json"}"#);
+
+        assert_cyclic_tsconfig_error(&config, &config, &[&config, &config]);
+    }
+
+    #[test]
+    fn three_config_tsconfig_cycle_is_a_structured_error() {
+        let temp = TestDir::new();
+        let a = temp.write("a.json", r#"{"extends":"./b.json"}"#);
+        let b = temp.write("b.json", r#"{"extends":"./c.json"}"#);
+        let c = temp.write("c.json", r#"{"extends":"./a.json"}"#);
+
+        assert_cyclic_tsconfig_error(&a, &c, &[&a, &b, &c, &a]);
+    }
+
+    #[test]
+    fn deep_acyclic_tsconfig_chain_resolves() {
+        let temp = TestDir::new();
+        let chain_length = 32;
+        for index in 0..chain_length {
+            let contents = if index == chain_length - 1 {
+                "{}".to_owned()
+            } else {
+                format!(r#"{{"extends":"./config-{}.json"}}"#, index + 1)
+            };
+            temp.write(&format!("config-{index}.json"), &contents);
+        }
+
+        let context = get_ts_config_context(&temp.0.join("config-0.json")).unwrap();
+        assert_eq!(context.source_config_paths.len(), chain_length);
+        assert_eq!(context.root_dir, temp.0);
     }
 
     #[test]

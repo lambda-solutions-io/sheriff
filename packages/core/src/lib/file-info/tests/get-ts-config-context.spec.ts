@@ -2,6 +2,7 @@ import { createProject } from '../../test/project-creator';
 import { toFsPath } from '../fs-path';
 import { getTsConfigContext } from '../get-ts-config-context';
 import {
+  CyclicTsConfigExtendsError,
   InvalidPathError,
   TsExtendsResolutionError,
 } from '../../error/user-error';
@@ -251,6 +252,76 @@ describe('getTsConfigContext', () => {
   });
 
   describe('extends and alias', () => {
+    for (const { name, configs, entryConfig, cyclePath, offendingConfig } of [
+      {
+        name: 'two-config cycle',
+        configs: {
+          'a.json': JSON.stringify({ extends: './b.json' }),
+          'b.json': JSON.stringify({ extends: './a.json' }),
+        },
+        entryConfig: '/project/a.json',
+        cyclePath: [
+          '/project/a.json',
+          '/project/b.json',
+          '/project/a.json',
+        ],
+        offendingConfig: '/project/b.json',
+      },
+      {
+        name: 'self-extending config',
+        configs: {
+          'tsconfig.json': JSON.stringify({ extends: './tsconfig.json' }),
+        },
+        entryConfig: '/project/tsconfig.json',
+        cyclePath: ['/project/tsconfig.json', '/project/tsconfig.json'],
+        offendingConfig: '/project/tsconfig.json',
+      },
+      {
+        name: 'three-config cycle',
+        configs: {
+          'a.json': JSON.stringify({ extends: './b.json' }),
+          'b.json': JSON.stringify({ extends: './c.json' }),
+          'c.json': JSON.stringify({ extends: './a.json' }),
+        },
+        entryConfig: '/project/a.json',
+        cyclePath: [
+          '/project/a.json',
+          '/project/b.json',
+          '/project/c.json',
+          '/project/a.json',
+        ],
+        offendingConfig: '/project/c.json',
+      },
+    ]) {
+      it(`should throw SH-019 for a ${name}`, () => {
+        createProject(configs);
+
+        expect(() =>
+          getTsConfigContext(toFsPath(entryConfig)),
+        ).toThrowUserError(
+          new CyclicTsConfigExtendsError(offendingConfig, cyclePath),
+        );
+      });
+    }
+
+    it('should resolve a deep acyclic config chain', () => {
+      const chainLength = 32;
+      const configs = Object.fromEntries(
+        Array.from({ length: chainLength }, (_, index) => [
+          `config-${index}.json`,
+          index === chainLength - 1
+            ? JSON.stringify({})
+            : JSON.stringify({ extends: `./config-${index + 1}.json` }),
+        ]),
+      );
+      createProject(configs);
+
+      const context = getTsConfigContext(toFsPath('/project/config-0.json'));
+
+      expect(context.sourceConfigPaths).toHaveLength(chainLength);
+      expect(context.rootDir).toBe('/project');
+    });
+
     it('should support aliases', () => {
       createProject({
         tsconfigs: {

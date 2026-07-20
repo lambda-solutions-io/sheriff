@@ -68,6 +68,9 @@ pub fn resolve_project_imports(input_json: String) -> String {
         Ok(Err(resolve::ResolveProjectError::LimitExceeded(message))) => {
             error_json("SHERIFF_ENGINE_LIMIT_EXCEEDED", message)
         }
+        Ok(Err(resolve::ResolveProjectError::CyclicTsConfigExtends(message))) => {
+            error_json("SH-019", message)
+        }
         Err(payload) => error_json("SHERIFF_ENGINE_PANIC", panic_message(payload)),
     }
 }
@@ -150,5 +153,65 @@ mod tests {
         );
 
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn cyclic_tsconfigs_use_the_structured_user_error_code() {
+        let cases = [
+            (
+                "two-config",
+                vec![
+                    ("a.json", r#"{"extends":"./b.json"}"#),
+                    ("b.json", r#"{"extends":"./a.json"}"#),
+                ],
+                "a.json",
+            ),
+            (
+                "self-extending",
+                vec![("tsconfig.json", r#"{"extends":"./tsconfig.json"}"#)],
+                "tsconfig.json",
+            ),
+            (
+                "three-config",
+                vec![
+                    ("a.json", r#"{"extends":"./b.json"}"#),
+                    ("b.json", r#"{"extends":"./c.json"}"#),
+                    ("c.json", r#"{"extends":"./a.json"}"#),
+                ],
+                "a.json",
+            ),
+        ];
+
+        for (name, configs, entry) in cases {
+            let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+            let directory = std::env::temp_dir().join(format!(
+                "sheriff-r2-lib-cycle-{}-{id}-{name}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&directory).unwrap();
+            for (relative, contents) in configs {
+                fs::write(directory.join(relative), contents).unwrap();
+            }
+
+            let output = resolve_project_imports(
+                serde_json::json!({
+                    "schemaVersion": 1,
+                    "tsConfigPath": directory.join(entry),
+                    "files": [],
+                })
+                .to_string(),
+            );
+            let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(value["error"]["code"], "SH-019", "case: {name}");
+            assert!(
+                value["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Cyclic \"extends\" detected"),
+                "case: {name}"
+            );
+
+            fs::remove_dir_all(directory).unwrap();
+        }
     }
 }

@@ -16,7 +16,8 @@ export type UserErrorCode =
   | 'SH-015'
   | 'SH-016'
   | 'SH-017'
-  | 'SH-018';
+  | 'SH-018'
+  | 'SH-019';
 
 export class UserError extends Error {
   constructor(
@@ -110,6 +111,15 @@ export class TsExtendsResolutionError extends UserError {
     super(
       'SH-010',
       `Cannot resolve path ${extendsPath} of "extends" property in ${tsConfigPath}. Please verify that the path exists.`,
+    );
+  }
+}
+
+export class CyclicTsConfigExtendsError extends UserError {
+  constructor(tsConfigPath: string, cyclePath: string[]) {
+    super(
+      'SH-019',
+      `Cyclic "extends" detected in ${tsConfigPath}: ${cyclePath.join(' -> ')}. Please remove the cycle.`,
     );
   }
 }
