@@ -8,6 +8,19 @@ const DEFAULTS = {
   domains: 100,
   modulesPerDomain: 3,
   filesPerModule: 6,
+  /**
+   * Generates a barrel-less project instead of one with `index.ts` barrels.
+   * Barrel-less mode exercises `findExportsForModulePath`, which matches
+   * every module path against the flattened `modules` config -- a code path
+   * the barrel layout never reaches.
+   */
+  enableBarrelLess: false,
+  /**
+   * Extra `modules` config entries emitted in barrel-less mode. The
+   * per-module matching cost scales with config size, so a realistic
+   * benchmark needs more entries than the project strictly uses.
+   */
+  moduleConfigEntries: 60,
 };
 const MARKER_FILE = '.sheriff-perf-project';
 
@@ -31,7 +44,9 @@ export function generateBenchProject(root, options = {}) {
 
   for (let domain = 0; domain < settings.domains; domain++) {
     mainImports.push(
-      `import { api as d${domain} } from './app/domain-${domain}/${moduleTypes[0]}';`,
+      `import { api as d${domain} } from './app/domain-${domain}/${moduleTypes[0]}${
+        settings.enableBarrelLess ? '/api' : ''
+      }';`,
     );
 
     for (let module = 0; module < moduleTypes.length; module++) {
@@ -47,6 +62,18 @@ export function generateBenchProject(root, options = {}) {
         );
         barrel.push(`export { fn_${type}_${file} } from './file-${file}';`);
       }
+
+      // Barrel-less modules are declared through the `modules` config
+      // instead of an index.ts, so no barrel is written. `api` moves into a
+      // regular file so importers keep resolving.
+      if (settings.enableBarrelLess) {
+        writeFileSync(
+          join(directory, 'api.ts'),
+          `export const api = ${domain};\n`,
+        );
+        continue;
+      }
+
       barrel.push(`export const api = ${domain};`);
       writeFileSync(join(directory, 'index.ts'), `${barrel.join('\n')}\n`);
     }
@@ -78,23 +105,7 @@ export function generateBenchProject(root, options = {}) {
   );
   writeFileSync(
     join(projectRoot, 'sheriff.config.ts'),
-    `import { SheriffConfig, sameTag } from '@lambda-solutions/sheriff-core';
-
-export const config: SheriffConfig = {
-  version: 1,
-  entryFile: 'src/main.ts',
-  tagging: {
-    'src/app': {
-      '<domain>/<type>': ['domain:<domain>', 'type:<type>'],
-    },
-  },
-  depRules: {
-    root: ['type:*'],
-    'domain:*': [sameTag, 'domain:*'],
-    'type:*': ['type:*'],
-  },
-};
-`,
+    sheriffConfigBody(settings),
   );
 
   return {
@@ -108,6 +119,62 @@ export const config: SheriffConfig = {
   };
 }
 
+function sheriffConfigBody(settings) {
+  const depRules = `  depRules: {
+    root: ['type:*'],
+    'domain:*': [sameTag, 'domain:*'],
+    'type:*': ['type:*'],
+  },`;
+
+  if (!settings.enableBarrelLess) {
+    return `import { SheriffConfig, sameTag } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  version: 1,
+  entryFile: 'src/main.ts',
+  tagging: {
+    'src/app': {
+      '<domain>/<type>': ['domain:<domain>', 'type:<type>'],
+    },
+  },
+${depRules}
+};
+`;
+  }
+
+  // Barrel-less configs carry tags inside `modules` -- Sheriff rejects a
+  // config declaring both `tagging` and `modules`. Every entry needs a
+  // `tags` key, otherwise it is not recognised as a module definition.
+  //
+  // The wildcard entry declares every generated module; the extra literal
+  // entries pad the config so the per-module matching cost is visible, as
+  // real barrel-less configs list many modules explicitly.
+  const moduleEntries = [
+    `    'src/app/<domain>/<type>': {`,
+    `      tags: ['domain:<domain>', 'type:<type>'],`,
+    `      exports: ['api.ts'],`,
+    `    },`,
+    ...Array.from(
+      { length: settings.moduleConfigEntries },
+      (_, index) =>
+        `    'src/pad/area-${index}/<slice>': { tags: ['type:pad'] },`,
+    ),
+  ].join('\n');
+
+  return `import { SheriffConfig, sameTag } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  version: 1,
+  entryFile: 'src/main.ts',
+  enableBarrelLess: true,
+  modules: {
+${moduleEntries}
+  },
+${depRules}
+};
+`;
+}
+
 function fileBody(domain, module, file, moduleTypes, settings) {
   const type = moduleTypes[module];
   const lines = [];
@@ -117,15 +184,18 @@ function fileBody(domain, module, file, moduleTypes, settings) {
     const sibling = (file + offset) % settings.filesPerModule;
     lines.push(`import { fn_${type}_${sibling} } from './file-${sibling}';`);
   }
+  // Without barrels the module directory has no index.ts, so cross-module
+  // imports have to name the file that holds `api`.
+  const apiEntry = settings.enableBarrelLess ? '/api' : '';
   if (file === 0 && module + 1 < moduleTypes.length) {
     lines.push(
-      `import { api as nextApi } from '../${moduleTypes[module + 1]}';`,
+      `import { api as nextApi } from '../${moduleTypes[module + 1]}${apiEntry}';`,
     );
   }
   if (file === 0 && module === 0) {
     const nextDomain = (domain + 1) % settings.domains;
     lines.push(
-      `import { api as otherApi } from '../../domain-${nextDomain}/${type}';`,
+      `import { api as otherApi } from '../../domain-${nextDomain}/${type}${apiEntry}';`,
     );
   }
   lines.push(
@@ -147,6 +217,9 @@ function createModuleTypes(count) {
 
 function validateSettings(settings) {
   for (const [name, value] of Object.entries(settings)) {
+    if (typeof value === 'boolean') {
+      continue;
+    }
     if (!Number.isInteger(value) || value < 1) {
       throw new Error(`${name} must be a positive integer`);
     }

@@ -10,7 +10,7 @@ import {
 import { dirname, join, relative, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { generateBenchProject } from './gen-bench.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -18,13 +18,39 @@ const distRoot = join(repoRoot, 'dist');
 const cliPath = join(distRoot, 'packages/core/src/bin/main.js');
 const coreDist = join(distRoot, 'packages/core');
 const baselinePath = join(repoRoot, 'tools/perf/baseline.json');
+const eslintBinPath = join(repoRoot, 'node_modules/eslint/bin/eslint.js');
+const tsParserPath = join(
+  repoRoot,
+  'node_modules/@typescript-eslint/parser/dist/index.js',
+);
 const compare = process.argv.includes('--compare');
 const unknownArguments = process.argv
   .slice(2)
   .filter((argument) => argument !== '--compare');
-const benchmarkSizes = [
-  { label: '2.1k', domains: 100, modulesPerDomain: 3, filesPerModule: 6 },
-  { label: '10.5k', domains: 500, modulesPerDomain: 3, filesPerModule: 6 },
+const PROJECT_SHAPES = {
+  '2.1k': { domains: 100, modulesPerDomain: 3, filesPerModule: 6 },
+  '10.5k': { domains: 500, modulesPerDomain: 3, filesPerModule: 6 },
+};
+
+// Each scenario measures one command against one generated project shape.
+// `project` keys into PROJECT_SHAPES; `generate` adds generator overrides
+// that change the layout and therefore need a separate generated copy.
+const benchmarkScenarios = [
+  { label: '2.1k', project: '2.1k', kind: 'verify' },
+  { label: '10.5k', project: '10.5k', kind: 'verify' },
+  // Barrel-less exercises findExportsForModulePath, which the barrel
+  // layout never reaches (issue #28).
+  {
+    label: 'barrel-less 2.1k',
+    project: '2.1k',
+    kind: 'verify',
+    generate: { enableBarrelLess: true },
+  },
+  // `verify --files <one leaf>` should cost a fraction of a full verify
+  // (issue #27); compare against the 10.5k full-verify row.
+  { label: 'verify --files 10.5k', project: '10.5k', kind: 'verify-files' },
+  // ESLint with both sheriff rules over the whole project (issue #25).
+  { label: 'eslint 2.1k', project: '2.1k', kind: 'eslint' },
 ];
 
 try {
@@ -34,26 +60,20 @@ try {
   assertBuilt();
   ensureCoreResolutionShim();
 
-  const results = benchmarkSizes.map((size) => {
-    const project = generateBenchProject(
-      join(repoRoot, 'tmp/perf', size.label),
-      {
-        domains: size.domains,
-        modulesPerDomain: size.modulesPerDomain,
-        filesPerModule: size.filesPerModule,
-      },
-    );
+  const generatedProjects = new Map();
+  const results = benchmarkScenarios.map((scenario) => {
+    const project = generateOnce(generatedProjects, scenario);
     const runsMs = Array.from({ length: 3 }, (_, run) => {
       process.stdout.write(
-        `verify ${size.label} (${project.files} files), run ${run + 1}/3... `,
+        `${scenario.label} (${project.files} files), run ${run + 1}/3... `,
       );
-      const elapsedMs = runVerify(project.root);
+      const elapsedMs = runScenario(scenario, project);
       console.log(`${elapsedMs.toFixed(2)} ms`);
       return elapsedMs;
     });
 
     return {
-      label: size.label,
+      label: scenario.label,
       files: project.files,
       medianMs: round(median(runsMs)),
       runsMs: runsMs.map(round),
@@ -124,29 +144,111 @@ function ensureCoreResolutionShim() {
   symlinkSync(relative(namespaceDirectory, coreDist), shimPath, 'dir');
 }
 
-function runVerify(projectRoot) {
-  const startedAt = performance.now();
-  const child = spawnSync(
-    process.execPath,
-    [cliPath, 'verify', 'src/main.ts'],
-    {
-      cwd: projectRoot,
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        SHERIFF_CACHE_STATS: '0',
-        SHERIFF_NO_CACHE: '0',
-      },
-    },
+/**
+ * Generates each distinct project layout once and reuses it across the
+ * scenarios that share it, so adding a scenario adds no generation cost.
+ */
+function generateOnce(cache, scenario) {
+  const overrides = scenario.generate ?? {};
+  const key = `${scenario.project}\0${JSON.stringify(overrides)}`;
+  const cached = cache.get(key);
+  if (cached) {
+    return cached;
+  }
+
+  const hasOverrides = Object.keys(overrides).length > 0;
+  const directoryName = hasOverrides
+    ? `${scenario.project}-${scenario.label.replace(/[^a-z0-9]+/gi, '-')}`
+    : scenario.project;
+  const project = generateBenchProject(
+    join(repoRoot, 'tmp/perf', directoryName),
+    { ...PROJECT_SHAPES[scenario.project], ...overrides },
   );
+  cache.set(key, project);
+  return project;
+}
+
+function runScenario(scenario, project) {
+  switch (scenario.kind) {
+    case 'verify':
+      return runCli(project.root, ['verify', 'src/main.ts']);
+    case 'verify-files':
+      return runCli(project.root, [
+        'verify',
+        'src/main.ts',
+        '--files',
+        leafFileOf(project),
+      ]);
+    case 'eslint':
+      return runEslint(project);
+    default:
+      throw new Error(`Unknown scenario kind: ${scenario.kind}`);
+  }
+}
+
+/**
+ * A single deep leaf file: the incremental `--files` path should cost a
+ * fraction of a full verify on the same project.
+ */
+function leafFileOf(project) {
+  const type = project.modulesPerDomain > 1 ? 'data' : 'feature';
+  return `src/app/domain-${project.domains - 1}/${type}/file-0.ts`;
+}
+
+/** Lints the whole generated project with both sheriff rules. */
+function runEslint(project) {
+  writeFileSync(
+    join(project.root, 'eslint.bench.config.mjs'),
+    `import tsParser from '${pathToFileURL(tsParserPath).href}';
+import sheriff from '${pathToFileURL(join(distRoot, 'packages/eslint-plugin/src/index.js')).href}';
+
+export default [
+  {
+    files: ['**/*.ts'],
+    languageOptions: { parser: tsParser },
+    plugins: { '@softarc/sheriff': sheriff },
+    rules: {
+      '@softarc/sheriff/dependency-rule': 'error',
+      '@softarc/sheriff/encapsulation': 'error',
+    },
+  },
+];
+`,
+  );
+
+  return runProcess(
+    eslintBinPath,
+    ['--no-config-lookup', '--config', 'eslint.bench.config.mjs', 'src'],
+    project.root,
+    // ESLint exits 1 when it reports lint errors; only a crash is fatal
+    // here, since the benchmark measures time, not cleanliness.
+    (status) => status === 0 || status === 1,
+  );
+}
+
+function runCli(projectRoot, args) {
+  return runProcess(cliPath, args, projectRoot, (status) => status === 0);
+}
+
+function runProcess(binPath, args, cwd, isAcceptableStatus) {
+  const startedAt = performance.now();
+  const child = spawnSync(process.execPath, [binPath, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      SHERIFF_CACHE_STATS: '0',
+      SHERIFF_NO_CACHE: '0',
+    },
+  });
   const elapsedMs = performance.now() - startedAt;
 
   if (child.error) {
     throw child.error;
   }
-  if (child.status !== 0) {
+  if (!isAcceptableStatus(child.status)) {
     throw new Error(
-      `verify failed for ${projectRoot} (exit ${child.status}):\n${child.stderr || child.stdout}`,
+      `${args.join(' ')} failed in ${cwd} (exit ${child.status}):\n${child.stderr || child.stdout}`,
     );
   }
   return elapsedMs;
