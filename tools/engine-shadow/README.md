@@ -13,7 +13,8 @@ Rust API. The TypeScript side calls a narrow test seam around Sheriff's real
 `resolveImports` function. The harness writes `report.json` and `summary.txt`,
 and exits non-zero for any divergence or skipped fixture. Differences are classified as kind mismatch,
 path mismatch, missing edge, or extra edge; occurrence order and duplicates are
-part of the comparison.
+part of the comparison. Both reports show whether each fixture triggered the
+engine fallback, its reasons, and the overall fixture fallback rate.
 
 The harness enumerates JavaScript and TypeScript files directly from disk,
 whereas production starts at an entry file and discovers the project by
@@ -23,8 +24,9 @@ graph discovery itself. Graph-discovery parity remains deferred to R4/R5.
 
 Only `nextjs-i` and `angular-v-multi` contain fixture-local `node_modules` and
 therefore exercise installed packages and real `exports` maps. The other six
-fixtures exercise dependency-universe classification for their unresolved bare
-imports; they must not be counted as equivalent installed-package coverage.
+fixtures are not equivalent installed-package coverage: unresolved bare imports
+exercise dependency-universe classification, while resolvable imports may still
+reach packages installed in an ancestor workspace `node_modules`.
 
 ## Whole-project fallback whitelist
 
@@ -50,8 +52,9 @@ The allowed names are `allowJs`, `allowSyntheticDefaultImports`, `baseUrl`,
 limited to `commonjs`, `es2022`, or `esnext`.
 
 `moduleSuffixes`, `rootDirs`, `customConditions`,
-`allowImportingTsExtensions`, project `references`, and dependency package
-`typesVersions` always force TypeScript fallback. Unknown options do as well.
+`allowImportingTsExtensions`, project `references`, and `typesVersions` on a
+package reached during resolution force TypeScript fallback. Unknown options do
+as well.
 Any shadow divergence forces fallback for the whole project, never one file.
 `shadowMode` only makes Rust produce comparison data after eligibility has
 failed; it does not make the project Rust-eligible. The production/default

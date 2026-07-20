@@ -3,12 +3,18 @@
   "contract": "ts.preProcessFile + sheriff TypeScript resolution versus oxc_parser + oxc_resolver",
   "totals": {
     "fixturesDiscovered": 8,
-    "passed": 6,
-    "fallback": 2,
+    "passed": 4,
+    "fallback": 4,
     "skipped": 0,
     "filesCompared": 434,
     "typescriptEdges": 1357,
     "rustEdges": 1357,
+    "fallbackRate": {
+      "fixturesFellBack": 4,
+      "fixturesChecked": 8,
+      "percentage": 50,
+      "summary": "4/8 fixtures fell back"
+    },
     "divergences": {
       "kindMismatch": 0,
       "pathMismatch": 0,
@@ -19,15 +25,22 @@
   "projects": [
     {
       "project": "angular-i",
-      "status": "passed",
+      "status": "fallback",
       "skipReasons": [],
       "hasInstalledNodeModules": false,
+      "filesCompared": 113,
       "sourceFilesDiscovered": 113,
       "tsconfigGroups": 1,
-      "filesCompared": 113,
       "edges": {
         "typescript": 391,
         "rust": 391
+      },
+      "engineFallback": {
+        "checked": true,
+        "fellBack": true,
+        "reasons": [
+          "package rxjs declares unsupported typesVersions (../../node_modules/rxjs/package.json)"
+        ]
       },
       "divergences": {
         "kindMismatch": {
@@ -50,15 +63,22 @@
     },
     {
       "project": "angular-ii",
-      "status": "passed",
+      "status": "fallback",
       "skipReasons": [],
       "hasInstalledNodeModules": false,
+      "filesCompared": 61,
       "sourceFilesDiscovered": 61,
       "tsconfigGroups": 1,
-      "filesCompared": 61,
       "edges": {
         "typescript": 218,
         "rust": 218
+      },
+      "engineFallback": {
+        "checked": true,
+        "fellBack": true,
+        "reasons": [
+          "package rxjs declares unsupported typesVersions (../../node_modules/rxjs/package.json)"
+        ]
       },
       "divergences": {
         "kindMismatch": {
@@ -81,15 +101,22 @@
     },
     {
       "project": "angular-iii",
-      "status": "passed",
+      "status": "fallback",
       "skipReasons": [],
       "hasInstalledNodeModules": false,
+      "filesCompared": 81,
       "sourceFilesDiscovered": 81,
       "tsconfigGroups": 1,
-      "filesCompared": 81,
       "edges": {
         "typescript": 262,
         "rust": 262
+      },
+      "engineFallback": {
+        "checked": true,
+        "fellBack": true,
+        "reasons": [
+          "package rxjs declares unsupported typesVersions (../../node_modules/rxjs/package.json)"
+        ]
       },
       "divergences": {
         "kindMismatch": {
@@ -112,15 +139,22 @@
     },
     {
       "project": "angular-iv",
-      "status": "passed",
+      "status": "fallback",
       "skipReasons": [],
       "hasInstalledNodeModules": false,
+      "filesCompared": 122,
       "sourceFilesDiscovered": 122,
       "tsconfigGroups": 1,
-      "filesCompared": 122,
       "edges": {
         "typescript": 395,
         "rust": 395
+      },
+      "engineFallback": {
+        "checked": true,
+        "fellBack": true,
+        "reasons": [
+          "package rxjs declares unsupported typesVersions (../../node_modules/rxjs/package.json)"
+        ]
       },
       "divergences": {
         "kindMismatch": {
@@ -143,30 +177,20 @@
     },
     {
       "project": "angular-v-multi",
-      "status": "fallback",
-      "skipReasons": [
-        "package @babel/types declares unsupported typesVersions (node_modules/@babel/types/package.json)",
-        "package @types/node declares unsupported typesVersions (node_modules/@types/node/package.json)",
-        "package @typescript-eslint/parser declares unsupported typesVersions (node_modules/@typescript-eslint/parser/package.json)",
-        "package @typescript-eslint/scope-manager declares unsupported typesVersions (node_modules/@typescript-eslint/scope-manager/package.json)",
-        "package @typescript-eslint/type-utils declares unsupported typesVersions (node_modules/@typescript-eslint/type-utils/package.json)",
-        "package @typescript-eslint/types declares unsupported typesVersions (node_modules/@typescript-eslint/types/package.json)",
-        "package @typescript-eslint/typescript-estree declares unsupported typesVersions (node_modules/@typescript-eslint/typescript-estree/package.json)",
-        "package @typescript-eslint/utils declares unsupported typesVersions (node_modules/@typescript-eslint/utils/package.json)",
-        "package @typescript-eslint/visitor-keys declares unsupported typesVersions (node_modules/@typescript-eslint/visitor-keys/package.json)",
-        "package eslint declares unsupported typesVersions (node_modules/eslint/package.json)",
-        "package rxjs declares unsupported typesVersions (node_modules/rxjs/package.json)",
-        "package type-fest declares unsupported typesVersions (node_modules/type-fest/package.json)",
-        "package typescript-eslint declares unsupported typesVersions (node_modules/typescript-eslint/package.json)",
-        "package vite declares unsupported typesVersions (node_modules/vite/package.json)"
-      ],
+      "status": "passed",
+      "skipReasons": [],
       "hasInstalledNodeModules": true,
-      "filesCompared": 30,
       "sourceFilesDiscovered": 30,
       "tsconfigGroups": 1,
+      "filesCompared": 30,
       "edges": {
         "typescript": 60,
         "rust": 60
+      },
+      "engineFallback": {
+        "checked": true,
+        "fellBack": false,
+        "reasons": []
       },
       "divergences": {
         "kindMismatch": {
@@ -189,21 +213,20 @@
     },
     {
       "project": "nextjs-i",
-      "status": "fallback",
-      "skipReasons": [
-        "package @rushstack/eslint-patch declares unsupported typesVersions (node_modules/@rushstack/eslint-patch/package.json)",
-        "package @types/node declares unsupported typesVersions (node_modules/@types/node/package.json)",
-        "package @types/react declares unsupported typesVersions (node_modules/@types/react/package.json)",
-        "package eslint declares unsupported typesVersions (node_modules/eslint/package.json)",
-        "package jiti declares unsupported typesVersions (node_modules/jiti/package.json)"
-      ],
+      "status": "passed",
+      "skipReasons": [],
       "hasInstalledNodeModules": true,
-      "filesCompared": 10,
       "sourceFilesDiscovered": 10,
       "tsconfigGroups": 1,
+      "filesCompared": 10,
       "edges": {
         "typescript": 16,
         "rust": 16
+      },
+      "engineFallback": {
+        "checked": true,
+        "fellBack": false,
+        "reasons": []
       },
       "divergences": {
         "kindMismatch": {
@@ -236,6 +259,11 @@
         "typescript": 6,
         "rust": 6
       },
+      "engineFallback": {
+        "checked": true,
+        "fellBack": false,
+        "reasons": []
+      },
       "divergences": {
         "kindMismatch": {
           "count": 0,
@@ -266,6 +294,11 @@
       "edges": {
         "typescript": 9,
         "rust": 9
+      },
+      "engineFallback": {
+        "checked": true,
+        "fellBack": false,
+        "reasons": []
       },
       "divergences": {
         "kindMismatch": {

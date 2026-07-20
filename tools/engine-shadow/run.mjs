@@ -91,6 +91,7 @@ for (const name of fixtureNames) {
       ),
       filesCompared: 0,
       edges: { typescript: 0, rust: 0 },
+      engineFallback: uncheckedFallback(),
       divergences: emptyDivergenceSummary(),
     });
   }
@@ -103,6 +104,11 @@ const totals = projects.reduce(
     result.filesCompared += project.filesCompared;
     result.typescriptEdges += project.edges.typescript;
     result.rustEdges += project.edges.rust;
+    if (project.engineFallback.checked) {
+      result.fallbackRate.fixturesChecked += 1;
+      if (project.engineFallback.fellBack)
+        result.fallbackRate.fixturesFellBack += 1;
+    }
     for (const kind of Object.keys(result.divergences)) {
       result.divergences[kind] += project.divergences[kind].count;
     }
@@ -116,6 +122,12 @@ const totals = projects.reduce(
     filesCompared: 0,
     typescriptEdges: 0,
     rustEdges: 0,
+    fallbackRate: {
+      fixturesFellBack: 0,
+      fixturesChecked: 0,
+      percentage: 0,
+      summary: '',
+    },
     divergences: {
       kindMismatch: 0,
       pathMismatch: 0,
@@ -124,6 +136,13 @@ const totals = projects.reduce(
     },
   },
 );
+totals.fallbackRate.percentage =
+  totals.fallbackRate.fixturesChecked === 0
+    ? 0
+    : (totals.fallbackRate.fixturesFellBack /
+        totals.fallbackRate.fixturesChecked) *
+      100;
+totals.fallbackRate.summary = `${totals.fallbackRate.fixturesFellBack}/${totals.fallbackRate.fixturesChecked} fixtures fell back`;
 
 const report = {
   schemaVersion: 1,
@@ -155,6 +174,7 @@ function runFixture(name, fixtureDir) {
       ),
       filesCompared: 0,
       edges: { typescript: 0, rust: 0 },
+      engineFallback: uncheckedFallback(),
       divergences: emptyDivergenceSummary(),
     };
   }
@@ -177,6 +197,7 @@ function runFixture(name, fixtureDir) {
       ),
       filesCompared: 0,
       edges: { typescript: 0, rust: 0 },
+      engineFallback: uncheckedFallback(),
       divergences: emptyDivergenceSummary(),
     };
   }
@@ -212,11 +233,16 @@ function runFixture(name, fixtureDir) {
   }
 
   const divergences = diffEdges(tsEdges, rustEdges);
+  const engineFallback = {
+    checked: true,
+    fellBack: fallbackReasons.length > 0,
+    reasons: [...new Set(fallbackReasons)].sort(),
+  };
   if (fallbackReasons.length > 0) {
     return {
       project: name,
       status: 'fallback',
-      skipReasons: [...new Set(fallbackReasons)].sort(),
+      skipReasons: [],
       hasInstalledNodeModules: directoryExists(
         path.join(fixtureDir, 'node_modules'),
       ),
@@ -224,6 +250,7 @@ function runFixture(name, fixtureDir) {
       sourceFilesDiscovered: sourceFiles.length,
       tsconfigGroups: groups.size,
       edges: { typescript: tsEdges.length, rust: rustEdges.length },
+      engineFallback,
       divergences,
     };
   }
@@ -246,6 +273,7 @@ function runFixture(name, fixtureDir) {
     tsconfigGroups: groups.size,
     filesCompared: sourceFiles.length,
     edges: { typescript: tsEdges.length, rust: rustEdges.length },
+    engineFallback,
     divergences,
   };
 }
@@ -351,6 +379,10 @@ function emptyDivergenceSummary() {
   };
 }
 
+function uncheckedFallback() {
+  return { checked: false, fellBack: false, reasons: [] };
+}
+
 function addDivergence(category, example) {
   category.count += 1;
   if (category.examples.length < 5) category.examples.push(example);
@@ -389,6 +421,7 @@ function renderSummary(report) {
     'Sheriff Rust engine R2 shadow report',
     '',
     `Fixtures: ${report.totals.passed} passed, ${report.totals.fallback} project fallbacks, ${report.totals.skipped} skipped (${report.totals.fixturesDiscovered} discovered)`,
+    `Fallback rate: ${report.totals.fallbackRate.summary} (${report.totals.fallbackRate.percentage.toFixed(1)}%)`,
     `Coverage: ${report.totals.filesCompared} source files; ${report.totals.typescriptEdges} TS edges; ${report.totals.rustEdges} Rust edges`,
     `Divergences: kind=${report.totals.divergences.kindMismatch}, path=${report.totals.divergences.pathMismatch}, missing=${report.totals.divergences.missingEdge}, extra=${report.totals.divergences.extraEdge}`,
     '',
@@ -396,10 +429,17 @@ function renderSummary(report) {
   for (const project of report.projects) {
     const dependencyCoverage = project.hasInstalledNodeModules
       ? 'installed dependencies present'
-      : 'no node_modules; bare imports cover dependency-universe classification only';
+      : 'no fixture-local node_modules; ancestor installs may still resolve';
+    const engineFallback = project.engineFallback.checked
+      ? project.engineFallback.fellBack
+        ? 'yes'
+        : 'no'
+      : 'not checked';
     lines.push(
-      `- ${project.project}: ${project.status}; files=${project.filesCompared}; TS=${project.edges.typescript}; Rust=${project.edges.rust}; ${dependencyCoverage}`,
+      `- ${project.project}: ${project.status}; engine fallback=${engineFallback}; files=${project.filesCompared}; TS=${project.edges.typescript}; Rust=${project.edges.rust}; ${dependencyCoverage}`,
     );
+    for (const reason of project.engineFallback.reasons)
+      lines.push(`  fallback reason: ${reason}`);
     for (const reason of project.skipReasons) lines.push(`  reason: ${reason}`);
     for (const [kind, details] of Object.entries(project.divergences)) {
       if (details.count > 0)

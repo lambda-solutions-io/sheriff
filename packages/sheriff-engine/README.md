@@ -35,8 +35,8 @@ Before Rust resolution can be selected, every config in the hand-walked
 `ts.parseJsonConfigFileContent` inherits their options; inspecting only the
 entry config's raw text would be unsafe. Unknown options and
 `moduleSuffixes`, `rootDirs`, `customConditions`,
-`allowImportingTsExtensions`, project references, or dependency
-`typesVersions` force a whole-project TypeScript fallback. Parser/resolver
+`allowImportingTsExtensions`, project references, or `typesVersions` on a
+package reached during resolution force a whole-project TypeScript fallback. Parser/resolver
 errors and differential shadow mismatches do the same; fallback is never
 per-file. See `tools/engine-shadow/README.md` for the fixture harness and its
 coverage limits.

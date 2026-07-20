@@ -452,6 +452,16 @@ defeats parallelism) and do **not** embed QuickJS (config closes over Node).
 for stateful callbacks. Document callbacks as deterministic and side-effect-free,
 and keep a slower compatibility path for configs that opt out.
 
+**Owner decision (2026-07-20)**: *detect + compatibility path*. Batch by default;
+detect impure/stateful callbacks and route those configs to the slower per-edge
+path automatically. Rejected: documenting purity without a compat path (silently
+changes behaviour for anyone relying on call order — breaking in practice), and
+an opt-out flag alone (impure configs break until the user notices). This
+resolves open question 2 for R3's scope: no user-visible break, so no major
+release is forced. Detection must be conservative — when unsure whether a
+callback is pure, take the compatibility path. A false "pure" verdict produces
+silently wrong verdicts; a false "impure" verdict only costs speed.
+
 **Exit criteria**: the fn-rule oracle snapshots skipped in R1 now pass; a config
 with a deliberately impure callback is either rejected or routed to the
 compatibility path.
@@ -515,6 +525,8 @@ projects; all `test-projects` goldens byte-identical; documented rollback;
 
 1. When may the engine become the **default** (rather than opt-in) — after R5
    benchmarks, or only after a release cycle of opt-in soak?
-2. Is the "callbacks must be pure" contract change acceptable in a minor
-   release, or does it need a major?
+2. ~~Is the "callbacks must be pure" contract change acceptable in a minor
+   release, or does it need a major?~~ **Resolved 2026-07-20**: detect impure
+   callbacks and route them to a compatibility path, so no observable break and
+   no major release is forced. See R3.
 3. Which platforms must ship prebuilds at launch (musl? win32-arm64?).

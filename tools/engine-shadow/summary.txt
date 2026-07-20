@@ -1,36 +1,22 @@
 Sheriff Rust engine R2 shadow report
 
-Fixtures: 6 passed, 2 project fallbacks, 0 skipped (8 discovered)
+Fixtures: 4 passed, 4 project fallbacks, 0 skipped (8 discovered)
+Fallback rate: 4/8 fixtures fell back (50.0%)
 Coverage: 434 source files; 1357 TS edges; 1357 Rust edges
 Divergences: kind=0, path=0, missing=0, extra=0
 
-- angular-i: passed; files=113; TS=391; Rust=391; no node_modules; bare imports cover dependency-universe classification only
-- angular-ii: passed; files=61; TS=218; Rust=218; no node_modules; bare imports cover dependency-universe classification only
-- angular-iii: passed; files=81; TS=262; Rust=262; no node_modules; bare imports cover dependency-universe classification only
-- angular-iv: passed; files=122; TS=395; Rust=395; no node_modules; bare imports cover dependency-universe classification only
-- angular-v-multi: fallback; files=30; TS=60; Rust=60; installed dependencies present
-  reason: package @babel/types declares unsupported typesVersions (node_modules/@babel/types/package.json)
-  reason: package @types/node declares unsupported typesVersions (node_modules/@types/node/package.json)
-  reason: package @typescript-eslint/parser declares unsupported typesVersions (node_modules/@typescript-eslint/parser/package.json)
-  reason: package @typescript-eslint/scope-manager declares unsupported typesVersions (node_modules/@typescript-eslint/scope-manager/package.json)
-  reason: package @typescript-eslint/type-utils declares unsupported typesVersions (node_modules/@typescript-eslint/type-utils/package.json)
-  reason: package @typescript-eslint/types declares unsupported typesVersions (node_modules/@typescript-eslint/types/package.json)
-  reason: package @typescript-eslint/typescript-estree declares unsupported typesVersions (node_modules/@typescript-eslint/typescript-estree/package.json)
-  reason: package @typescript-eslint/utils declares unsupported typesVersions (node_modules/@typescript-eslint/utils/package.json)
-  reason: package @typescript-eslint/visitor-keys declares unsupported typesVersions (node_modules/@typescript-eslint/visitor-keys/package.json)
-  reason: package eslint declares unsupported typesVersions (node_modules/eslint/package.json)
-  reason: package rxjs declares unsupported typesVersions (node_modules/rxjs/package.json)
-  reason: package type-fest declares unsupported typesVersions (node_modules/type-fest/package.json)
-  reason: package typescript-eslint declares unsupported typesVersions (node_modules/typescript-eslint/package.json)
-  reason: package vite declares unsupported typesVersions (node_modules/vite/package.json)
-- nextjs-i: fallback; files=10; TS=16; Rust=16; installed dependencies present
-  reason: package @rushstack/eslint-patch declares unsupported typesVersions (node_modules/@rushstack/eslint-patch/package.json)
-  reason: package @types/node declares unsupported typesVersions (node_modules/@types/node/package.json)
-  reason: package @types/react declares unsupported typesVersions (node_modules/@types/react/package.json)
-  reason: package eslint declares unsupported typesVersions (node_modules/eslint/package.json)
-  reason: package jiti declares unsupported typesVersions (node_modules/jiti/package.json)
-- plugin-i: passed; files=7; TS=6; Rust=6; no node_modules; bare imports cover dependency-universe classification only
-- typescript-i: passed; files=10; TS=9; Rust=9; no node_modules; bare imports cover dependency-universe classification only
+- angular-i: fallback; engine fallback=yes; files=113; TS=391; Rust=391; no fixture-local node_modules; ancestor installs may still resolve
+  fallback reason: package rxjs declares unsupported typesVersions (../../node_modules/rxjs/package.json)
+- angular-ii: fallback; engine fallback=yes; files=61; TS=218; Rust=218; no fixture-local node_modules; ancestor installs may still resolve
+  fallback reason: package rxjs declares unsupported typesVersions (../../node_modules/rxjs/package.json)
+- angular-iii: fallback; engine fallback=yes; files=81; TS=262; Rust=262; no fixture-local node_modules; ancestor installs may still resolve
+  fallback reason: package rxjs declares unsupported typesVersions (../../node_modules/rxjs/package.json)
+- angular-iv: fallback; engine fallback=yes; files=122; TS=395; Rust=395; no fixture-local node_modules; ancestor installs may still resolve
+  fallback reason: package rxjs declares unsupported typesVersions (../../node_modules/rxjs/package.json)
+- angular-v-multi: passed; engine fallback=no; files=30; TS=60; Rust=60; installed dependencies present
+- nextjs-i: passed; engine fallback=no; files=10; TS=16; Rust=16; installed dependencies present
+- plugin-i: passed; engine fallback=no; files=7; TS=6; Rust=6; no fixture-local node_modules; ancestor installs may still resolve
+- typescript-i: passed; engine fallback=no; files=10; TS=9; Rust=9; no fixture-local node_modules; ancestor installs may still resolve
 
 Machine report: tools/engine-shadow/report.json
 

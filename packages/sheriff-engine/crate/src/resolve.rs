@@ -185,6 +185,13 @@ pub enum ImportKind {
     Unresolvable,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ReachedPackage {
+    name: String,
+    // Declared externals can be reached even when the package is not installed.
+    manifest_path: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolveProjectError {
     Resolution(String),
@@ -220,12 +227,6 @@ pub fn resolve_project(
     validate_input_strings(&input)?;
 
     let mut context = get_ts_config_context(Path::new(&input.ts_config_path))?;
-    context
-        .fallback_reasons
-        .extend(types_versions_fallback_reasons(
-            &input.files,
-            &context.root_dir,
-        ));
     context.fallback_reasons.sort();
     context.fallback_reasons.dedup();
     let initial_fallback = !context.fallback_reasons.is_empty();
@@ -240,6 +241,7 @@ pub fn resolve_project(
         .collect();
     let mut files = Vec::with_capacity(input.files.len());
     let mut import_count = 0;
+    let mut reached_packages = HashSet::new();
 
     if !initial_fallback || input.shadow_mode {
         for file in input.files {
@@ -267,7 +269,14 @@ pub fn resolve_project(
                     break;
                 }
             }
-            let imports = resolve_imports(&path, extracted.imports, &ignored, &context, &resolver)?;
+            let imports = resolve_imports(
+                &path,
+                extracted.imports,
+                &ignored,
+                &context,
+                &resolver,
+                &mut reached_packages,
+            )?;
             files.push(ResolvedFile {
                 file: relative_for_oracle(&context.root_dir, &path),
                 imports,
@@ -276,9 +285,21 @@ pub fn resolve_project(
         files.sort_by(|left, right| left.file.cmp(&right.file));
     }
 
+    // Package features can only be audited after resolution identifies the
+    // packages that matter. Preserve whole-project fallback by discarding the
+    // completed Rust result outside shadow mode when this late gate fires.
+    context
+        .fallback_reasons
+        .extend(types_versions_fallback_reasons(
+            &reached_packages,
+            &context.root_dir,
+        ));
     context.fallback_reasons.sort();
     context.fallback_reasons.dedup();
     let fallback = !context.fallback_reasons.is_empty();
+    if fallback && !input.shadow_mode {
+        files.clear();
+    }
 
     Ok(ResolveProjectOutput {
         schema_version: 1,
@@ -702,6 +723,7 @@ fn resolve_imports(
     ignored: &HashSet<String>,
     context: &TsConfigContext,
     resolver: &Resolver,
+    reached_packages: &mut HashSet<ReachedPackage>,
 ) -> Result<Vec<ResolvedImport>, String> {
     let importing_dir = parent(importing_file)?;
     let universe = dependency_universe(&importing_dir, &context.root_dir);
@@ -722,14 +744,41 @@ fn resolve_imports(
         // Sheriff computes normal resolution eagerly even though alias resolution
         // has priority over it.
         let normal = normal_resolve(resolver, importing_file, &import.raw, context);
+        let normal_is_none = normal.is_none();
+        let resolved_package_manifest = normal
+            .as_deref()
+            .filter(|path| is_node_modules_path(path))
+            .and_then(|path| package_manifest_from_resolved_path(path, &import.raw));
         let alias = resolve_potential_ts_path(&import.raw, &context.paths, |rewritten| {
             resolver
                 .resolve_file(importing_file, rewritten)
                 .ok()
                 .map(|resolution| resolution.into_path_buf())
         });
+        let alias_is_none = alias.is_none();
 
         let (kind, resolved) = classify(&import.raw, alias, normal, &context.root_dir, &universe)?;
+        let is_bare_import =
+            !is_relative_import(&import.raw) && !Path::new(&import.raw).is_absolute();
+        let package_manifest = resolved_package_manifest.or_else(|| {
+            // typesVersions can make oxc fail before it returns a resolved path.
+            // An installed bare package still counts as reached in that case.
+            (is_bare_import && (kind == ImportKind::External || (alias_is_none && normal_is_none)))
+                .then(|| {
+                    find_installed_package_manifest(
+                        &importing_dir,
+                        &extract_package_name(&import.raw),
+                    )
+                })
+                .flatten()
+        });
+        if kind == ImportKind::External || package_manifest.is_some() {
+            let package = extract_package_name(&import.raw);
+            reached_packages.insert(ReachedPackage {
+                manifest_path: package_manifest,
+                name: package,
+            });
+        }
         if kind == ImportKind::External && !external_seen.insert(import.raw.clone()) {
             continue;
         }
@@ -881,94 +930,61 @@ fn dependency_universe(file_dir: &Path, root_dir: &Path) -> HashSet<String> {
     }
 }
 
-fn types_versions_fallback_reasons(files: &[String], root_dir: &Path) -> Vec<String> {
+fn types_versions_fallback_reasons(
+    reached_packages: &HashSet<ReachedPackage>,
+    root_dir: &Path,
+) -> Vec<String> {
     let mut reasons = Vec::new();
+    let mut packages: Vec<_> = reached_packages
+        .iter()
+        .filter_map(|package| {
+            package
+                .manifest_path
+                .as_ref()
+                .map(|manifest_path| (&package.name, manifest_path))
+        })
+        .collect();
+    packages.sort_by(|left, right| left.1.cmp(right.1).then_with(|| left.0.cmp(right.0)));
 
-    for (package, manifest_path) in installed_package_manifests(files, root_dir) {
-        if fs::read_to_string(&manifest_path)
+    for (package, manifest_path) in packages {
+        if fs::read_to_string(manifest_path)
             .ok()
             .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
             .is_some_and(|manifest| manifest.get("typesVersions").is_some())
         {
             reasons.push(format!(
                 "package {package} declares unsupported typesVersions ({})",
-                relative_for_oracle(root_dir, &manifest_path)
+                relative_for_oracle(root_dir, manifest_path)
             ));
         }
     }
     reasons
 }
 
-fn installed_package_manifests(files: &[String], root_dir: &Path) -> Vec<(String, PathBuf)> {
-    let mut checked_node_modules = HashSet::new();
-    let mut checked_manifests = HashSet::new();
-    let mut manifests = Vec::new();
-
-    for file in files {
-        let Some(mut current) = Path::new(file).parent().map(Path::to_path_buf) else {
-            continue;
-        };
-        if current.strip_prefix(root_dir).is_err() {
-            continue;
-        }
-        loop {
-            let node_modules = current.join("node_modules");
-            if checked_node_modules.insert(node_modules.clone()) && node_modules.is_dir() {
-                collect_package_manifests(&node_modules, &mut checked_manifests, &mut manifests);
+fn package_manifest_from_resolved_path(resolved: &Path, specifier: &str) -> Option<PathBuf> {
+    let package_root_suffix = Path::new("node_modules").join(extract_package_name(specifier));
+    for ancestor in resolved.ancestors() {
+        if ancestor.ends_with(&package_root_suffix) {
+            let manifest = ancestor.join("package.json");
+            if manifest.is_file() {
+                return Some(manifest);
             }
-            if current == root_dir {
-                break;
-            }
-            let Some(parent) = current.parent() else {
-                break;
-            };
-            current = parent.to_path_buf();
         }
     }
-    manifests.sort_by(|left, right| left.1.cmp(&right.1));
-    manifests
+    None
 }
 
-fn collect_package_manifests(
-    node_modules: &Path,
-    checked: &mut HashSet<PathBuf>,
-    output: &mut Vec<(String, PathBuf)>,
-) {
-    let Ok(entries) = fs::read_dir(node_modules) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') || !entry.path().is_dir() {
-            continue;
+fn find_installed_package_manifest(importing_dir: &Path, package: &str) -> Option<PathBuf> {
+    let mut current = importing_dir;
+    loop {
+        let manifest = current
+            .join("node_modules")
+            .join(package)
+            .join("package.json");
+        if manifest.is_file() {
+            return Some(manifest);
         }
-        if name.starts_with('@') {
-            let Ok(scoped_entries) = fs::read_dir(entry.path()) else {
-                continue;
-            };
-            for package_entry in scoped_entries.flatten() {
-                let package_name = package_entry.file_name().to_string_lossy().into_owned();
-                collect_package_manifest(
-                    format!("{name}/{package_name}"),
-                    package_entry.path().join("package.json"),
-                    checked,
-                    output,
-                );
-            }
-        } else {
-            collect_package_manifest(name, entry.path().join("package.json"), checked, output);
-        }
-    }
-}
-
-fn collect_package_manifest(
-    package: String,
-    manifest: PathBuf,
-    checked: &mut HashSet<PathBuf>,
-    output: &mut Vec<(String, PathBuf)>,
-) {
-    if manifest.is_file() && checked.insert(manifest.clone()) {
-        output.push((package, manifest));
+        current = current.parent()?;
     }
 }
 
@@ -1417,7 +1433,34 @@ mod tests {
     }
 
     #[test]
-    fn dependency_types_versions_trigger_project_fallback_before_resolution() {
+    fn unimported_dependency_types_versions_do_not_trigger_project_fallback() {
+        let temp = TestDir::new();
+        let config = temp.write("tsconfig.json", "{}");
+        temp.write(
+            "package.json",
+            r#"{"dependencies":{"typed-package":"1.0.0"}}"#,
+        );
+        temp.write(
+            "node_modules/typed-package/package.json",
+            r#"{"typesVersions":{"*":{"*":["types/*"]}}}"#,
+        );
+        let source = temp.write("src/main.ts", "export const value = 1;");
+        let output = resolve_project(ResolveProjectInput {
+            schema_version: 1,
+            ts_config_path: config.to_string_lossy().into_owned(),
+            files: vec![source.to_string_lossy().into_owned()],
+            ignore_file_extensions: Vec::new(),
+            shadow_mode: false,
+        })
+        .unwrap();
+
+        assert!(!output.fallback);
+        assert!(output.fallback_reasons.is_empty());
+        assert_eq!(output.files.len(), 1);
+    }
+
+    #[test]
+    fn imported_dependency_types_versions_trigger_project_fallback() {
         let temp = TestDir::new();
         let config = temp.write("tsconfig.json", "{}");
         temp.write(
@@ -1440,7 +1483,23 @@ mod tests {
 
         assert!(output.fallback);
         assert!(output.files.is_empty());
-        assert!(output.fallback_reasons[0].contains("typesVersions"));
+        assert_eq!(
+            output.fallback_reasons,
+            [
+                "package typed-package declares unsupported typesVersions (node_modules/typed-package/package.json)"
+            ]
+        );
+
+        let shadow_output = resolve_project(ResolveProjectInput {
+            schema_version: 1,
+            ts_config_path: config.to_string_lossy().into_owned(),
+            files: vec![source.to_string_lossy().into_owned()],
+            ignore_file_extensions: Vec::new(),
+            shadow_mode: true,
+        })
+        .unwrap();
+        assert!(shadow_output.fallback);
+        assert_eq!(shadow_output.files.len(), 1);
     }
 
     #[test]
@@ -1469,6 +1528,36 @@ mod tests {
             output.fallback_reasons,
             [
                 "package tv-pkg declares unsupported typesVersions (node_modules/tv-pkg/package.json)"
+            ]
+        );
+    }
+
+    #[test]
+    fn scoped_subpath_import_audits_the_package_manifest() {
+        let temp = TestDir::new();
+        let config = temp.write("tsconfig.json", "{}");
+        temp.write("package.json", r#"{"dependencies":{"@scope/pkg":"1.0.0"}}"#);
+        temp.write(
+            "node_modules/@scope/pkg/package.json",
+            r#"{"typesVersions":{"*":{"*":["types/*"]}}}"#,
+        );
+        temp.write("node_modules/@scope/pkg/types/sub.d.ts", "");
+        let source = temp.write("src/main.ts", r#"import "@scope/pkg/sub";"#);
+        let output = resolve_project(ResolveProjectInput {
+            schema_version: 1,
+            ts_config_path: config.to_string_lossy().into_owned(),
+            files: vec![source.to_string_lossy().into_owned()],
+            ignore_file_extensions: Vec::new(),
+            shadow_mode: false,
+        })
+        .unwrap();
+
+        assert!(output.fallback);
+        assert!(output.files.is_empty());
+        assert_eq!(
+            output.fallback_reasons,
+            [
+                "package @scope/pkg declares unsupported typesVersions (node_modules/@scope/pkg/package.json)"
             ]
         );
     }
