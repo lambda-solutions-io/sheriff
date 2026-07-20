@@ -134,7 +134,8 @@ node tools/perf/run-bench.mjs
 | R2.1: narrow `typesVersions` fallback | **done** | `9d99e3e` |
 | R2.2: implement `typesVersions` mapping | **done** | `64746ac` |
 | R2.3: review round (4 findings) | **done** | `1a21352` |
-| R3: function-rule materialisation | **done** (review pending) | `a2f1e45` |
+| R3: function-rule materialisation | **done** | `a2f1e45` |
+| R3.1: review round (4 parity defects) | **done** | `78ced96` |
 | R4: incremental ProjectHandle | not started | |
 | R5: consumer cutover + packaging | not started | |
 
@@ -604,12 +605,63 @@ must honour `fallback: true`**, or impure configs will hard-error instead of
 falling back. Do not mark the owner's "detect + compat path" decision satisfied
 until that wiring exists.
 
-The detector is explicitly heuristic, not sound. Stated false negatives: hidden
-state reached through helper calls, getters/proxies, mutations that return equal
-values twice, later-call-only changes, and obfuscated/dynamic code. It is
-deliberately over-eager (any `=` assignment in the source trips it), per the
-owner's rule that a false "impure" costs only speed while a false "pure" produces
-silently wrong verdicts.
+**The R3 detector was heuristic and had an exploitable false negative — see R3.1,
+which replaced it.**
+
+---
+
+## R3.1 (done) — review round
+
+Two independent reviewers, different lenses. One was killed mid-run by a
+content-safety filter, but its last narration named a specific hypothesis that the
+coordinator then reproduced directly — worth remembering as a recovery tactic when
+a reviewer dies before reporting.
+
+**Four confirmed parity defects**, each reproduced against the real code before
+being fixed:
+
+1. **Callback contexts used relative paths.** TS passes absolute `FsPath`s
+   (`check-for-dependency-rule-violation.ts:68-75`); Rust passed interner-relative
+   ones, so `fromFilePath.startsWith('/project/src')` inverted verdicts between
+   engines. **R3's own test asserted the relative form** — the suite validated Rust
+   against itself rather than the contract, which is exactly why it stayed green.
+   The oracle *output* paths remain relative by design; this was only the callback
+   context.
+2. **Impurity detection false negative.** `evaluateTwice` compared *adjacent*
+   evaluations and returned the first, so a callback changing value every other
+   call passed while distinct candidates received different verdicts. Verified:
+   `const bump = () => calls.push(1); ({toFilePath}) => (bump(), calls.length <= 2)`
+   was declared pure — the mutation lives in the helper, so the callback's own
+   source has no `=` — and produced `true` then `false` for an identical context.
+3. **Property order.** TS spreads `{...context, from, to}`, so `from`/`to` come
+   **last**; `Object.keys` is observable.
+4. **Eager evaluation.** `is-dependency-allowed.ts` returns on the first matching
+   string matcher, so a later function matcher never runs. Rust materialised every
+   candidate, turning `['target', () => { throw }]` into a hard failure where TS
+   simply allows the edge. Fixed for dep, deny **and** external rules, each checked
+   against its own TS semantics (external stays AND-combined).
+
+**Impurity gate, per owner decision**: dynamic double-evaluation removed entirely —
+callbacks now run **exactly once**, so detection can no longer perturb user state —
+replaced by a **static-only gate rejecting any callback that references a free
+identifier**. Implemented with **acorn + eslint-scope** scope analysis rather than
+a regex, so destructured params, nested arrow params, property keys and string
+literals are not false positives. Verified: `sameTag` and `endsWith` predicates are
+still accepted; the reproducer above is rejected with `SHERIFF_ENGINE_IMPURE_CALLBACK`
+naming `bump`, **invoked zero times**.
+
+The gate's honest boundary: whole-program dataflow is not recoverable from
+`Function.prototype.toString`, so a free identifier is the limit of what static
+screening can prove. Callbacks calling imported helpers are now rejected — intended,
+per the rule that a false "impure" costs only speed.
+
+**Packaging fix found while verifying**: `acorn`/`eslint-scope` resolved only via
+eslint's hoisted `node_modules` and were declared nowhere. Now declared in
+`packages/sheriff-engine/package.json`; a real install would otherwise have broken.
+Nx build target set unchanged (`core`, `eslint-plugin`, `mcp-server`).
+
+Final: 81 rust tests, **23 conformance (0 skipped, was 15)**, 583 TS tests, harness
+8/8 / 0 fallback / 0 divergences, parity 9/9, oracle snapshots untouched.
 
 ---
 
