@@ -1,16 +1,10 @@
-import { FsPath, toFsPath } from '../file-info/fs-path';
+import { FsPath } from '../file-info/fs-path';
 import { Configuration } from '../config/configuration';
 import { TsData } from '../file-info/ts-data';
-import getFs from '../fs/getFs';
-import { generateTsData } from '../file-info/generate-ts-data';
-import { findConfig } from '../config/find-config';
-import { parseConfig } from '../config/parse-config';
 import { ParsedResult, parseProject } from './parse-project';
 import { initialized } from './internal/initialized';
 import { callbacks } from './internal/callback';
-import { defaultConfig } from '../config/default-config';
-import { resolveConfigEntryForFile } from '../config/resolve-config-for-file';
-import { SheriffConfigNotFoundError } from '../error/user-error';
+import { resolveProjectConfig } from './resolve-project-config';
 
 let config: Configuration | undefined;
 
@@ -78,12 +72,7 @@ export function init(
     ...{ traverse: true, returnOnMissingConfig: false },
     ...options,
   };
-  const fs = getFs();
-  const tsConfigPath = toFsPath(
-    fs.findNearestParentFile(entryFile, 'tsconfig.json'),
-  );
-  const tsData = generateTsData(tsConfigPath);
-  const resolvedConfig = getConfig(entryFile, tsData.rootDir);
+  const { tsData, ...resolvedConfig } = resolveProjectConfig(entryFile);
   config = resolvedConfig.config;
 
   initialized.status = true;
@@ -108,58 +97,4 @@ export function init(
       options.entryFileContent,
     ),
   };
-}
-
-type ResolvedConfig = {
-  config: Configuration;
-  configFilePath?: FsPath;
-  usesMultipleConfigs: boolean;
-};
-
-function getConfig(entryFile: FsPath, rootPath: FsPath): ResolvedConfig {
-  const configFile = findConfig(rootPath);
-  if (configFile) {
-    const rootConfig = parseConfig(configFile);
-    const selectedConfig = resolveConfigEntryForFile(
-      entryFile,
-      rootPath,
-      rootConfig.configs,
-    );
-    const selectedConfigFile = selectedConfig
-      ? resolveSelectedConfigFile(rootPath, selectedConfig)
-      : configFile;
-
-    return {
-      config:
-        selectedConfigFile === configFile
-          ? rootConfig
-          : parseConfig(selectedConfigFile, { validateConfigs: false }),
-      configFilePath: selectedConfigFile,
-      usesMultipleConfigs: Object.keys(rootConfig.configs).length > 0,
-    };
-  }
-
-  return {
-    config: { ...defaultConfig, isConfigFileMissing: true },
-    usesMultipleConfigs: false,
-  };
-}
-
-function resolveSelectedConfigFile(
-  rootPath: FsPath,
-  selectedConfig: { directory: string; configPath: string },
-): FsPath {
-  const fs = getFs();
-  const selectedConfigFile = fs.isAbsolute(selectedConfig.configPath)
-    ? selectedConfig.configPath
-    : fs.join(rootPath, selectedConfig.configPath);
-
-  if (!fs.exists(selectedConfigFile)) {
-    throw new SheriffConfigNotFoundError(
-      selectedConfig.directory,
-      selectedConfig.configPath,
-    );
-  }
-
-  return toFsPath(selectedConfigFile);
 }

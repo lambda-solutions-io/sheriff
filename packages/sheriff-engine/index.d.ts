@@ -227,6 +227,8 @@ export interface ApplyProjectChangesInput {
 export declare class ProjectHandle {
   constructor(input: ProjectHandleInput | string);
   applyChanges(input: ApplyProjectChangesInput | string): string;
+  /** Re-analyzes with Node-discovered modules while reusing the resolved graph. */
+  setModulePaths(modulePaths: EngineModulePath[]): string;
   setOverlay(path: string, content: string): string;
   clearOverlay(path: string): string;
   getResult(): string;

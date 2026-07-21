@@ -7,6 +7,7 @@
 export declare class ProjectHandle {
   constructor(inputJson: string)
   applyChanges(eventsJson: string): string
+  setModulePaths(modulePathsJson: string): string
   provideCallbackResults(resultsJson: string): string
   setOverlay(path: string, content: string): string
   clearOverlay(path: string): string

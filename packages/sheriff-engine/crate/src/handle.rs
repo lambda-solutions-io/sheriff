@@ -65,6 +65,14 @@ struct ApplyChangesInput {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetModulePathsInput {
+    schema_version: u32,
+    #[serde(default)]
+    module_paths: Vec<InputModulePath>,
+}
+
+#[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 enum ChangeEvent {
     Created {
@@ -205,6 +213,11 @@ impl ProjectHandle {
         self.guard(|handle| handle.apply_changes_inner(&events_json))
     }
 
+    #[napi(js_name = "setModulePaths")]
+    pub fn set_module_paths(&mut self, module_paths_json: String) -> String {
+        self.guard(|handle| handle.set_module_paths_inner(&module_paths_json))
+    }
+
     #[napi(js_name = "provideCallbackResults")]
     pub fn provide_callback_results(&mut self, results_json: String) -> String {
         self.guard(|handle| handle.provide_callback_results_inner(&results_json))
@@ -317,7 +330,24 @@ impl ProjectHandle {
         self.input_hash = hash_value(input_json);
         self.input = Some(input);
         self.rebuild_graph()?;
+        if self.input_ref()?.module_paths.is_empty() {
+            return self.discovery_output();
+        }
         self.drive_analysis()
+    }
+
+    fn discovery_output(&self) -> Result<String, String> {
+        serde_json::to_string(&json!({
+            "schemaVersion": 1,
+            "files": self.reached_file_imports(),
+            "modules": [],
+            "violations": {
+                "dependency": [],
+                "encapsulation": [],
+                "external": [],
+            },
+        }))
+        .map_err(|error| format!("could not serialize discovery output: {error}"))
     }
 
     fn apply_changes_inner(&mut self, events_json: &str) -> Result<String, String> {
@@ -465,6 +495,31 @@ impl ProjectHandle {
             }
         }
         self.pending_callbacks = None;
+        self.drive_analysis()
+    }
+
+    fn set_module_paths_inner(&mut self, module_paths_json: &str) -> Result<String, String> {
+        if self.pending_callbacks.is_some() {
+            return Err("callback results must be provided before setting module paths".to_owned());
+        }
+        if module_paths_json.len() > crate::input::MAX_INPUT_JSON_BYTES {
+            return Err(format!(
+                "module paths JSON exceeds the {} byte limit",
+                crate::input::MAX_INPUT_JSON_BYTES
+            ));
+        }
+        let input: SetModulePathsInput = serde_json::from_str(module_paths_json)
+            .map_err(|error| format!("invalid SetModulePathsInput JSON: {error}"))?;
+        if input.schema_version != 1 {
+            return Err(format!(
+                "unsupported SetModulePaths schemaVersion {}; expected 1",
+                input.schema_version
+            ));
+        }
+
+        self.input_mut()?.module_paths = input.module_paths;
+        self.refresh_modules()?;
+        self.analysis_scope = AnalysisScope::Full;
         self.drive_analysis()
     }
 
@@ -1725,6 +1780,38 @@ mod tests {
 
         assert_eq!(reached["files"], json!(expected));
         assert_eq!(output_paths, expected);
+    }
+
+    #[test]
+    fn empty_module_paths_still_discovers_reached_files() {
+        let project = TestProject::new();
+        let mut input: Value = serde_json::from_str(&project.input()).unwrap();
+        input["modulePaths"] = json!([]);
+
+        let handle = ProjectHandle::new(input.to_string());
+        let reached: Value = serde_json::from_str(&handle.get_reached_files()).unwrap();
+
+        assert_eq!(
+            reached["files"],
+            json!(["src/a/a.ts", "src/b/b.ts", "src/entry.ts"])
+        );
+    }
+
+    #[test]
+    fn setting_module_paths_matches_one_shot_analysis_byte_for_byte() {
+        let project = TestProject::new();
+        let input: Value = serde_json::from_str(&project.input()).unwrap();
+        let one_shot = ProjectHandle::new(input.to_string()).get_result();
+        let module_paths = input["modulePaths"].clone();
+        let mut discovery_input = input;
+        discovery_input["modulePaths"] = json!([]);
+        let mut two_phase = ProjectHandle::new(discovery_input.to_string());
+
+        let result = two_phase
+            .set_module_paths(json!({"schemaVersion": 1, "modulePaths": module_paths}).to_string());
+
+        assert_eq!(result, one_shot);
+        assert_eq!(two_phase.get_result(), one_shot);
     }
 
     #[test]

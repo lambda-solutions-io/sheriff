@@ -16,20 +16,29 @@ import {
   ExternalRuleViolation,
 } from '../checks/check-for-external-rule-violation';
 import { ProjectInfo } from '../main/init';
+import { init } from '../main/init';
+import {
+  ResolvedProjectConfig,
+  resolveProjectConfig,
+} from '../main/resolve-project-config';
 import { FsPath, toFsPath } from '../file-info/fs-path';
 import { Fs } from '../fs/fs';
-import { buildEngineProjectInput } from '../engine/build-engine-project-input';
+import { buildEngineProjectInputFromConfig } from '../engine/build-engine-project-input';
 import {
+  loadEnginePackage,
   logEngineFallback,
-  runEngineProject,
 } from '../engine/run-engine-project';
 import type {
   EngineDependencyViolation,
   EngineEncapsulationViolation,
   EngineExternalViolation,
+  EngineFile,
+  EngineModulePath,
   EngineOutput,
 } from '@lambda-solutions/sheriff-engine';
 import { calcTagsForModule } from '../tags/calc-tags-for-module';
+import { findModulePaths, ModulePathMap } from '../modules/find-module-paths';
+import type { Entry } from './internal/entry';
 
 type ValidationsMap = Record<
   string,
@@ -51,9 +60,16 @@ type ProjectValidation = {
   dependencyRuleViolations: DependencyRuleViolation[];
 };
 
+type PreparedProjectEntry = Entry & {
+  projectInfo: ProjectInfo | ResolvedProjectConfig;
+  engineOutput?: EngineOutput;
+  engineValidation?: ProjectValidation;
+  fileInfoPaths: FsPath[];
+};
+
 export function verify(args: string[], options: { files?: string[] } = {}) {
   const fs = getFs();
-  const projectEntries = getEntriesFromCliOrConfig(args[0]);
+  const projectEntries = prepareProjectEntries(args[0], fs);
   logInfoForMissingSheriffConfig(projectEntries[0].projectInfo);
 
   // Keep track of overall status to determine final process exit code
@@ -93,13 +109,11 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
 
     for (const projectEntry of projectEntries) {
       const knownFilePaths = new Map<string, FsPath>();
-      for (const { fileInfo } of traverseFileInfo(
-        projectEntry.projectInfo.fileInfo,
-      )) {
+      for (const fileInfoPath of projectEntry.fileInfoPaths) {
         // Canonicalize graph paths too, so both sides of the comparison
         // are in the same canonical form.
-        const canonicalPath = canonicalize(fileInfo.path, fs);
-        knownFilePaths.set(canonicalPath, fileInfo.path);
+        const canonicalPath = canonicalize(fileInfoPath, fs);
+        knownFilePaths.set(canonicalPath, fileInfoPath);
         allKnownFilePaths.add(canonicalPath);
       }
       projectFilePaths.set(projectEntry.projectName, knownFilePaths);
@@ -137,14 +151,13 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
           return fileInfoPath ? [fileInfoPath] : [];
         },
       );
-      const engineValidation = tryRunEngineChecksForProject(
-        projectEntry.entryFile,
-        projectEntry.projectInfo,
-        fileInfoPaths,
-        fs,
-      );
-
-      if (engineValidation) {
+      if (projectEntry.engineOutput) {
+        const engineValidation = createEngineProjectValidation(
+          projectEntry.engineOutput,
+          fileInfoPaths,
+          projectEntry.projectInfo as ResolvedProjectConfig,
+          fs,
+        );
         projectValidations.set(projectEntry.projectName, engineValidation);
         if (engineValidation.hasError) {
           hasAnyProjectError = true;
@@ -155,15 +168,11 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
       const projectValidation = projectValidations.get(
         projectEntry.projectName,
       )!;
+      const projectInfo = projectEntry.projectInfo as ProjectInfo;
 
       for (const fileInfoPath of fileInfoPaths) {
         if (
-          runChecksForFile(
-            fileInfoPath,
-            projectEntry.projectInfo,
-            projectValidation,
-            fs,
-          )
+          runChecksForFile(fileInfoPath, projectInfo, projectValidation, fs)
         ) {
           hasAnyProjectError = true;
         }
@@ -171,17 +180,9 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
     }
   } else {
     for (const projectEntry of projectEntries) {
-      const fileInfoPaths = [
-        ...traverseFileInfo(projectEntry.projectInfo.fileInfo),
-      ].map(({ fileInfo }) => fileInfo.path);
-      const engineValidation = tryRunEngineChecksForProject(
-        projectEntry.entryFile,
-        projectEntry.projectInfo,
-        fileInfoPaths,
-        fs,
-      );
-
-      if (engineValidation) {
+      const { fileInfoPaths } = projectEntry;
+      if (projectEntry.engineOutput) {
+        const engineValidation = projectEntry.engineValidation!;
         projectValidations.set(projectEntry.projectName, engineValidation);
         if (engineValidation.hasError) {
           hasAnyProjectError = true;
@@ -192,15 +193,11 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
       const projectValidation = projectValidations.get(
         projectEntry.projectName,
       )!;
+      const projectInfo = projectEntry.projectInfo as ProjectInfo;
 
       for (const fileInfoPath of fileInfoPaths) {
         if (
-          runChecksForFile(
-            fileInfoPath,
-            projectEntry.projectInfo,
-            projectValidation,
-            fs,
-          )
+          runChecksForFile(fileInfoPath, projectInfo, projectValidation, fs)
         ) {
           hasAnyProjectError = true;
         }
@@ -291,6 +288,199 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
   }
 }
 
+function prepareProjectEntries(
+  entryFileOrEntryPoints: string | undefined,
+  fs: Fs,
+): PreparedProjectEntry[] {
+  if (process.env['SHERIFF_ENGINE'] !== '1') {
+    return getEntriesFromCliOrConfig(entryFileOrEntryPoints).map((entry) => ({
+      ...entry,
+      fileInfoPaths: [...traverseFileInfo(entry.projectInfo.fileInfo)].map(
+        ({ fileInfo }) => fileInfo.path,
+      ),
+    }));
+  }
+
+  return getEntriesFromCliOrConfig(entryFileOrEntryPoints, false).map((entry) =>
+    prepareEngineProjectEntry(entry, fs),
+  );
+}
+
+function prepareEngineProjectEntry(entry: Entry, fs: Fs): PreparedProjectEntry {
+  const absoluteEntryFile = toFsPath(fs.join(fs.cwd(), entry.entryFile));
+  try {
+    const projectConfig = resolveProjectConfig(absoluteEntryFile);
+    const handle = new (loadEnginePackage().ProjectHandle)(
+      buildEngineProjectInputFromConfig(projectConfig, entry.entryFile, []),
+    );
+    parseEngineOutput(handle.getResult());
+    const reachedPaths = parseReachedFiles(handle.getReachedFiles());
+    const modulePaths = createEngineModulePaths(reachedPaths, projectConfig);
+    const output = parseEngineOutput(handle.setModulePaths(modulePaths));
+    assertReachedFilesMatchOutput(reachedPaths, output);
+    const fileInfoPaths = reachedPaths.map((path) =>
+      toFsPath(fsPathFromEnginePath(projectConfig.rootDir, path)),
+    );
+
+    // Validate every adapter invariant before `--files` membership is decided.
+    // Any unmappable violation or tag divergence therefore takes the complete
+    // project through the original TypeScript path.
+    const engineValidation = createEngineProjectValidation(
+      output,
+      fileInfoPaths,
+      projectConfig,
+      fs,
+    );
+
+    return {
+      ...entry,
+      projectInfo: projectConfig,
+      engineOutput: output,
+      engineValidation,
+      fileInfoPaths,
+    };
+  } catch (error) {
+    logEngineFallback(error);
+    const projectInfo = init(absoluteEntryFile);
+    return {
+      ...entry,
+      projectInfo,
+      fileInfoPaths: [...traverseFileInfo(projectInfo.fileInfo)].map(
+        ({ fileInfo }) => fileInfo.path,
+      ),
+    };
+  }
+}
+
+function parseReachedFiles(serialized: string): string[] {
+  const output = JSON.parse(serialized) as unknown;
+  if (
+    !output ||
+    typeof output !== 'object' ||
+    !('schemaVersion' in output) ||
+    output.schemaVersion !== 1 ||
+    !('files' in output) ||
+    !Array.isArray(output.files) ||
+    !output.files.every((file) => typeof file === 'string')
+  ) {
+    throw new Error('Engine returned an invalid reached-files result.');
+  }
+  return output.files;
+}
+
+function parseEngineOutput(serialized: string): EngineOutput {
+  const output = JSON.parse(serialized) as unknown;
+  assertEngineOutput(output);
+  return output;
+}
+
+function assertEngineOutput(output: unknown): asserts output is EngineOutput {
+  if (!output || typeof output !== 'object') {
+    throw new Error('Engine returned an invalid project result.');
+  }
+  if ('error' in output) {
+    const error = output.error as { code?: unknown; message?: unknown };
+    throw new Error(`${String(error.code)}: ${String(error.message)}`);
+  }
+  if (
+    !('schemaVersion' in output) ||
+    output.schemaVersion !== 1 ||
+    !('files' in output) ||
+    !Array.isArray(output.files) ||
+    !('violations' in output)
+  ) {
+    throw new Error('Engine returned an invalid project result.');
+  }
+}
+
+function createEngineModulePaths(
+  reachedPaths: string[],
+  projectConfig: ResolvedProjectConfig,
+): EngineModulePath[] {
+  const projectDirs = getProjectDirsFromReachedFiles(
+    reachedPaths,
+    projectConfig.rootDir,
+  );
+  const modulePathMap = findModulePaths(
+    projectDirs,
+    projectConfig.rootDir,
+    projectConfig.config,
+  );
+  return engineModulePathsFromMap(modulePathMap, projectConfig.rootDir);
+}
+
+function getProjectDirsFromReachedFiles(
+  reachedPaths: string[],
+  rootDir: FsPath,
+): FsPath[] {
+  const fs = getFs();
+  const rootDirPartsLength = fs.split(rootDir).length;
+  const projectDirs = new Set<FsPath>();
+
+  for (const reachedPath of reachedPaths) {
+    const path = toFsPath(fsPathFromEnginePath(rootDir, reachedPath));
+    if (!path.startsWith(rootDir)) {
+      throw new Error(`file ${path} is outside of root directory: ${rootDir}`);
+    }
+    if (fs.getParent(path) === rootDir) {
+      return [rootDir];
+    }
+
+    const projectDirPart = fs.split(path)[rootDirPartsLength];
+    if (!projectDirPart) {
+      throw new Error(`could not derive project directory for ${path}`);
+    }
+    projectDirs.add(toFsPath(fs.join(rootDir, projectDirPart)));
+  }
+
+  return Array.from(projectDirs);
+}
+
+function engineModulePathsFromMap(
+  modulePathMap: ModulePathMap,
+  rootDir: FsPath,
+): EngineModulePath[] {
+  return Object.entries(modulePathMap).flatMap(
+    ([absolutePath, rawModulePathInfo]) => {
+      const path = relativeEnginePath(rootDir, toFsPath(absolutePath));
+      if (path === '.') {
+        return [];
+      }
+      const modulePathInfo =
+        typeof rawModulePathInfo === 'boolean'
+          ? { hasBarrel: rawModulePathInfo }
+          : rawModulePathInfo;
+      return [
+        {
+          path,
+          isBarrel: modulePathInfo.hasBarrel,
+          ...(modulePathInfo.exports === undefined
+            ? {}
+            : { exports: modulePathInfo.exports }),
+        },
+      ];
+    },
+  );
+}
+
+function assertReachedFilesMatchOutput(
+  reachedPaths: string[],
+  output: EngineOutput,
+): void {
+  const reached = new Set(reachedPaths);
+  const outputPaths = new Set(output.files.map(({ path }) => path));
+  if (
+    reached.size !== reachedPaths.length ||
+    outputPaths.size !== output.files.length ||
+    reached.size !== outputPaths.size ||
+    [...reached].some((path) => !outputPaths.has(path))
+  ) {
+    throw new Error(
+      'Engine reached-files result does not match project output.',
+    );
+  }
+}
+
 function resolveFilePath(file: string, fs: Fs): string {
   const absolutePath = fs.isAbsolute(file) ? file : fs.join(fs.cwd(), file);
   return fs.join(absolutePath);
@@ -319,37 +509,15 @@ function createProjectValidation(): ProjectValidation {
   };
 }
 
-function tryRunEngineChecksForProject(
-  entryFile: string,
-  projectInfo: ProjectInfo,
+function createEngineProjectValidation(
+  output: EngineOutput,
   fileInfoPaths: FsPath[],
+  projectInfo: ResolvedProjectConfig,
   fs: Fs,
-): ProjectValidation | undefined {
-  if (process.env['SHERIFF_ENGINE'] !== '1' || fileInfoPaths.length === 0) {
-    return undefined;
-  }
-
-  try {
-    const output = runEngineProject(
-      buildEngineProjectInput(projectInfo, entryFile),
-    );
-    if (!output) {
-      return undefined;
-    }
-
-    const validation = createProjectValidation();
-    applyEngineChecksForFiles(
-      output,
-      fileInfoPaths,
-      projectInfo,
-      validation,
-      fs,
-    );
-    return validation;
-  } catch (error) {
-    logEngineFallback(error);
-    return undefined;
-  }
+): ProjectValidation {
+  const validation = createProjectValidation();
+  applyEngineChecksForFiles(output, fileInfoPaths, projectInfo, validation, fs);
+  return validation;
 }
 
 type EngineViolationsForFile = {
@@ -361,31 +529,37 @@ type EngineViolationsForFile = {
 function applyEngineChecksForFiles(
   output: EngineOutput,
   fileInfoPaths: FsPath[],
-  projectInfo: ProjectInfo,
+  projectInfo: ResolvedProjectConfig,
   projectValidation: ProjectValidation,
   fs: Fs,
 ): void {
   const violationsByFile = indexEngineViolations(output);
-  assertEngineViolationFilesAreKnown(violationsByFile, projectInfo);
+  assertEngineViolationFilesAreKnown(violationsByFile, output.files);
+  const filesByPath = new Map(output.files.map((file) => [file.path, file]));
 
   for (const fileInfoPath of fileInfoPaths) {
-    const violations = violationsByFile.get(
-      relativeEnginePath(projectInfo.rootDir, fileInfoPath),
-    ) ?? { dependency: [], encapsulation: [], external: [] };
-    const fileInfo = projectInfo.getFileInfo(fileInfoPath);
+    const enginePath = relativeEnginePath(projectInfo.rootDir, fileInfoPath);
+    const file = filesByPath.get(enginePath);
+    if (!file) {
+      throw new Error(`Engine result omitted reached file ${enginePath}.`);
+    }
+    const violations = violationsByFile.get(enginePath) ?? {
+      dependency: [],
+      encapsulation: [],
+      external: [],
+    };
     const encapsulations = orderEngineEncapsulations(
       violations.encapsulation,
-      fileInfo.importEdges,
-      projectInfo.rootDir,
+      file,
     );
     const dependencyRuleViolations = orderEngineDependencyViolations(
       violations.dependency,
-      fileInfo.importEdges,
+      file,
       projectInfo,
     );
     const externalRuleViolations = orderEngineExternalViolations(
       violations.external,
-      fileInfo.getExternalLibraries(),
+      file,
     );
     projectValidation.encapsulations = encapsulations;
     projectValidation.dependencyRuleViolations = dependencyRuleViolations;
@@ -441,13 +615,9 @@ function indexEngineViolations(
 
 function assertEngineViolationFilesAreKnown(
   violationsByFile: Map<string, EngineViolationsForFile>,
-  projectInfo: ProjectInfo,
+  files: EngineFile[],
 ): void {
-  const knownFiles = new Set(
-    [...traverseFileInfo(projectInfo.fileInfo)].map(({ fileInfo }) =>
-      relativeEnginePath(projectInfo.rootDir, fileInfo.path),
-    ),
-  );
+  const knownFiles = new Set(files.map(({ path }) => path));
   for (const file of violationsByFile.keys()) {
     if (!knownFiles.has(file)) {
       throw new Error(`Engine returned a violation for unknown file ${file}.`);
@@ -457,48 +627,39 @@ function assertEngineViolationFilesAreKnown(
 
 function orderEngineEncapsulations(
   violations: EngineEncapsulationViolation[],
-  importEdges: ReturnType<ProjectInfo['getFileInfo']>['importEdges'],
-  rootDir: FsPath,
+  file: EngineFile,
 ): string[] {
-  const unmatched = new Set(violations);
   const encapsulations: Record<string, true> = {};
-
-  for (const edge of importEdges) {
-    const violation = [...unmatched].find(
-      (candidate) =>
-        candidate.rawImport === edge.rawImport &&
-        candidate.toFilePath ===
-          relativeEnginePath(rootDir, edge.importedFileInfo.path),
-    );
-    if (violation) {
-      unmatched.delete(violation);
-      encapsulations[edge.rawImport] = true;
-    }
+  for (const violation of orderByImports(
+    violations,
+    file,
+    'module',
+    'encapsulation',
+    (candidate, importInfo) =>
+      candidate.rawImport === importInfo.raw &&
+      (importInfo.resolvedPath === undefined ||
+        candidate.toFilePath === importInfo.resolvedPath),
+  )) {
+    encapsulations[violation.rawImport] = true;
   }
-  assertNoUnmatchedEngineViolations(unmatched.size, 'encapsulation');
   return Object.keys(encapsulations);
 }
 
 function orderEngineDependencyViolations(
   violations: EngineDependencyViolation[],
-  importEdges: ReturnType<ProjectInfo['getFileInfo']>['importEdges'],
-  projectInfo: ProjectInfo,
+  file: EngineFile,
+  projectInfo: ResolvedProjectConfig,
 ): DependencyRuleViolation[] {
-  const remaining = [...violations];
-  const ordered: EngineDependencyViolation[] = [];
-
-  for (const edge of importEdges) {
-    const index = remaining.findIndex(
-      (candidate) =>
-        candidate.rawImport === edge.rawImport &&
-        candidate.toFilePath ===
-          relativeEnginePath(projectInfo.rootDir, edge.importedFileInfo.path),
-    );
-    if (index !== -1) {
-      ordered.push(remaining.splice(index, 1)[0]);
-    }
-  }
-  assertNoUnmatchedEngineViolations(remaining.length, 'dependency');
+  const ordered = orderByImports(
+    violations,
+    file,
+    'module',
+    'dependency',
+    (candidate, importInfo) =>
+      candidate.rawImport === importInfo.raw &&
+      (importInfo.resolvedPath === undefined ||
+        candidate.toFilePath === importInfo.resolvedPath),
+  );
 
   return ordered.map((violation) => {
     const toModulePath = toFsPath(
@@ -534,20 +695,42 @@ function orderEngineDependencyViolations(
 
 function orderEngineExternalViolations(
   violations: EngineExternalViolation[],
-  externalLibraries: readonly string[],
+  file: EngineFile,
 ): EngineExternalViolation[] {
-  const remaining = [...violations];
-  const ordered: EngineExternalViolation[] = [];
+  return orderByImports(
+    violations,
+    file,
+    'external',
+    'external',
+    (candidate, importInfo) => candidate.externalLibrary === importInfo.raw,
+  );
+}
 
-  for (const externalLibrary of externalLibraries) {
-    const index = remaining.findIndex(
-      (candidate) => candidate.externalLibrary === externalLibrary,
+function orderByImports<Violation>(
+  violations: Violation[],
+  file: EngineFile,
+  kind: EngineFile['imports'][number]['kind'],
+  category: string,
+  matches: (
+    violation: Violation,
+    importInfo: EngineFile['imports'][number],
+  ) => boolean,
+): Violation[] {
+  const remaining = [...violations];
+  const ordered: Violation[] = [];
+
+  for (const importInfo of file.imports) {
+    if (importInfo.kind !== kind) {
+      continue;
+    }
+    const index = remaining.findIndex((violation) =>
+      matches(violation, importInfo),
     );
     if (index !== -1) {
       ordered.push(remaining.splice(index, 1)[0]);
     }
   }
-  assertNoUnmatchedEngineViolations(remaining.length, 'external');
+  assertNoUnmatchedEngineViolations(remaining.length, category);
   return ordered;
 }
 
@@ -625,7 +808,12 @@ function runChecksForFile(
   return true;
 }
 
-function logAppliedConfig(projectInfo: ProjectInfo): void {
+function logAppliedConfig(
+  projectInfo: Pick<
+    ProjectInfo,
+    'usesMultipleConfigs' | 'configFilePath' | 'rootDir'
+  >,
+): void {
   if (!projectInfo.usesMultipleConfigs || !projectInfo.configFilePath) {
     return;
   }

@@ -575,6 +575,17 @@ class ProjectHandle {
     return this.latestResult;
   }
 
+  setModulePaths(modulePaths) {
+    const serialized = JSON.stringify({
+      schemaVersion: 1,
+      modulePaths,
+    });
+    this.latestResult = this.settle(
+      this.nativeHandle.setModulePaths(serialized),
+    );
+    return this.latestResult;
+  }
+
   setOverlay(path, content) {
     this.latestResult = this.settle(
       this.nativeHandle.setOverlay(path, content),

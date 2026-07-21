@@ -5,6 +5,14 @@ expressions and resource-limit violations are returned as structured engine erro
 boundary never intentionally panics for user configuration. Tag matcher regular expressions use
 JavaScript's first, leftmost match and only match when that first match is the complete segment.
 
+## Rollback / opt-in
+
+The Rust engine is opt-in: set `SHERIFF_ENGINE=1` to enable it. With the variable unset, Sheriff
+uses the TypeScript implementation by default. Unsupported configuration, an impure callback, a
+missing native package, or any engine error automatically falls back to TypeScript for the affected
+project or request. Set `SHERIFF_ENGINE_DEBUG=1` to print each fallback and its reason. To fully
+disable the engine, unset `SHERIFF_ENGINE`; no rebuild is required.
+
 ## Native packaging
 
 Run the local build from the repository root:

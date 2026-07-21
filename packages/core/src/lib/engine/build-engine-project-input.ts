@@ -1,9 +1,11 @@
 import type {
+  EngineModulePath,
   EngineInput,
   ProjectHandleInput,
 } from '@lambda-solutions/sheriff-engine';
 import getFs from '../fs/getFs';
 import type { ProjectInfo } from '../main/init';
+import type { ResolvedProjectConfig } from '../main/resolve-project-config';
 
 /**
  * Builds the native engine input for an already initialized Sheriff project.
@@ -12,23 +14,6 @@ export function buildEngineProjectInput(
   projectInfo: ProjectInfo,
   entryFile: string,
 ): ProjectHandleInput {
-  const fs = getFs();
-  const { config } = projectInfo;
-  const tsConfigPath = projectInfo.tsData.sourceConfigPaths[0];
-
-  if (!tsConfigPath) {
-    throw new Error('Cannot run the Sheriff engine without a tsconfig path.');
-  }
-
-  assertOwnKeyedEngineConfig(config.modules, 'config.modules', true);
-  assertOwnKeyedEngineConfig(config.depRules, 'config.depRules', false);
-  assertOwnKeyedEngineConfig(config.denyRules, 'config.denyRules', false);
-  assertOwnKeyedEngineConfig(
-    config.externalRules,
-    'config.externalRules',
-    false,
-  );
-
   const modulePaths = projectInfo.modules
     .map((moduleInfo) => ({
       moduleInfo,
@@ -42,6 +27,32 @@ export function buildEngineProjectInput(
         ? {}
         : { exports: moduleInfo.exportedFilePatterns }),
     }));
+
+  return buildEngineProjectInputFromConfig(projectInfo, entryFile, modulePaths);
+}
+
+/** Builds an engine input from configuration only, before TS graph traversal. */
+export function buildEngineProjectInputFromConfig(
+  projectConfig: ResolvedProjectConfig,
+  entryFile: string,
+  modulePaths: EngineModulePath[],
+): ProjectHandleInput {
+  const fs = getFs();
+  const { config } = projectConfig;
+  const tsConfigPath = projectConfig.tsData.sourceConfigPaths[0];
+
+  if (!tsConfigPath) {
+    throw new Error('Cannot run the Sheriff engine without a tsconfig path.');
+  }
+
+  assertOwnKeyedEngineConfig(config.modules, 'config.modules', true);
+  assertOwnKeyedEngineConfig(config.depRules, 'config.depRules', false);
+  assertOwnKeyedEngineConfig(config.denyRules, 'config.denyRules', false);
+  assertOwnKeyedEngineConfig(
+    config.externalRules,
+    'config.externalRules',
+    false,
+  );
 
   return {
     schemaVersion: 1,
@@ -60,8 +71,8 @@ export function buildEngineProjectInput(
     enableBarrelLess: config.enableBarrelLess ?? false,
     excludeRoot: config.excludeRoot ?? false,
     barrelFileName: config.barrelFileName ?? 'index.ts',
-    ...(projectInfo.configFilePath
-      ? { sheriffConfigPaths: [projectInfo.configFilePath] }
+    ...(projectConfig.configFilePath
+      ? { sheriffConfigPaths: [projectConfig.configFilePath] }
       : {}),
   };
 }
