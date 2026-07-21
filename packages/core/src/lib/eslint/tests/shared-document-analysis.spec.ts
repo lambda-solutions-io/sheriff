@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vitest } from 'vitest';
+import { describe, expect, it, vitest } from 'vitest';
 import * as fileInfoGenerator from '../../file-info/generate-unassigned-file-info';
 import { sheriffConfig } from '../../test/project-configurator';
 import { createProject } from '../../test/project-creator';
@@ -7,7 +7,6 @@ import { toFsPath } from '../../file-info/fs-path';
 import { tsConfig } from '../../test/fixtures/ts-config';
 import { violatesDependencyRule } from '../violates-dependency-rule';
 import { violatesEncapsulationRule } from '../violates-encapsulation-rule';
-import { clearSharedProjectInfo } from '../shared-project-info';
 import { noDependencies, sameTag } from '@lambda-solutions/sheriff-core';
 
 /**
@@ -15,7 +14,7 @@ import { noDependencies, sameTag } from '@lambda-solutions/sheriff-core';
  * that the expensive `init()` happens once per file instead of once per
  * (file, rule) pair, without letting a stale result outlive its content.
  */
-describe('shared project info across ESLint rules', () => {
+describe('shared document analysis across ESLint rules', () => {
   const entryFile = '/project/src/customers/feature/index.ts';
 
   const createTestProject = () =>
@@ -51,10 +50,6 @@ describe('shared project info across ESLint rules', () => {
         },
       },
     });
-
-  beforeEach(() => {
-    clearSharedProjectInfo();
-  });
 
   it('should parse the project once when two rules check the same file', () => {
     createTestProject();
