@@ -823,8 +823,16 @@ resolution + analysis):
   before serialization; **(P1)** the compiled/`dist` CLI could not resolve the
   private engine package and silently used TS — the dev-fallback resolver is now
   guarded, with true compiled-layout resolution deferred to R5.2 (below).
-- **R5.1 — ESLint rule cutover** (route the 3 rules through the engine behind the
-  same flag, honouring `fallback: true`; single-file `traverse: false` scope).
+- **R5.1 — ESLint cutover via the daemon-hosted `ProjectHandle`** (owner decision
+  2026-07-21). The in-process `lint-document` path stays on TS: it uses
+  `init(traverse: false)` (entry file + direct imports only), whose `modulePaths`
+  are an incomplete subset, so a per-lint stateless `ProjectHandle` (full
+  entry-driven traversal) would be both incorrect *and* slower than today's cached
+  TS path. Instead the DAEMON hosts one persistent incremental `ProjectHandle` (R4)
+  per project and serves the ESLint daemon-bridge from it (`applyChanges` on file
+  events, `setOverlay` for buffers), behind `SHERIFF_ENGINE=1`, falling back to the
+  TS daemon path on `fallback: true` / unsupported config / any engine error.
+  Rule message text stays byte-identical or it falls back.
 - **R5.2 — packaging** (`@napi-rs/cli`, per-platform `optionalDependencies`,
   install test without a Rust toolchain). **Exit criterion added by R5.0:** the
   engine must resolve from the **compiled/published `core` layout**, verified by a
