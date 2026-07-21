@@ -197,8 +197,9 @@ export interface ProjectHandleInput
   tsConfigPath: string;
   ignoreFileExtensions?: string[];
   /**
-   * Evaluated Sheriff config inputs to stamp. Relative paths are resolved once
-   * against process.cwd(); changes and overlays require a replacement handle.
+   * Evaluated Sheriff config inputs. Relative paths are resolved once against
+   * process.cwd(); changes and overlays for these paths are rejected and
+   * require a replacement handle built from the re-evaluated config.
    */
   sheriffConfigPaths?: string[];
   /** Continue for differential measurement when the resolver fallback gate fires. */

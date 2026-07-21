@@ -1,8 +1,9 @@
 use std::cmp::Ordering;
-use std::collections::{HashSet, VecDeque};
-use std::fs;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+
+#[cfg(test)]
+use std::fs;
 
 use napi_derive::napi;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -15,9 +16,7 @@ use crate::input::{
     InputModulePath, OrderedMap, RuleValue,
 };
 use crate::paths::{PathId, PathInterner};
-use crate::resolve::{
-    ImportKind as ResolvedImportKind, ResolutionContextSnapshot, ResolveSession, ResolvedImport,
-};
+use crate::resolve::{ImportKind as ResolvedImportKind, ResolveSession, ResolvedImport};
 
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,7 +29,9 @@ struct ProjectHandleInput {
     #[serde(default)]
     shadow_mode: bool,
     /// Paths whose evaluated contents produced the Node-supplied Sheriff
-    /// configuration. Rust stamps these but cannot re-evaluate executable TS.
+    /// configuration. A change or overlay event for one of these fails the
+    /// call: Rust cannot re-evaluate executable TS, so the caller must
+    /// construct a replacement handle with the freshly evaluated config.
     #[serde(default)]
     sheriff_config_paths: Vec<String>,
     #[serde(default)]
@@ -151,22 +152,12 @@ enum ViolationCategory {
     External,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct DependencyStamp {
-    exists: bool,
-    length: u64,
-    modified_nanos: u128,
-    content_hash: Option<u64>,
-    symlink_target: Option<PathBuf>,
-}
-
 /// Persistent R4 project state. All public methods exchange JSON strings so
 /// the existing hostile-input limits and structured-error contract stay at the
 /// napi boundary, while the graph itself never crosses that boundary.
 #[napi]
 pub struct ProjectHandle {
     input: Option<ProjectHandleInput>,
-    input_hash: u64,
     root_dir: String,
     entry_file: Option<PathId>,
     interner: PathInterner,
@@ -178,10 +169,7 @@ pub struct ProjectHandle {
     module_tags: FxHashMap<PathId, Vec<String>>,
     file_violations: FxHashMap<PathId, CachedFileViolations>,
     analysis_scope: AnalysisScope,
-    resolution_context: Option<ResolutionContextSnapshot>,
     source_config_paths: Vec<PathBuf>,
-    package_manifest_paths: Vec<PathBuf>,
-    dependency_stamps: FxHashMap<PathBuf, DependencyStamp>,
     overlays: FxHashMap<PathBuf, String>,
     tag_callback_cache: FxHashMap<String, Vec<String>>,
     rule_callback_cache: FxHashMap<String, bool>,
@@ -272,7 +260,6 @@ impl ProjectHandle {
     fn empty() -> Self {
         Self {
             input: None,
-            input_hash: 0,
             root_dir: String::new(),
             entry_file: None,
             interner: PathInterner::default(),
@@ -284,10 +271,7 @@ impl ProjectHandle {
             module_tags: FxHashMap::default(),
             file_violations: FxHashMap::default(),
             analysis_scope: AnalysisScope::Full,
-            resolution_context: None,
             source_config_paths: Vec::new(),
-            package_manifest_paths: Vec::new(),
-            dependency_stamps: FxHashMap::default(),
             overlays: FxHashMap::default(),
             tag_callback_cache: FxHashMap::default(),
             rule_callback_cache: FxHashMap::default(),
@@ -327,7 +311,6 @@ impl ProjectHandle {
         }
         validate_handle_input(&input)?;
         normalize_handle_paths(&mut input)?;
-        self.input_hash = hash_value(input_json);
         self.input = Some(input);
         self.rebuild_graph()?;
         if self.input_ref()?.module_paths.is_empty() {
@@ -480,9 +463,6 @@ impl ProjectHandle {
             let mut patch_rebuilt = false;
             for path in modified_sources {
                 patch_rebuilt |= self.patch_source(&path)?;
-                let overlay = self.overlays.get(&path).map(String::as_str);
-                self.dependency_stamps
-                    .insert(path.clone(), dependency_stamp(&path, overlay));
             }
             if patch_rebuilt {
                 self.analysis_scope = AnalysisScope::Full;
@@ -576,7 +556,6 @@ impl ProjectHandle {
         )
         .map_err(|error| error.to_string())?;
         self.root_dir = session.root_dir().to_string_lossy().into_owned();
-        self.resolution_context = Some(session.context_snapshot());
         self.interner = PathInterner::default();
         self.forward.clear();
         self.file_paths.clear();
@@ -614,10 +593,8 @@ impl ProjectHandle {
         }
         self.root_dir = summary.root_dir.to_string_lossy().into_owned();
         self.source_config_paths = summary.source_config_paths;
-        self.package_manifest_paths = summary.package_manifest_paths;
         self.refresh_reverse_edges();
         self.refresh_modules()?;
-        self.refresh_dependency_stamps()?;
         Ok(())
     }
 
@@ -635,7 +612,6 @@ impl ProjectHandle {
             &self.overlays,
         )
         .map_err(|error| error.to_string())?;
-        self.resolution_context = Some(session.context_snapshot());
         let mut queue = VecDeque::from([path.to_path_buf()]);
         let mut visited = FxHashSet::default();
         while let Some(source_path) = queue.pop_front() {
@@ -671,10 +647,6 @@ impl ProjectHandle {
             return Ok(true);
         }
         self.source_config_paths = summary.source_config_paths;
-        self.package_manifest_paths
-            .extend(summary.package_manifest_paths);
-        self.package_manifest_paths.sort();
-        self.package_manifest_paths.dedup();
         Ok(false)
     }
 
@@ -1243,61 +1215,6 @@ impl ProjectHandle {
         Ok(())
     }
 
-    fn refresh_dependency_stamps(&mut self) -> Result<(), String> {
-        self.dependency_stamps.clear();
-        let mut dependencies = HashSet::new();
-        dependencies.extend(self.source_config_paths.iter().cloned());
-        if let Some(context) = &self.resolution_context {
-            dependencies.insert(context.root_dir.clone());
-            dependencies.extend(context.source_config_paths.iter().cloned());
-            dependencies.extend(context.base_url.iter().cloned());
-            dependencies.extend(context.paths.iter().map(|mapping| mapping.target.clone()));
-            // The mode is not a filesystem dependency, but retaining it in the
-            // snapshot is what makes a recreated resolver context comparable.
-            let _resolution_mode = context.module_resolution.as_deref();
-        }
-        dependencies.extend(self.package_manifest_paths.iter().cloned());
-        dependencies.insert(self.absolute_path(&self.input_ref()?.ts_config_path)?);
-        for path in &self.input_ref()?.sheriff_config_paths {
-            dependencies.insert(self.absolute_path(path)?);
-        }
-        for file in self.reached_files() {
-            let path = self.root_path().join(self.interner.text(file));
-            dependencies.insert(path.clone());
-            let mut current = path.parent();
-            let mut found_package = false;
-            while let Some(directory) = current {
-                dependencies.insert(directory.to_path_buf());
-                let package_json = directory.join("package.json");
-                if !found_package && package_json.exists() {
-                    dependencies.insert(package_json);
-                    found_package = true;
-                }
-                if directory == self.root_path() {
-                    break;
-                }
-                current = directory.parent();
-            }
-            for ancestor in path.ancestors() {
-                if fs::symlink_metadata(ancestor)
-                    .is_ok_and(|metadata| metadata.file_type().is_symlink())
-                {
-                    dependencies.insert(ancestor.to_path_buf());
-                }
-            }
-        }
-        for path in dependencies {
-            let overlay = self.overlays.get(&path).map(String::as_str);
-            self.dependency_stamps
-                .insert(path.clone(), dependency_stamp(&path, overlay));
-        }
-        // The evaluated sheriff config is executable Node state. Its serialized
-        // input hash is tracked separately and a config event requires a fresh
-        // handle rather than pretending Rust can re-evaluate it.
-        let _ = self.input_hash;
-        Ok(())
-    }
-
     fn is_wide_dependency(&self, path: &Path) -> bool {
         path.file_name()
             .is_some_and(|name| name == "package.json" || name == "tsconfig.json")
@@ -1393,49 +1310,6 @@ fn sort_json_records(records: &mut [Value]) -> Result<(), String> {
         }
     });
     serialization_error.map_or(Ok(()), Err)
-}
-
-fn dependency_stamp(path: &Path, overlay: Option<&str>) -> DependencyStamp {
-    let metadata = fs::symlink_metadata(path).ok();
-    let modified_nanos = metadata
-        .as_ref()
-        .and_then(|metadata| metadata.modified().ok())
-        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |duration| duration.as_nanos());
-    let content_hash = overlay.map(hash_value).or_else(|| {
-        metadata
-            .as_ref()
-            .filter(|metadata| metadata.is_dir())
-            .and_then(|_| directory_hash(path))
-    });
-    DependencyStamp {
-        exists: metadata.is_some() || overlay.is_some(),
-        length: metadata.as_ref().map_or(0, fs::Metadata::len),
-        modified_nanos,
-        content_hash,
-        symlink_target: metadata
-            .as_ref()
-            .filter(|metadata| metadata.file_type().is_symlink())
-            .and_then(|_| fs::read_link(path).ok()),
-    }
-}
-
-fn directory_hash(path: &Path) -> Option<u64> {
-    let mut entries = fs::read_dir(path)
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|entry| entry.file_name())
-        .collect::<Vec<_>>();
-    entries.sort();
-    let mut hasher = DefaultHasher::new();
-    entries.hash(&mut hasher);
-    Some(hasher.finish())
-}
-
-fn hash_value(value: impl Hash) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    value.hash(&mut hasher);
-    hasher.finish()
 }
 
 fn normalize_lexically(path: &Path) -> PathBuf {

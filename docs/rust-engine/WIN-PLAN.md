@@ -164,6 +164,30 @@ Add a `(containing dir, specifier) → resolution` cache in `ResolveSession`
 repeats. Validation: instrument hit rate (expect ~70%); output unchanged.
 
 ### P4 — drop the TypeScript compiler from the fast path (~100 ms, low risk)
+
+**Scoping verified.** On the whole engine path, `projectConfig.tsData` is read in
+exactly ONE place: `build-engine-project-input.ts:42`,
+`projectConfig.tsData.sourceConfigPaths[0]`. Everything else uses only
+`projectConfig.rootDir` and `projectConfig.config` (`verify.ts:324,327,330,410,
+414,415,417`). So the full `ts.parseJsonConfigFileContent` + `ts.sys` object
+(`ts-data.ts:10-14`) is constructed — pulling in the TypeScript compiler, ~100 ms —
+to obtain **a single string**. All three values the engine path actually needs
+(`rootDir`, `config`, the tsconfig path) are already computed by Rust in
+`ResolveSession`. This makes P4 substantially safer than "replace config
+resolution": it is a narrow dependency inversion at one call site, with the TS
+loader retained for the fallback path.
+
+**But it is NOT as simple as skipping `parseJsonConfigFileContent`.** I initially
+assumed the expensive TS call could be dropped while keeping the cheap
+`getTsConfigContext(tsConfigPath)` that actually produces `sourceConfigPaths`
+(`generate-ts-data.ts:35`). That is wrong: `get-ts-config-context.ts:2,12` itself
+imports `typescript` (`import * as ts` and `import { sys }`), so merely reordering
+does not avoid the ~96–103 ms compiler load (measured, 3 runs). Winning P4 requires
+the engine path to obtain the tsconfig path **without importing the `typescript`
+module at all** — i.e. take it from Rust (`ResolveSession` already resolves the
+full `extends` chain and reports `source_config_paths`) and keep the TS-importing
+module behind a lazy `require` reachable only on the fallback path. Treat P4 as a
+module-graph change (what gets imported at load time), not a call-site tweak.
 `resolveProjectConfig` (`main/resolve-project-config.ts:26`) calls `generateTsData`,
 which loads the TS compiler purely to parse tsconfig — work Rust already does in
 `ResolveSession`. `require('typescript')` costs ~120 ms of the ~140 ms Node floor

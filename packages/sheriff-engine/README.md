@@ -103,8 +103,10 @@ wildcard partials, and prerelease-inclusive matching). No dependency was added.
 
 `ProjectHandle` starts at one absolute `entryFile`, resolves its transitive
 graph, and retains interned paths, forward and reverse edges, module assignment,
-tags, resolution context, callback decisions, overlays, and dependency stamps in
-Rust. `applyChanges` accepts a versioned batch of created, modified, deleted,
+tags, callback decisions, and overlays in Rust. Staleness is decided by the
+change events the caller supplies (and, in the daemon, by its own TypeScript
+dependency stamps) — the handle does not stamp the filesystem itself.
+`applyChanges` accepts a versioned batch of created, modified, deleted,
 renamed, directory, and overlay events. A content-only edit patches that file's
 edges and reverse-edge entries; create/delete/rename, tsconfig, package manifest,
 and directory events deliberately rebuild the reached graph.

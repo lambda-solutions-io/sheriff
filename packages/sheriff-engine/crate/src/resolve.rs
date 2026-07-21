@@ -495,17 +495,7 @@ pub(crate) struct ResolveSession {
 pub(crate) struct ResolveSessionSummary {
     pub root_dir: PathBuf,
     pub source_config_paths: Vec<PathBuf>,
-    pub package_manifest_paths: Vec<PathBuf>,
     pub fallback_reasons: Vec<String>,
-}
-
-#[derive(Clone)]
-pub(crate) struct ResolutionContextSnapshot {
-    pub paths: Vec<MaterializedPath>,
-    pub root_dir: PathBuf,
-    pub base_url: Option<PathBuf>,
-    pub module_resolution: Option<String>,
-    pub source_config_paths: Vec<PathBuf>,
 }
 
 impl ResolveSession {
@@ -539,16 +529,6 @@ impl ResolveSession {
 
     pub(crate) fn root_dir(&self) -> &Path {
         &self.context.root_dir
-    }
-
-    pub(crate) fn context_snapshot(&self) -> ResolutionContextSnapshot {
-        ResolutionContextSnapshot {
-            paths: self.context.paths.clone(),
-            root_dir: self.context.root_dir.clone(),
-            base_url: self.context.base_url.clone(),
-            module_resolution: self.context.module_resolution.clone(),
-            source_config_paths: self.context.source_config_paths.clone(),
-        }
     }
 
     pub(crate) fn resolve_file(
@@ -600,13 +580,6 @@ impl ResolveSession {
     }
 
     pub(crate) fn finish(mut self) -> ResolveSessionSummary {
-        let mut package_manifest_paths = self
-            .reached_packages
-            .iter()
-            .filter_map(|package| package.manifest_path.clone())
-            .collect::<Vec<_>>();
-        package_manifest_paths.sort();
-        package_manifest_paths.dedup();
         self.context
             .fallback_reasons
             .extend(types_versions_fallback_reasons(
@@ -619,7 +592,6 @@ impl ResolveSession {
         ResolveSessionSummary {
             root_dir: self.context.root_dir,
             source_config_paths: self.context.source_config_paths,
-            package_manifest_paths,
             fallback_reasons: self.context.fallback_reasons,
         }
     }
