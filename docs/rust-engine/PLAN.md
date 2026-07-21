@@ -138,8 +138,10 @@ node tools/perf/run-bench.mjs
 | R3.1: review round (4 parity defects) | **done** | `78ced96` |
 | R4: incremental ProjectHandle | **done** | `d467a60` |
 | R4.1: review round (5 P0 divergences) | **done** | `8f33c92` |
-| R5.0: CLI `verify` cutover + review round | **done** | `3109122`, +fix round |
-| R5.1–R5.3: ESLint cutover, packaging, benchmarks | not started | |
+| R5.0: CLI `verify` cutover + review round | **done** | `3109122`, `2d147e9` |
+| R5.1: daemon ProjectHandle cutover + review round | **done** | `2dcb1e4`, `90c5c6c` |
+| R5.2: `@napi-rs/cli` packaging + review round | **done** | `8b296d7`, `55c090a` |
+| R5.3 + R5.4: benchmarks, two-phase discovery | **done** | `881930d` |
 
 ---
 
@@ -838,15 +840,49 @@ resolution + analysis):
   engine must resolve from the **compiled/published `core` layout**, verified by a
   built-CLI integration test that runs `verify` under `SHERIFF_ENGINE=1` +
   `SHERIFF_ENGINE_DEBUG=1` and asserts **zero fallback logs** (R5.0 deferred this
-  because the engine is not yet packaged).
-- **R5.3 — benchmarks + real-world fallback-rate confirmation + final review round.**
+  because the engine is not yet packaged). **Done** — migrated to `@napi-rs/cli`
+  (napi owns the native build and the generated per-platform binding loader; the
+  hand-written `index.js` boundary and `index.d.ts` types are preserved, only the
+  loader's require path changed), seven per-platform `optionalDependencies`,
+  `private: false` + `exports`, a tag-gated prebuild/publish workflow, and the
+  built-CLI zero-fallback test above. Review round fixed **(P0)** napi's generated
+  musl detection returning "definitely GNU" for an inconclusive `process.report`,
+  which made the `ldd` probe unreachable and could load the wrong Linux artifact —
+  now returns `null`, re-applied after every regeneration by an asserted patch in
+  `build-native.mjs`, plus **(P1×3)** missing-vs-load-failed classification, a
+  version guard that ignored core's engine pin, and untagged publishing.
+- **R5.3 — benchmarks + real-world fallback-rate confirmation. Done.**
+  `tools/perf/run-engine-bench.mjs` measures TS vs engine and **hard-fails on any
+  fallback**, so a benchmark can never silently measure the TS path (the R2.1
+  failure mode). It also shims the engine into `dist/node_modules`; without that
+  the compiled CLI falls back 100% and the numbers would be meaningless. Real
+  fixtures (`nextjs-i`, `angular-v-multi` ×2) resolve through Rust with **zero
+  fallback**. Rollback/opt-in documented in the engine README.
+- **R5.4 — two-phase discovery. Done (`881930d`), and it is a NEGATIVE result
+  worth keeping.** R5.3 showed cold engine verify was *slower* than TS; profiling
+  found the cause was double work (full TS `init()` for modules/ordering, then a
+  full Rust pass). R5.4 removes it: Rust gained `setModulePaths` (refresh modules +
+  re-analyse without re-resolving), Node gained a `parseProject`-free config
+  resolver, and verify now derives modules from Rust's reached files (reusing the
+  unchanged barrel finders, so barrels stay byte-identical) and sources ordering
+  from `EngineOutput`. **The double work is gone, but cold verify still does not
+  win**: 2.1k TS ~420ms vs engine ~498ms; 10.5k TS ~1650ms vs engine ~1697ms
+  (zero fallback, identical output, 10,512 files reached). Warm Rust work is only
+  ~160ms, so the advantage is consumed by per-invocation costs a one-shot CLI
+  cannot amortize — marshalling a 10k-file JSON result and Node-side ordering.
+  **Conclusion: the engine's win is the warm incremental path (~75ms single-file
+  update vs a ~1650ms full re-verify), not cold one-shot `verify`.**
 
 ---
 
 ## Open questions for the owner
 
 1. When may the engine become the **default** (rather than opt-in) — after R5
-   benchmarks, or only after a release cycle of opt-in soak?
+   benchmarks, or only after a release cycle of opt-in soak? **R5.3/R5.4 data
+   bears on this**: cold one-shot `verify` is at parity/slightly behind TS, so
+   defaulting it buys nothing there; the case for defaulting is the daemon/watch
+   path. Note the daemon (`engine-lint-host.ts`) still does the same double work
+   R5.4 removed from `verify` and could adopt `setModulePaths` next.
 2. ~~Is the "callbacks must be pure" contract change acceptable in a minor
    release, or does it need a major?~~ **Resolved 2026-07-20**: detect impure
    callbacks and route them to a compatibility path, so no observable break and
