@@ -1,0 +1,24 @@
+{
+  "name": "@lambda-solutions/sheriff-engine-win32-x64-msvc",
+  "version": "0.0.0",
+  "cpu": [
+    "x64"
+  ],
+  "main": "sheriff-engine.win32-x64-msvc.node",
+  "files": [
+    "sheriff-engine.win32-x64-msvc.node"
+  ],
+  "description": "Native Rust analysis engine for Sheriff",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/michaelbe812/sheriff",
+    "directory": "packages/sheriff-engine"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "os": [
+    "win32"
+  ]
+}

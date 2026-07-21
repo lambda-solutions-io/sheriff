@@ -1,0 +1,27 @@
+{
+  "name": "@lambda-solutions/sheriff-engine-linux-x64-gnu",
+  "version": "0.0.0",
+  "cpu": [
+    "x64"
+  ],
+  "main": "sheriff-engine.linux-x64-gnu.node",
+  "files": [
+    "sheriff-engine.linux-x64-gnu.node"
+  ],
+  "description": "Native Rust analysis engine for Sheriff",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/michaelbe812/sheriff",
+    "directory": "packages/sheriff-engine"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "os": [
+    "linux"
+  ],
+  "libc": [
+    "glibc"
+  ]
+}

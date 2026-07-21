@@ -461,11 +461,9 @@ const binaryPath = path.join(__dirname, 'native', binaryName);
 
 function loadNative() {
   try {
-    return require(binaryPath);
+    return require('./native/binding.js');
   } catch (error) {
-    const expectedPathIsMissing =
-      error?.code === 'MODULE_NOT_FOUND' &&
-      (error?.path === binaryPath || error?.message?.includes(binaryPath));
+    const expectedPathIsMissing = nativeBindingIsMissing(error);
     const loadError = new Error(
       expectedPathIsMissing
         ? `Sheriff native engine is unavailable for ${nativeTriple()}. ` +
@@ -478,6 +476,19 @@ function loadNative() {
       : 'SHERIFF_ENGINE_NATIVE_LOAD_FAILED';
     throw loadError;
   }
+}
+
+function nativeBindingIsMissing(error) {
+  const seen = new Set();
+  let current = error;
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    if (current.code && current.code !== 'MODULE_NOT_FOUND') {
+      return false;
+    }
+    current = current.cause;
+  }
+  return true;
 }
 
 function analyzeProject(inputJson) {

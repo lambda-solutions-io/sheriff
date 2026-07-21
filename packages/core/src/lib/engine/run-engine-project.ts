@@ -92,7 +92,7 @@ function isSourceWorktreeEngineDirectory(engineDirectory: string): boolean {
     }) &&
     hasJsonProperties(resolve(engineDirectory, 'package.json'), {
       name: enginePackageName,
-      private: true,
+      private: false,
     }) &&
     existsSync(resolve(engineDirectory, 'index.js'))
   );

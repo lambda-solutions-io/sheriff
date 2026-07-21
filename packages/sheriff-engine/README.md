@@ -5,6 +5,29 @@ expressions and resource-limit violations are returned as structured engine erro
 boundary never intentionally panics for user configuration. Tag matcher regular expressions use
 JavaScript's first, leftmost match and only match when that first match is the complete segment.
 
+## Native packaging
+
+Run the local build from the repository root:
+
+```bash
+node packages/sheriff-engine/scripts/build-native.mjs
+```
+
+This invokes `@napi-rs/cli` with Cargo offline and writes the local addon plus
+the generated raw loader to `native/`. The public `index.js` remains the
+hand-written compatibility boundary; it imports `native/binding.js`, while the
+generated `native/binding.d.ts` intentionally describes only the raw string
+JSON API. The rich public types remain in `index.d.ts`.
+
+`napi create-npm-dirs` owns the checked-in `npm/<triple>` package stubs. The
+root package declares each stub as an optional dependency at the same version,
+and the generated binding tries a local addon before its matching platform
+package. `.github/workflows/sheriff-engine-prebuilds.yml` builds all supported
+targets, runs `napi artifacts` to populate the stubs, and can publish the
+platform packages before the JavaScript wrapper package. The workflow also
+emits `SHA256SUMS`; `@napi-rs/cli` 3.7.4 has no package-checksum configuration
+of its own.
+
 ## Input limits
 
 These limits keep malformed configuration from exhausting the Node host process:

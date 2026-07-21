@@ -1,27 +1,67 @@
 {
   "name": "@lambda-solutions/sheriff-engine",
   "version": "0.0.0",
-  "private": true,
+  "private": false,
+  "description": "Native Rust analysis engine for Sheriff",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/michaelbe812/sheriff",
+    "directory": "packages/sheriff-engine"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "commonjs",
   "main": "index.js",
   "types": "index.d.ts",
   "exports": {
     ".": {
       "types": "./index.d.ts",
-      "require": "./index.js"
-    }
+      "require": "./index.js",
+      "default": "./index.js"
+    },
+    "./platform.js": "./platform.js",
+    "./package.json": "./package.json"
   },
   "files": [
     "index.js",
     "index.d.ts",
     "platform.js",
     "README.md",
-    "native"
+    "native/binding.js",
+    "native/binding.d.ts"
   ],
   "scripts": {
     "build:native": "node scripts/build-native.mjs"
   },
+  "napi": {
+    "binaryName": "sheriff-engine",
+    "packageName": "@lambda-solutions/sheriff-engine",
+    "targets": [
+      "aarch64-apple-darwin",
+      "x86_64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-gnu",
+      "aarch64-unknown-linux-musl",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "optionalDependencies": {
+    "@lambda-solutions/sheriff-engine-darwin-arm64": "0.0.0",
+    "@lambda-solutions/sheriff-engine-darwin-x64": "0.0.0",
+    "@lambda-solutions/sheriff-engine-linux-arm64-gnu": "0.0.0",
+    "@lambda-solutions/sheriff-engine-linux-arm64-musl": "0.0.0",
+    "@lambda-solutions/sheriff-engine-linux-x64-gnu": "0.0.0",
+    "@lambda-solutions/sheriff-engine-linux-x64-musl": "0.0.0",
+    "@lambda-solutions/sheriff-engine-win32-x64-msvc": "0.0.0"
+  },
   "peerDependencies": {
     "typescript": ">=4.8"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.7.4",
+    "typescript": "5.9.3"
   }
 }

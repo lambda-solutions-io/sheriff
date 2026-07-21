@@ -1,61 +1,94 @@
-import { copyFile, mkdir } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
 import path from 'node:path';
-
-const require = createRequire(import.meta.url);
-const { nativeBinaryName } = require('../platform.js');
 
 const packageDir = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
 );
-const workspaceDir = path.resolve(packageDir, '..', '..');
-
-const sourceNames = {
-  darwin: 'libsheriff_engine.dylib',
-  linux: 'libsheriff_engine.so',
-  win32: 'sheriff_engine.dll',
-};
-
-const sourceName = sourceNames[process.platform];
-if (!sourceName) {
-  throw new Error(`Unsupported native platform: ${process.platform}`);
-}
+const napiCli = path.join(
+  packageDir,
+  'node_modules',
+  '@napi-rs',
+  'cli',
+  'dist',
+  'cli.js',
+);
+const manifestPath = path.join(packageDir, 'crate', 'Cargo.toml');
+const napiPackage = JSON.parse(
+  await readFile(
+    path.join(packageDir, 'node_modules', '@napi-rs', 'cli', 'package.json'),
+    'utf8',
+  ),
+);
+const typeDefCacheKey = createHash('sha256')
+  .update(manifestPath)
+  .update(napiPackage.version)
+  .digest('hex')
+  .slice(0, 8);
+const typeDefPath = path.join(
+  packageDir,
+  '..',
+  '..',
+  'target',
+  'napi-rs',
+  `sheriff_engine-${typeDefCacheKey}`,
+  'sheriff_engine',
+);
 
 await new Promise((resolve, reject) => {
-  const cargo = spawn(
-    'cargo',
-    ['build', '--release', '--offline', '-p', 'sheriff_engine'],
+  const napi = spawn(
+    process.execPath,
+    [
+      napiCli,
+      'build',
+      '--platform',
+      '--release',
+      '--manifest-path',
+      'crate/Cargo.toml',
+      '--output-dir',
+      'native',
+      '--js',
+      'binding.js',
+      '--dts',
+      'binding.d.ts',
+      ...process.argv.slice(2),
+    ],
     {
-      cwd: workspaceDir,
-      env: { ...process.env, CARGO_NET_OFFLINE: 'true' },
+      cwd: packageDir,
+      env: {
+        ...process.env,
+        CARGO_NET_OFFLINE: 'true',
+        // napi v3 reads one JSONL file per crate. The current napi-derive v2
+        // macro still uses its legacy file env, so point it at v3's cache.
+        TYPE_DEF_TMP_PATH: typeDefPath,
+      },
       stdio: 'inherit',
     },
   );
 
-  cargo.once('error', reject);
-  cargo.once('exit', (code, signal) => {
+  napi.once('error', reject);
+  napi.once('exit', (code, signal) => {
     if (code === 0) {
       resolve();
     } else {
       reject(
         new Error(
-          `cargo build failed${signal ? ` with signal ${signal}` : ` with exit code ${code}`}`,
+          `napi build failed${signal ? ` with signal ${signal}` : ` with exit code ${code}`}`,
         ),
       );
     }
   });
 });
 
-const nativeDir = path.join(packageDir, 'native');
-// TODO(R5): publish native binaries through optional per-platform packages.
-const targetName = nativeBinaryName();
-await mkdir(nativeDir, { recursive: true });
-await copyFile(
-  path.join(workspaceDir, 'target', 'release', sourceName),
-  path.join(nativeDir, targetName),
+const bindingDtsPath = path.join(packageDir, 'native', 'binding.d.ts');
+const bindingDts = await readFile(bindingDtsPath, 'utf8');
+await writeFile(
+  bindingDtsPath,
+  // napi-derive v2 includes this prefix, while napi CLI v3 adds it itself.
+  bindingDts
+    .replace('/* eslint-disable */\n', '')
+    .replaceAll('export declare export declare ', 'export declare '),
 );
-
-console.log(`Built native/${targetName}`);

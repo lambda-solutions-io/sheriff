@@ -1,0 +1,126 @@
+name: Sheriff engine prebuilds
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the platform and wrapper packages to npm
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            triple: darwin-arm64
+            runner: macos-14
+          - target: x86_64-apple-darwin
+            triple: darwin-x64
+            runner: macos-13
+          - target: x86_64-unknown-linux-gnu
+            triple: linux-x64-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            triple: linux-arm64-gnu
+            runner: ubuntu-24.04-arm
+          - target: x86_64-unknown-linux-musl
+            triple: linux-x64-musl
+            runner: ubuntu-24.04
+            musl_linker: /usr/local/bin/x86_64-linux-musl-gcc
+          - target: aarch64-unknown-linux-musl
+            triple: linux-arm64-musl
+            runner: ubuntu-24.04-arm
+            musl_linker: /usr/local/bin/aarch64-linux-musl-gcc
+          - target: x86_64-pc-windows-msvc
+            triple: win32-x64-msvc
+            runner: windows-2025
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install musl linker
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools
+          sudo ln --symbolic "$(command -v musl-gcc)" "${{ matrix.musl_linker }}"
+      - name: Install napi CLI
+        run: npm install --no-package-lock --ignore-scripts --omit=optional --prefix packages/sheriff-engine
+      - name: Cache Rust dependencies for the offline build script
+        run: cargo fetch --locked
+      - name: Build native addon
+        run: node packages/sheriff-engine/scripts/build-native.mjs --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sheriff-engine-${{ matrix.triple }}
+          path: packages/sheriff-engine/native/sheriff-engine.${{ matrix.triple }}.node
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: matrix.triple == 'darwin-arm64'
+        with:
+          name: sheriff-engine-binding
+          path: |
+            packages/sheriff-engine/native/binding.js
+            packages/sheriff-engine/native/binding.d.ts
+          if-no-files-found: error
+
+  package:
+    name: Assemble platform packages
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+      - name: Install napi CLI
+        run: npm install --no-package-lock --ignore-scripts --omit=optional --prefix packages/sheriff-engine
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: sheriff-engine-*
+          path: packages/sheriff-engine/native
+          merge-multiple: true
+      - name: Create and populate platform packages
+        run: |
+          packages/sheriff-engine/node_modules/.bin/napi create-npm-dirs --cwd packages/sheriff-engine --npm-dir npm
+          packages/sheriff-engine/node_modules/.bin/napi artifacts --cwd packages/sheriff-engine --output-dir native --npm-dir npm
+          cd packages/sheriff-engine
+          sha256sum native/*.node > SHA256SUMS
+      - name: Verify package versions
+        run: node packages/sheriff-engine/scripts/verify-package-versions.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sheriff-engine-npm-packages
+          path: |
+            packages/sheriff-engine/npm
+            packages/sheriff-engine/native/binding.js
+            packages/sheriff-engine/native/binding.d.ts
+            packages/sheriff-engine/SHA256SUMS
+          if-no-files-found: error
+      - name: Publish platform packages
+        if: inputs.publish
+        working-directory: packages/sheriff-engine
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: for package_dir in npm/*; do npm publish "$package_dir" --access public --provenance; done
+      - name: Publish wrapper package
+        if: inputs.publish
+        working-directory: packages/sheriff-engine
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
