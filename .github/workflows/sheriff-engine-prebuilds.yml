@@ -112,14 +112,40 @@ jobs:
             packages/sheriff-engine/native/binding.d.ts
             packages/sheriff-engine/SHA256SUMS
           if-no-files-found: error
+
+  publish:
+    name: Publish npm packages
+    if: inputs.publish && github.ref_type == 'tag'
+    needs: package
+    runs-on: ubuntu-24.04
+    environment:
+      name: npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          name: sheriff-engine-npm-packages
+          path: packages/sheriff-engine
+      - name: Verify engine release tag
+        run: |
+          engine_version="$(node --print "require('./packages/sheriff-engine/package.json').version")"
+          expected_tag="sheriff-engine-v${engine_version}"
+          if [ "${GITHUB_REF_NAME}" != "${expected_tag}" ]; then
+            echo "Expected tag ${expected_tag}, got ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+      - name: Verify package versions
+        run: node packages/sheriff-engine/scripts/verify-package-versions.mjs
       - name: Publish platform packages
-        if: inputs.publish
         working-directory: packages/sheriff-engine
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: for package_dir in npm/*; do npm publish "$package_dir" --access public --provenance; done
       - name: Publish wrapper package
-        if: inputs.publish
         working-directory: packages/sheriff-engine
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

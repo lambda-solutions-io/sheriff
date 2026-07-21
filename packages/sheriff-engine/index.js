@@ -479,16 +479,34 @@ function loadNative() {
 }
 
 function nativeBindingIsMissing(error) {
+  const triple = nativeTriple();
+  const expectedRequests = new Set([
+    `./${binaryName}`,
+    `@lambda-solutions/sheriff-engine-${triple}`,
+  ]);
+  if (triple.startsWith('darwin-')) {
+    expectedRequests.add('./sheriff-engine.darwin-universal.node');
+    expectedRequests.add('@lambda-solutions/sheriff-engine-darwin-universal');
+  }
   const seen = new Set();
   let current = error;
+  let foundMissingCandidate = false;
   while (current && typeof current === 'object' && !seen.has(current)) {
     seen.add(current);
-    if (current.code && current.code !== 'MODULE_NOT_FOUND') {
-      return false;
+    if (current.code) {
+      if (current.code !== 'MODULE_NOT_FOUND') return false;
+      const request = missingModuleRequest(current.message);
+      if (!expectedRequests.has(request)) return false;
+      foundMissingCandidate = true;
     }
     current = current.cause;
   }
-  return true;
+  return foundMissingCandidate;
+}
+
+function missingModuleRequest(message) {
+  if (typeof message !== 'string') return undefined;
+  return /^Cannot find module ['"]([^'"]+)['"]/.exec(message)?.[1];
 }
 
 function analyzeProject(inputJson) {

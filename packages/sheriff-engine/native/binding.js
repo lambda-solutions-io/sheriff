@@ -48,7 +48,7 @@ const isMuslFromReport = () => {
       return true
     }
   }
-  return false
+  return null
 }
 
 const isMuslFromChildProcess = () => {

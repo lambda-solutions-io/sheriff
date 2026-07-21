@@ -83,6 +83,36 @@ await new Promise((resolve, reject) => {
   });
 });
 
+const bindingJsPath = path.join(packageDir, 'native', 'binding.js');
+const bindingJs = await readFile(bindingJsPath, 'utf8');
+const generatedMuslReportFallback = `  if (Array.isArray(report.sharedObjects)) {
+    if (report.sharedObjects.some(isFileMusl)) {
+      return true
+    }
+  }
+  return false
+}
+
+const isMuslFromChildProcess`;
+const patchedMuslReportFallback = generatedMuslReportFallback.replace(
+  '  return false\n}',
+  '  return null\n}',
+);
+const generatedFallbackCount =
+  bindingJs.split(generatedMuslReportFallback).length - 1;
+if (generatedFallbackCount !== 1) {
+  throw new Error(
+    `Expected exactly one generated napi musl report fallback, found ${generatedFallbackCount}`,
+  );
+}
+// napi treats an inconclusive process report as GNU, which prevents its ldd
+// probe and can select the wrong binary. Reapply this after every generation;
+// the exact-match assertion above makes napi template changes fail loudly.
+await writeFile(
+  bindingJsPath,
+  bindingJs.replace(generatedMuslReportFallback, patchedMuslReportFallback),
+);
+
 const bindingDtsPath = path.join(packageDir, 'native', 'binding.d.ts');
 const bindingDts = await readFile(bindingDtsPath, 'utf8');
 await writeFile(
