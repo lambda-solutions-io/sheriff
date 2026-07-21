@@ -5,13 +5,17 @@ arm64, 10 cores (8 performance + 2 efficiency), Node 22.
 
 **Baseline (compiled CLI, measured):**
 
-| project | TS verify | Rust construction | payload |
-|---|---|---|---|
-| 2.1k (2,103 files) | **~430 ms** | **186 ms** | 0.77 MB |
-| 10.5k (10,511 files, 38,010 imports, 1.94 MB source) | **~1670 ms** | **~960 ms** | 3.89 MB |
+| project | TS verify | engine verify | Rust construction | imports | payload |
+|---|---|---|---|---|---|
+| 2.1k (2,103 files) | **~430 ms** | 490 ms | **186 ms** | 7,602 | 0.77 MB |
+| 10.5k (10,511 files, 1.94 MB source) | **~1670 ms** | 1686 ms | **~960 ms** | 38,010 | 3.89 MB |
 
-Most of the analysis below is on the 10.5k project; see §4 for why **2.1k is the
-target that should drive the plan**.
+Zero fallback verified on both engine runs (`SHERIFF_ENGINE_DEBUG=1`, no
+"Falling back" lines), so these are genuine engine numbers rather than silent TS.
+
+Most of the diagnosis below is on the 10.5k project because the effects are
+largest there, but §4 carries the **full arithmetic at both sizes** and explains
+why **2.1k is the target that should drive the plan**.
 
 ---
 
@@ -169,26 +173,58 @@ TS only on fallback. Also delete the two dead full-payload round trips in
 it** (only to check for an `error` key), and `getReachedFiles()` at line 317 ships
 a third copy of a path list already present in `output.files[]`.
 
-**Cold-path arithmetic (10.5k):** 1697 − 313 (P1) − ~250 (P2 on the parse/resolve+read
-remainder) − ~200 (P3, overlapping P2) − ~100 (P4) lands in the **~600–850 ms**
-band against TS's ~1670 ms — a clear 2–2.7× win, without a daemon, without
-touching parity. That is the case for cold verify being winnable; P0's numbers
-decide whether it holds.
+### Cold-path arithmetic, both sizes
 
-**The 2.1k case is the harder target and it reorders the plan.** Measured this
-session (compiled CLI, 3 runs): **TS is ~430 ms at 2.1k** and ~1670 ms at 10.5k —
-so the "TS does 400 ms" figure is the 2.1k project. Rust construction on the same
-2,103-file shape is **186 ms** (median of 5) with a 0.77 MB payload.
+Every term below is measured, not scaled. Same components, same method, so the
+two columns are directly comparable.
 
-At 2.1k the fixed Node floor stops being a rounding error: bare Node ~20 ms and
-`require('typescript')` ~120 ms, so ~140 ms of a 430 ms budget is startup the
-engine currently still pays. Applying P1–P3 proportionally takes Rust analysis to
-roughly **60–90 ms**, which lands the run near **200–250 ms vs 430 ms** — still a
-clear win, but one where **P4 (never loading the TS compiler on the fast path)
-moves from a nice-to-have to decisive**: it is ~100 ms of a ~250 ms target, i.e.
-the largest single remaining item at this size. Small projects are also the common
-case in CI and pre-commit, so treat 2.1k — not 10.5k — as the primary cold
-benchmark, and promote P4 to run alongside P1.
+**Measured starting point (compiled CLI, best of 3, zero fallback verified):**
+
+| | 2.1k | 10.5k |
+|---|---:|---:|
+| TS verify | **430 ms** | **1670 ms** |
+| engine verify (today) | **490 ms** | **1686 ms** |
+| Rust construction (of that) | 186 ms | 960 ms |
+| Node/CLI remainder | ~304 ms | ~726 ms |
+
+**Rust construction decomposed (measured separately at each size):**
+
+| component | 2.1k | 10.5k |
+|---|---:|---:|
+| dependency-stamp pass (dead) | **56 ms** (46.8 crawl + 9.2 stamp) | **313 ms** (252 + 60) |
+| file reads, serial → rayon | 35 ms → 18 ms | 180 ms → 78 ms |
+| parse + resolve remainder | ~95 ms | ~467 ms |
+| imports / distinct `(dir, specifier)` | 7,602 / 2,202 → **71% dup** | 38,010 / 11,010 → **71% dup** |
+
+The 71% duplicate-resolution rate is **identical at both sizes**, so P3 scales
+rather than being a large-project artifact.
+
+**Applying the plan (same deductions, each size):**
+
+| step | 2.1k | 10.5k |
+|---|---:|---:|
+| engine today | 490 ms | 1686 ms |
+| − P1 dead stamp pass | −56 → 434 | −313 → 1373 |
+| − P2 parallel reads+parse/resolve (~2.3× on the parallel part) | −73 → 361 | −370 → 1003 |
+| − P3 resolution memo (71% of remaining resolve) | −40 → 321 | −200 → 803 |
+| − P4 drop `require('typescript')` from fast path | −100 → **~221 ms** | −100 → **~703 ms** |
+| **vs TS** | **430 ms → ~1.9×** | **1670 ms → ~2.4×** |
+
+P2 and P3 overlap (both act on parse/resolve), so treat the last row as a band:
+**~220–290 ms at 2.1k** and **~700–850 ms at 10.5k**. Both are decisive wins, and
+neither needs a daemon or any parity concession.
+
+**Why 2.1k reorders the plan.** The win is smaller (1.9× vs 2.4×) because the
+fixed Node floor does not shrink with project size: bare Node ~20 ms +
+`require('typescript')` ~120 ms = **~140 ms**, which is 33% of a 430 ms budget at
+2.1k but only 8% at 10.5k. So at 2.1k, **P4 is the single largest remaining item
+(~100 ms of a ~220 ms result)** — it moves from nice-to-have to decisive, while at
+10.5k it is a rounding error. Small projects are the common CI/pre-commit case, so
+2.1k should be the primary cold benchmark and **P4 should ship alongside P1**.
+
+Note the residual Node/CLI remainder (~204 ms at 2.1k, ~626 ms at 10.5k after P4)
+is the largest single unattributed block in both columns — see P6, which must be
+measured before assuming it is irreducible.
 
 ### P4b — other dead/duplicated state (codex findings, ~1.1–1.25×, low risk)
 Cheap cleanups worth folding into P1–P4 rather than a separate phase:
@@ -265,8 +301,11 @@ the default".
 
 Stop investing in the Rust **cold** path and scope the engine to warm/editor only if:
 
-- After P0+P1, cold verify has not moved by ≥250 ms — the attribution above is
-  wrong and the remaining cost is somewhere unmodelled.
+- After P0+P1, cold verify has not moved by **≥250 ms at 10.5k / ≥45 ms at 2.1k**
+  (the measured stamp cost is 313 ms and 56 ms respectively) — the attribution
+  above is wrong and the remaining cost is somewhere unmodelled. Use the
+  size-matched threshold; a single absolute number would wrongly clear P1 at
+  2.1k or wrongly fail it at 10.5k.
 - After P2, parallel discovery yields <1.5× on the discovery phase — implies a
   hidden serialization point (a lock, or oxc_resolver contention) that makes the
   multicore assumption false.
