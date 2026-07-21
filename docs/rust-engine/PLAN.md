@@ -141,7 +141,8 @@ node tools/perf/run-bench.mjs
 | R5.0: CLI `verify` cutover + review round | **done** | `3109122`, `2d147e9` |
 | R5.1: daemon ProjectHandle cutover + review round | **done** | `2dcb1e4`, `90c5c6c` |
 | R5.2: `@napi-rs/cli` packaging + review round | **done** | `8b296d7`, `55c090a` |
-| R5.3 + R5.4: benchmarks, two-phase discovery | **done** | `881930d` |
+| R5.3 + R5.4: benchmarks, two-phase discovery | **done** | `881930d`, `a361c8e` |
+| R5.4.1: review round (1 P0 report ordering) | **done** | `1f65847` |
 
 ---
 
@@ -872,6 +873,18 @@ resolution + analysis):
   cannot amortize — marshalling a 10k-file JSON result and Node-side ordering.
   **Conclusion: the engine's win is the warm incremental path (~75ms single-file
   update vs a ~1650ms full re-verify), not cold one-shot `verify`.**
+  Review round (`1f65847`) found **one P0**, independently reproduced by both
+  reviewers: the fast path printed report file nodes in lexical order (native
+  `getReachedFiles()` sorts) instead of TS's depth-first import order — a silent
+  ordered-output divergence. Report order is now reconstructed by an entry-rooted
+  source-order DFS over `EngineOutput.files[].imports`, with the sorted set kept
+  for membership only. It shipped because the parity fixtures happened to have
+  lexical order equal to traversal order; the regression tests now use a
+  deliberately reverse-lexical import order and were confirmed to fail before the
+  fix. Everything else in R5.4 was attacked across a wide matrix (multi-config,
+  symlinks, case-insensitive paths, unreached sibling barrels, barrel-less
+  modules, all `--files` edge cases, `setModulePaths` one-shot-vs-two-phase byte
+  equality, callback-once semantics, mutating-callback rejection) and found solid.
 
 ---
 
