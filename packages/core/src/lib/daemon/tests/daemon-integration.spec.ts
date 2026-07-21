@@ -7,6 +7,14 @@ import { DaemonClient, getDaemonStatus, stopDaemon } from '../client';
 import { DaemonServer, startDaemonServer } from '../server';
 import { HandshakeResult } from '../protocol';
 
+const nativeDirectory = path.resolve(
+  __dirname,
+  '../../../../../sheriff-engine/native',
+);
+const nativeAvailable =
+  fs.existsSync(nativeDirectory) &&
+  fs.readdirSync(nativeDirectory).some((file) => file.endsWith('.node'));
+
 /**
  * End-to-end over a real socket against a minimal on-disk project:
  * `src/main.ts` imports `feature/index.ts`, which deep-imports into
@@ -14,9 +22,12 @@ import { HandshakeResult } from '../protocol';
  */
 describe('daemon integration', () => {
   let rootDir: string;
-  let server: DaemonServer;
+  let server: DaemonServer | undefined;
   let previousCwd: string;
   const exit = vi.fn();
+  const log = vi.fn();
+  const originalEngineFlag = process.env['SHERIFF_ENGINE'];
+  const originalEngineDebug = process.env['SHERIFF_ENGINE_DEBUG'];
 
   beforeAll(async () => {
     previousCwd = process.cwd();
@@ -25,12 +36,22 @@ describe('daemon integration', () => {
     writeFixtureProject(rootDir);
     process.chdir(rootDir);
 
-    server = await startDaemonServer({ rootDir, exit });
+    server = await startDaemonServer({ rootDir, exit, log });
   });
 
   afterAll(() => {
+    if (originalEngineFlag === undefined) {
+      delete process.env['SHERIFF_ENGINE'];
+    } else {
+      process.env['SHERIFF_ENGINE'] = originalEngineFlag;
+    }
+    if (originalEngineDebug === undefined) {
+      delete process.env['SHERIFF_ENGINE_DEBUG'];
+    } else {
+      process.env['SHERIFF_ENGINE_DEBUG'] = originalEngineDebug;
+    }
     process.chdir(previousCwd);
-    server.close();
+    server?.close();
     fs.rmSync(rootDir, { recursive: true, force: true });
   });
 
@@ -121,6 +142,104 @@ describe('daemon integration', () => {
     client!.close();
   });
 
+  it.skipIf(!nativeAvailable)(
+    'should return the byte-identical lint DTO through the engine',
+    async () => {
+      const client = await DaemonClient.connect(rootDir);
+      const filename = path.join(rootDir, 'src', 'feature', 'index.ts');
+      const previousDebug = process.env['SHERIFF_ENGINE_DEBUG'];
+      const debug = vi
+        .spyOn(console, 'error')
+        .mockImplementation(() => undefined);
+
+      delete process.env['SHERIFF_ENGINE'];
+      const typescriptResult = await client!.request('lintFile', { filename });
+      process.env['SHERIFF_ENGINE'] = '1';
+      process.env['SHERIFF_ENGINE_DEBUG'] = '1';
+      const engineResult = await client!.request('lintFile', { filename });
+
+      expect(engineResult).toEqual(typescriptResult);
+      expect(engineResult).toEqual({
+        dependencyRuleViolations: [
+          {
+            fromTag: 'feature',
+            toTags: ['shared'],
+            rawImport: '../shared/internal',
+          },
+        ],
+        encapsulationViolations: ['../shared/internal'],
+        externalRuleViolations: [
+          { fromTag: 'feature', externalLibrary: 'blocked-lib' },
+        ],
+        unresolvableImports: ['./missing'],
+      });
+      expect(debug).not.toHaveBeenCalled();
+      client!.close();
+      delete process.env['SHERIFF_ENGINE'];
+      if (previousDebug === undefined) {
+        delete process.env['SHERIFF_ENGINE_DEBUG'];
+      } else {
+        process.env['SHERIFF_ENGINE_DEBUG'] = previousDebug;
+      }
+    },
+  );
+
+  it('should fall back for a file outside the configured entry graph', async () => {
+    const client = await DaemonClient.connect(rootDir);
+    const filename = path.join(rootDir, 'src', 'uncovered.ts');
+
+    delete process.env['SHERIFF_ENGINE'];
+    const typescriptResult = await client!.request('lintFile', { filename });
+    process.env['SHERIFF_ENGINE'] = '1';
+    const fallbackResult = await client!.request('lintFile', { filename });
+
+    expect(fallbackResult).toEqual(typescriptResult);
+    client!.close();
+    delete process.env['SHERIFF_ENGINE'];
+  });
+
+  it.skipIf(!nativeAvailable)(
+    'should rebuild the engine host after watcher invalidation',
+    async () => {
+      const client = await DaemonClient.connect(rootDir);
+      const filename = path.join(rootDir, 'src', 'feature', 'index.ts');
+      process.env['SHERIFF_ENGINE'] = '1';
+
+      const before = (await client!.request('lintFile', { filename })) as {
+        dependencyRuleViolations: unknown[];
+      };
+      expect(before.dependencyRuleViolations).toHaveLength(1);
+
+      const previousLogCount = log.mock.calls.length;
+      fs.writeFileSync(filename, 'export const feature = true;\n');
+      await vi.waitFor(
+        () => {
+          expect(
+            log.mock.calls
+              .slice(previousLogCount)
+              .some(([message]) => String(message).includes('invalidated')),
+          ).toBe(true);
+        },
+        { timeout: 3_000 },
+      );
+
+      const after = (await client!.request('lintFile', { filename })) as {
+        dependencyRuleViolations: unknown[];
+        encapsulationViolations: unknown[];
+        externalRuleViolations: unknown[];
+        unresolvableImports: unknown[];
+      };
+      expect(after).toEqual({
+        dependencyRuleViolations: [],
+        encapsulationViolations: [],
+        externalRuleViolations: [],
+        unresolvableImports: [],
+      });
+      client!.close();
+      delete process.env['SHERIFF_ENGINE'];
+    },
+  );
+
   it('should reject unknown methods', async () => {
     const client = await DaemonClient.connect(rootDir);
 
@@ -159,20 +278,37 @@ function writeFixtureProject(rootDir: string) {
     JSON.stringify({ compilerOptions: { moduleResolution: 'bundler' } }),
   );
   write(
+    'package.json',
+    JSON.stringify({ dependencies: { 'blocked-lib': '1.0.0' } }),
+  );
+  write(
     'sheriff.config.ts',
     `export const config = {
   entryFile: 'src/main.ts',
+  modules: {
+    'src/feature': 'feature',
+    'src/shared': 'shared',
+  },
   depRules: {
-    root: ['root', 'noTag'],
-    noTag: ['root', 'noTag'],
+    root: ['root', 'feature'],
+    feature: [],
+    shared: '*',
+  },
+  externalRules: {
+    feature: [],
   },
 };`,
   );
   write('src/main.ts', `import './feature';\n`);
   write(
     'src/feature/index.ts',
-    `import { internal } from '../shared/internal';\nexport const feature = internal;\n`,
+    `import 'blocked-lib';
+import { internal } from '../shared/internal';
+import './missing';
+export const feature = internal;
+`,
   );
   write('src/shared/index.ts', `export const shared = 1;\n`);
   write('src/shared/internal.ts', `export const internal = 2;\n`);
+  write('src/uncovered.ts', `export const uncovered = true;\n`);
 }

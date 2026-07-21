@@ -1063,6 +1063,7 @@ impl ProjectHandle {
         sort_json_records(&mut external)?;
         serde_json::to_string(&json!({
             "schemaVersion": 1,
+            "files": self.reached_file_imports(),
             "modules": latest["modules"].clone(),
             "violations": {
                 "dependency": dependency,
@@ -1071,6 +1072,41 @@ impl ProjectHandle {
             },
         }))
         .map_err(|error| format!("could not serialize cached analysis output: {error}"))
+    }
+
+    fn reached_file_imports(&self) -> Vec<Value> {
+        let mut files = self.reached_files().into_iter().collect::<Vec<_>>();
+        files.sort_by(|left, right| self.interner.text(*left).cmp(self.interner.text(*right)));
+        files
+            .into_iter()
+            .map(|path| {
+                let imports = self
+                    .forward
+                    .get(&path)
+                    .into_iter()
+                    .flatten()
+                    .map(|import| match import {
+                        GraphImport::Module { raw, target } => json!({
+                            "raw": raw,
+                            "kind": "module",
+                            "resolvedPath": self.interner.text(*target),
+                        }),
+                        GraphImport::External { raw } => json!({
+                            "raw": raw,
+                            "kind": "external",
+                        }),
+                        GraphImport::Unresolvable { raw } => json!({
+                            "raw": raw,
+                            "kind": "unresolvable",
+                        }),
+                    })
+                    .collect::<Vec<_>>();
+                json!({
+                    "path": self.interner.text(path),
+                    "imports": imports,
+                })
+            })
+            .collect()
     }
 
     fn materialize_cached_tags(

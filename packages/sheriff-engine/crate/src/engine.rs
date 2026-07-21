@@ -37,15 +37,32 @@ struct FileData {
 enum ImportData {
     Module { raw: String, target: usize },
     External { raw: String },
-    Unresolvable,
+    Unresolvable { raw: String },
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EngineOutput {
     schema_version: u32,
+    files: Vec<OutputFile>,
     modules: Vec<OutputModule>,
     violations: OutputViolations,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OutputFile {
+    path: String,
+    imports: Vec<OutputImport>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OutputImport {
+    raw: String,
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resolved_path: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -350,7 +367,9 @@ fn analyze_inner(
                 ImportKind::External => imports.push(ImportData::External {
                     raw: input_import.raw,
                 }),
-                ImportKind::Unresolvable => imports.push(ImportData::Unresolvable),
+                ImportKind::Unresolvable => imports.push(ImportData::Unresolvable {
+                    raw: input_import.raw,
+                }),
             }
         }
         files.push(FileData {
@@ -435,8 +454,38 @@ fn analyze_inner(
         .collect::<Vec<_>>();
     sort_records(&mut output_modules)?;
 
+    let mut output_files = files
+        .iter()
+        .map(|file| OutputFile {
+            path: interner.text(file.path).to_owned(),
+            imports: file
+                .imports
+                .iter()
+                .map(|import| match import {
+                    ImportData::Module { raw, target } => OutputImport {
+                        raw: raw.clone(),
+                        kind: "module",
+                        resolved_path: Some(interner.text(files[*target].path).to_owned()),
+                    },
+                    ImportData::External { raw } => OutputImport {
+                        raw: raw.clone(),
+                        kind: "external",
+                        resolved_path: None,
+                    },
+                    ImportData::Unresolvable { raw } => OutputImport {
+                        raw: raw.clone(),
+                        kind: "unresolvable",
+                        resolved_path: None,
+                    },
+                })
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    output_files.sort_by(|left, right| js_string_cmp(&left.path, &right.path));
+
     Ok(AnalyzeResult::Complete(EngineOutput {
         schema_version: 1,
+        files: output_files,
         modules: output_modules,
         violations,
     }))
@@ -600,7 +649,7 @@ fn collect_rule_callback_candidates(
                         }
                     }
                 }
-                ImportData::Unresolvable => {}
+                ImportData::Unresolvable { .. } => {}
             }
         }
     }
@@ -829,7 +878,7 @@ fn check_file(
                     }
                 }
             }
-            ImportData::Unresolvable => {}
+            ImportData::Unresolvable { .. } => {}
         }
     }
 

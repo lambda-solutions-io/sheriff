@@ -7,6 +7,7 @@ import { createPluginAPI } from '../plugin/create-plugin-api';
 import { ProjectDataOptions } from '../plugin/plugin-api';
 import { clearProjectCache } from '../cache/project-cache';
 import { getDaemonSocketPath } from './socket-path';
+import { createEngineLintHost } from './engine-lint-host';
 import {
   createLineDecoder,
   DaemonRequest,
@@ -48,6 +49,7 @@ export function startDaemonServer(
   const log = options.log ?? (() => void 0);
   const exit = options.exit ?? (() => process.exit(0));
   const socketPath = getDaemonSocketPath(rootDir);
+  const engineLintHost = createEngineLintHost(rootDir);
 
   let shutdown: (reason: string) => void = () => void 0;
 
@@ -58,14 +60,22 @@ export function startDaemonServer(
     rootDir,
     // the config is evaluated code; a fresh process is the only clean re-eval
     onConfigChange: () => shutdown('sheriff.config.ts changed'),
-    onInvalidate: (file) => log(`invalidated ${file}`),
+    onInvalidate: (file) => {
+      engineLintHost.invalidate();
+      log(`invalidated ${file}`);
+    },
   });
 
   const server = net.createServer((socket) => {
     socket.setEncoding('utf-8');
     const decode = createLineDecoder((line) => {
       idleTimer.refresh();
-      const response = handleRequestLine(line, rootDir, shutdown);
+      const response = handleRequestLine(
+        line,
+        rootDir,
+        shutdown,
+        engineLintHost,
+      );
       socket.write(encodeMessage(response));
     });
     socket.on('data', decode);
@@ -73,7 +83,12 @@ export function startDaemonServer(
   });
 
   return new Promise((resolve, reject) => {
-    server.once('error', (error) => reject(error));
+    server.once('error', (error) => {
+      watcher.close();
+      engineLintHost.invalidate();
+      clearTimeout(idleTimer);
+      reject(error);
+    });
     removeStaleSocket(socketPath);
     server.listen(socketPath, () => {
       log(`sheriff daemon listening on ${socketPath} (pid ${process.pid})`);
@@ -81,6 +96,7 @@ export function startDaemonServer(
       shutdown = (reason: string) => {
         log(`sheriff daemon shutting down: ${reason}`);
         watcher.close();
+        engineLintHost.invalidate();
         clearTimeout(idleTimer);
         server.close();
         removeStaleSocket(socketPath);
@@ -92,6 +108,7 @@ export function startDaemonServer(
         socketPath,
         close: () => {
           watcher.close();
+          engineLintHost.invalidate();
           clearTimeout(idleTimer);
           server.close();
           removeStaleSocket(socketPath);
@@ -105,6 +122,7 @@ function handleRequestLine(
   line: string,
   rootDir: string,
   shutdown: (reason: string) => void,
+  engineLintHost: ReturnType<typeof createEngineLintHost>,
 ): DaemonResponse {
   let request: DaemonRequest;
   try {
@@ -116,7 +134,7 @@ function handleRequestLine(
   try {
     return {
       id: request.id,
-      result: executeMethod(request, rootDir, shutdown),
+      result: executeMethod(request, rootDir, shutdown, engineLintHost),
     };
   } catch (error) {
     return {
@@ -132,6 +150,7 @@ function executeMethod(
   request: DaemonRequest,
   rootDir: string,
   shutdown: (reason: string) => void,
+  engineLintHost: ReturnType<typeof createEngineLintHost>,
 ): unknown {
   const params = request.params ?? {};
 
@@ -167,9 +186,11 @@ function executeMethod(
       return lintFile(
         String(params['filename']),
         asOptionalString(params['fileContent']),
+        engineLintHost,
       );
     case 'clearCache':
       clearProjectCache();
+      engineLintHost.invalidate();
       return true;
     case 'shutdown':
       shutdown('requested by client');
@@ -195,7 +216,21 @@ function getPluginAPI() {
  * Single-file lint identical to the checks the ESLint rules run.
  * `fileContent` carries unsaved editor buffers.
  */
-function lintFile(filename: string, fileContent?: string) {
+function lintFile(
+  filename: string,
+  fileContent: string | undefined,
+  engineLintHost: ReturnType<typeof createEngineLintHost>,
+) {
+  if (process.env['SHERIFF_ENGINE'] === '1') {
+    const engineResult = engineLintHost.lintFileViaEngine(
+      filename,
+      fileContent,
+    );
+    if (engineResult) {
+      return engineResult;
+    }
+  }
+
   const { result, configFileIsMissing } = getDocumentLintAnalysis(
     filename,
     fileContent,

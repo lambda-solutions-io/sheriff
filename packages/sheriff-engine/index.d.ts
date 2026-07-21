@@ -128,6 +128,8 @@ export interface EngineExternalViolation {
 
 export interface EngineOutput {
   schemaVersion: 1;
+  /** Reached files and their imports, in source order within each file. */
+  files: EngineFile[];
   modules: EngineModule[];
   violations: {
     dependency: EngineDependencyViolation[];
