@@ -252,6 +252,22 @@ describe.skipIf(!nativeEnabled)('function materialisation protocol', () => {
     expect(calls).toEqual([]);
   });
 
+  it('rejects a named callback that mutates its own properties', () => {
+    function decision(): boolean {
+      const self = decision as typeof decision & { calls: number };
+      self.calls = (self.calls ?? 0) + 1;
+      return self.calls === 1;
+    }
+    (decision as typeof decision & { calls: number }).calls = 0;
+    const input: EngineInput = {
+      ...dependencyInput(),
+      depRules: { source: decision, target: [] },
+    };
+
+    expect(() => analyzeProject(input)).toThrow(EngineImpureCallbackError);
+    expect((decision as typeof decision & { calls: number }).calls).toBe(0);
+  });
+
   it('evaluates each materialized callback exactly once per candidate', () => {
     const output = analyze({
       ...dependencyInput(),
@@ -379,6 +395,53 @@ describe.skipIf(!nativeEnabled)('function materialisation protocol', () => {
 });
 
 describe.skipIf(!nativeEnabled)('incremental ProjectHandle', () => {
+  it('rejects a self-mutating named callback before an overlay can enter the decision cache', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'sheriff-r4-self-callback-'));
+    try {
+      const sourceDirectory = path.join(root, 'src/source');
+      const targetDirectory = path.join(root, 'src/config');
+      mkdirSync(sourceDirectory, { recursive: true });
+      mkdirSync(targetDirectory, { recursive: true });
+      const entryFile = path.join(sourceDirectory, 'entry.ts');
+      const targetFile = path.join(targetDirectory, 'module-config.ts');
+      const tsConfigPath = path.join(root, 'tsconfig.json');
+      writeFileSync(tsConfigPath, '{}');
+      writeFileSync(entryFile, 'export const source = true;\n');
+      writeFileSync(targetFile, 'export const config = true;\n');
+      function decision(): boolean {
+        const self = decision as typeof decision & { calls: number };
+        self.calls = (self.calls ?? 0) + 1;
+        return self.calls === 1;
+      }
+      (decision as typeof decision & { calls: number }).calls = 0;
+      const handle = new ProjectHandle({
+        schemaVersion: 1,
+        entryFile,
+        tsConfigPath,
+        modulePaths: [
+          { path: sourceDirectory, isBarrel: false },
+          { path: targetDirectory, isBarrel: false },
+        ],
+        moduleConfig: { 'src/source': 'source', 'src/config': 'target' },
+        autoTagging: true,
+        depRules: { source: decision, target: [] },
+        denyRules: {},
+        externalRules: {},
+        enableBarrelLess: true,
+      });
+
+      expect(() =>
+        handle.setOverlay(
+          entryFile,
+          "import '../config/module-config';\n",
+        ),
+      ).toThrow(EngineImpureCallbackError);
+      expect((decision as typeof decision & { calls: number }).calls).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('materializes callbacks across native method calls and applies an overlay', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'sheriff-r4-napi-'));
     try {
@@ -428,6 +491,87 @@ describe.skipIf(!nativeEnabled)('incremental ProjectHandle', () => {
 
       const restored = JSON.parse(handle.clearOverlay(entryFile)) as EngineOutput;
       expect(restored).toEqual(initial);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('matches a clean handle when tag and rule callback contexts change', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'sheriff-r4-callbacks-'));
+    try {
+      const sourceDirectory = path.join(root, 'src/source');
+      const targetDirectory = path.join(root, 'src/target');
+      mkdirSync(sourceDirectory, { recursive: true });
+      mkdirSync(targetDirectory, { recursive: true });
+      const entryFile = path.join(sourceDirectory, 'entry.ts');
+      const firstTarget = path.join(targetDirectory, 'first.ts');
+      const secondTarget = path.join(targetDirectory, 'second.ts');
+      const tsConfigPath = path.join(root, 'tsconfig.json');
+      writeFileSync(tsConfigPath, '{}');
+      writeFileSync(
+        path.join(root, 'package.json'),
+        JSON.stringify({
+          dependencies: {
+            'blocked-library': '1.0.0',
+            'allowed-library': '1.0.0',
+          },
+        }),
+      );
+      writeFileSync(firstTarget, 'export const first = true;\n');
+      writeFileSync(secondTarget, 'export const second = true;\n');
+      writeFileSync(
+        entryFile,
+        "import '../target/first';\nimport 'blocked-library';\n",
+      );
+      const input = {
+        schemaVersion: 1 as const,
+        entryFile,
+        tsConfigPath,
+        modulePaths: [
+          { path: sourceDirectory, isBarrel: false },
+          { path: targetDirectory, isBarrel: false },
+        ],
+        moduleConfig: {
+          'src/<name>': (placeholders: Record<string, string>) =>
+            placeholders.name,
+        },
+        autoTagging: true,
+        depRules: {
+          source: ({ toFilePath }: { toFilePath: string }) =>
+            toFilePath.endsWith('/first.ts') ||
+            toFilePath.endsWith('/second.ts'),
+          target: [],
+        },
+        denyRules: {
+          source: ({ toFilePath }: { toFilePath: string }) =>
+            toFilePath.endsWith('/second.ts'),
+        },
+        externalRules: {
+          source: ({ externalLibrary }: { externalLibrary: string }) =>
+            externalLibrary.startsWith('allowed-'),
+        },
+        enableBarrelLess: true,
+      };
+      const incremental = new ProjectHandle(input);
+      const initial = JSON.parse(incremental.getResult()) as EngineOutput;
+      expect(initial.violations.external).toHaveLength(1);
+
+      writeFileSync(
+        entryFile,
+        "import '../target/second';\nimport 'allowed-library';\n",
+      );
+      const updated = JSON.parse(
+        incremental.applyChanges({
+          schemaVersion: 1,
+          events: [{ kind: 'modified', path: entryFile }],
+        }),
+      ) as EngineOutput;
+      const clean = JSON.parse(new ProjectHandle(input).getResult()) as EngineOutput;
+      expect(updated).toEqual(clean);
+      expect(updated.violations.dependency).toEqual([
+        expect.objectContaining({ cause: 'deny-rule', toFilePath: 'src/target/second.ts' }),
+      ]);
+      expect(updated.violations.external).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

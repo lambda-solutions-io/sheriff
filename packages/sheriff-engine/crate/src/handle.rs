@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::{HashSet, VecDeque};
 use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -121,6 +122,27 @@ struct CachedMaterialization<T> {
     candidates: Vec<Value>,
 }
 
+#[derive(Default)]
+struct CachedFileViolations {
+    dependency: Vec<Value>,
+    encapsulation: Vec<Value>,
+    external: Vec<Value>,
+}
+
+#[derive(Default)]
+enum AnalysisScope {
+    #[default]
+    Full,
+    Incremental(FxHashSet<PathId>),
+}
+
+#[derive(Clone, Copy)]
+enum ViolationCategory {
+    Dependency,
+    Encapsulation,
+    External,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DependencyStamp {
     exists: bool,
@@ -146,6 +168,8 @@ pub struct ProjectHandle {
     reverse: FxHashMap<PathId, FxHashSet<PathId>>,
     module_assignment: FxHashMap<PathId, PathId>,
     module_tags: FxHashMap<PathId, Vec<String>>,
+    file_violations: FxHashMap<PathId, CachedFileViolations>,
+    analysis_scope: AnalysisScope,
     resolution_context: Option<ResolutionContextSnapshot>,
     source_config_paths: Vec<PathBuf>,
     package_manifest_paths: Vec<PathBuf>,
@@ -154,6 +178,7 @@ pub struct ProjectHandle {
     tag_callback_cache: FxHashMap<String, Vec<String>>,
     rule_callback_cache: FxHashMap<String, bool>,
     pending_callbacks: Option<PendingCallbacks>,
+    last_analysis_file_count: usize,
     latest_result: String,
 }
 
@@ -244,6 +269,8 @@ impl ProjectHandle {
             reverse: FxHashMap::default(),
             module_assignment: FxHashMap::default(),
             module_tags: FxHashMap::default(),
+            file_violations: FxHashMap::default(),
+            analysis_scope: AnalysisScope::Full,
             resolution_context: None,
             source_config_paths: Vec::new(),
             package_manifest_paths: Vec::new(),
@@ -252,6 +279,7 @@ impl ProjectHandle {
             tag_callback_cache: FxHashMap::default(),
             rule_callback_cache: FxHashMap::default(),
             pending_callbacks: None,
+            last_analysis_file_count: 0,
             latest_result: String::new(),
         }
     }
@@ -276,7 +304,7 @@ impl ProjectHandle {
                 crate::input::MAX_INPUT_JSON_BYTES
             ));
         }
-        let input: ProjectHandleInput = serde_json::from_str(input_json)
+        let mut input: ProjectHandleInput = serde_json::from_str(input_json)
             .map_err(|error| format!("invalid ProjectHandleInput JSON: {error}"))?;
         if input.schema_version != 1 {
             return Err(format!(
@@ -285,6 +313,7 @@ impl ProjectHandle {
             ));
         }
         validate_handle_input(&input)?;
+        normalize_handle_paths(&mut input)?;
         self.input_hash = hash_value(input_json);
         self.input = Some(input);
         self.rebuild_graph()?;
@@ -311,6 +340,22 @@ impl ProjectHandle {
                 changes.schema_version
             ));
         }
+        let structural_change = changes.events.iter().any(|event| {
+            matches!(
+                event,
+                ChangeEvent::Created { .. }
+                    | ChangeEvent::Deleted { .. }
+                    | ChangeEvent::Renamed { .. }
+                    | ChangeEvent::Directory { .. }
+            )
+        });
+        if structural_change && changes.module_paths.is_none() {
+            return Err(
+                "structural changes require refreshed modulePaths from Node module discovery"
+                    .to_owned(),
+            );
+        }
+        let module_paths_changed = changes.module_paths.is_some();
         if let Some(module_paths) = changes.module_paths {
             self.input_mut()?.module_paths = module_paths;
             self.refresh_modules()?;
@@ -318,17 +363,41 @@ impl ProjectHandle {
 
         let mut full_rebuild = false;
         let mut modified_sources = FxHashSet::default();
+        let reached_before = self.reached_files();
+        let mut affected = FxHashSet::default();
         for event in changes.events {
             match event {
                 ChangeEvent::OverlaySet { path, content } => {
                     let path = self.absolute_path(&path)?;
+                    if self.is_sheriff_config(&path) {
+                        return Err(
+                            "sheriff config overlay changed; construct a new ProjectHandle with the evaluated config"
+                                .to_owned(),
+                        );
+                    }
                     self.overlays.insert(path.clone(), content);
-                    modified_sources.insert(path);
+                    if self.is_wide_dependency(&path) {
+                        full_rebuild = true;
+                    } else {
+                        self.collect_affected_path(&path, &mut affected)?;
+                        modified_sources.insert(path);
+                    }
                 }
                 ChangeEvent::OverlayClear { path } => {
                     let path = self.absolute_path(&path)?;
+                    if self.is_sheriff_config(&path) {
+                        return Err(
+                            "sheriff config overlay changed; construct a new ProjectHandle with the evaluated config"
+                                .to_owned(),
+                        );
+                    }
                     self.overlays.remove(&path);
-                    modified_sources.insert(path);
+                    if self.is_wide_dependency(&path) {
+                        full_rebuild = true;
+                    } else {
+                        self.collect_affected_path(&path, &mut affected)?;
+                        modified_sources.insert(path);
+                    }
                 }
                 ChangeEvent::Modified { path } => {
                     let path = self.absolute_path(&path)?;
@@ -341,6 +410,7 @@ impl ProjectHandle {
                     if self.is_wide_dependency(&path) {
                         full_rebuild = true;
                     } else {
+                        self.collect_affected_path(&path, &mut affected)?;
                         modified_sources.insert(path);
                     }
                 }
@@ -373,14 +443,25 @@ impl ProjectHandle {
             }
         }
 
-        if full_rebuild {
+        if full_rebuild || module_paths_changed {
             self.rebuild_graph()?;
+            self.analysis_scope = AnalysisScope::Full;
         } else {
+            let mut patch_rebuilt = false;
             for path in modified_sources {
-                self.patch_source(&path)?;
+                patch_rebuilt |= self.patch_source(&path)?;
                 let overlay = self.overlays.get(&path).map(String::as_str);
                 self.dependency_stamps
                     .insert(path.clone(), dependency_stamp(&path, overlay));
+            }
+            if patch_rebuilt {
+                self.analysis_scope = AnalysisScope::Full;
+            } else {
+                let reached_after = self.reached_files();
+                affected.extend(reached_after.difference(&reached_before).copied());
+                affected.retain(|path| reached_after.contains(path));
+                self.refresh_incremental_module_assignments(&reached_after)?;
+                self.analysis_scope = AnalysisScope::Incremental(affected);
             }
         }
         self.pending_callbacks = None;
@@ -432,9 +513,13 @@ impl ProjectHandle {
         let input = self.input_ref()?.clone();
         let ts_config = self.absolute_path(&input.ts_config_path)?;
         let entry = self.absolute_path(&input.entry_file)?;
-        let mut session =
-            ResolveSession::new(&ts_config, &input.ignore_file_extensions, input.shadow_mode)
-                .map_err(|error| error.to_string())?;
+        let mut session = ResolveSession::new_with_overlays(
+            &ts_config,
+            &input.ignore_file_extensions,
+            input.shadow_mode,
+            &self.overlays,
+        )
+        .map_err(|error| error.to_string())?;
         self.root_dir = session.root_dir().to_string_lossy().into_owned();
         self.resolution_context = Some(session.context_snapshot());
         self.interner = PathInterner::default();
@@ -481,15 +566,20 @@ impl ProjectHandle {
         Ok(())
     }
 
-    fn patch_source(&mut self, path: &Path) -> Result<(), String> {
+    fn patch_source(&mut self, path: &Path) -> Result<bool, String> {
         if !path.exists() && !self.overlays.contains_key(path) {
-            return self.rebuild_graph();
+            self.rebuild_graph()?;
+            return Ok(true);
         }
         let input = self.input_ref()?.clone();
         let ts_config = self.absolute_path(&input.ts_config_path)?;
-        let mut session =
-            ResolveSession::new(&ts_config, &input.ignore_file_extensions, input.shadow_mode)
-                .map_err(|error| error.to_string())?;
+        let mut session = ResolveSession::new_with_overlays(
+            &ts_config,
+            &input.ignore_file_extensions,
+            input.shadow_mode,
+            &self.overlays,
+        )
+        .map_err(|error| error.to_string())?;
         self.resolution_context = Some(session.context_snapshot());
         let mut queue = VecDeque::from([path.to_path_buf()]);
         let mut visited = FxHashSet::default();
@@ -522,13 +612,29 @@ impl ProjectHandle {
         }
         let summary = session.finish();
         if !summary.fallback_reasons.is_empty() && !input.shadow_mode {
-            return self.rebuild_graph();
+            self.rebuild_graph()?;
+            return Ok(true);
         }
         self.source_config_paths = summary.source_config_paths;
         self.package_manifest_paths
             .extend(summary.package_manifest_paths);
         self.package_manifest_paths.sort();
         self.package_manifest_paths.dedup();
+        Ok(false)
+    }
+
+    fn collect_affected_path(
+        &mut self,
+        path: &Path,
+        affected: &mut FxHashSet<PathId>,
+    ) -> Result<(), String> {
+        let path_id = self
+            .interner
+            .intern_relative(&self.root_dir, path.to_string_lossy().as_ref())?;
+        affected.insert(path_id);
+        if let Some(importers) = self.reverse.get(&path_id) {
+            affected.extend(importers.iter().copied());
+        }
         Ok(())
     }
 
@@ -637,6 +743,28 @@ impl ProjectHandle {
         Ok(())
     }
 
+    fn refresh_incremental_module_assignments(
+        &mut self,
+        reached: &FxHashSet<PathId>,
+    ) -> Result<(), String> {
+        self.module_assignment
+            .retain(|file, _| reached.contains(file));
+        for file in reached {
+            if self.module_assignment.contains_key(file) {
+                continue;
+            }
+            let module =
+                closest_module(*file, &self.interner, &self.module_path_ids).ok_or_else(|| {
+                    format!(
+                        "could not assign file '{}' to a module",
+                        self.interner.text(*file)
+                    )
+                })?;
+            self.module_assignment.insert(*file, module);
+        }
+        Ok(())
+    }
+
     fn reached_files(&self) -> FxHashSet<PathId> {
         let mut reached = FxHashSet::default();
         let Some(entry) = self.entry_file else {
@@ -717,14 +845,96 @@ impl ProjectHandle {
         })
     }
 
+    fn analysis_engine_input(
+        &self,
+        tag_callback_results: Option<Vec<Vec<String>>>,
+        rule_callback_results: Option<Vec<bool>>,
+    ) -> Result<EngineInput, String> {
+        let AnalysisScope::Incremental(affected) = &self.analysis_scope else {
+            return self.engine_input(tag_callback_results, rule_callback_results);
+        };
+        let mut included = affected.clone();
+        for source in affected {
+            if let Some(imports) = self.forward.get(source) {
+                included.extend(imports.iter().filter_map(|import| match import {
+                    GraphImport::Module { target, .. } => Some(*target),
+                    GraphImport::External { .. } | GraphImport::Unresolvable { .. } => None,
+                }));
+            }
+        }
+        let mut file_ids = included.into_iter().collect::<Vec<_>>();
+        file_ids.sort_by(|left, right| self.interner.text(*left).cmp(self.interner.text(*right)));
+        let files = file_ids
+            .into_iter()
+            .map(|path| {
+                let imports = affected
+                    .contains(&path)
+                    .then(|| self.forward.get(&path))
+                    .flatten()
+                    .into_iter()
+                    .flatten()
+                    .map(|import| match import {
+                        GraphImport::Module { raw, target } => InputImport {
+                            raw: raw.clone(),
+                            kind: ImportKind::Module,
+                            resolved_path: Some(self.interner.text(*target).to_owned()),
+                        },
+                        GraphImport::External { raw } => InputImport {
+                            raw: raw.clone(),
+                            kind: ImportKind::External,
+                            resolved_path: None,
+                        },
+                        GraphImport::Unresolvable { raw } => InputImport {
+                            raw: raw.clone(),
+                            kind: ImportKind::Unresolvable,
+                            resolved_path: None,
+                        },
+                    })
+                    .collect();
+                InputFile {
+                    path: self.interner.text(path).to_owned(),
+                    imports,
+                }
+            })
+            .collect();
+        let input = self.input_ref()?;
+        Ok(EngineInput {
+            schema_version: 1,
+            root_dir: self.root_dir.clone(),
+            files,
+            module_config: input.module_config.clone(),
+            module_paths: input.module_paths.clone(),
+            auto_tagging: input.auto_tagging,
+            dep_rules: input.dep_rules.clone(),
+            deny_rules: input.deny_rules.clone(),
+            external_rules: input.external_rules.clone(),
+            tag_callback_results,
+            rule_callback_results,
+            encapsulation_pattern: input.encapsulation_pattern.clone(),
+            enable_barrel_less: input.enable_barrel_less,
+            exclude_root: input.exclude_root,
+            barrel_file_name: input.barrel_file_name.clone(),
+        })
+    }
+
+    fn run_engine_analysis(&self, input: EngineInput) -> Result<AnalyzeResult, String> {
+        match self.analysis_scope {
+            AnalysisScope::Full => engine::analyze(input),
+            AnalysisScope::Incremental(_) => engine::analyze_with_module_tags(input, |path| {
+                self.interner
+                    .id(path)
+                    .and_then(|path| self.module_tags.get(&path))
+                    .cloned()
+            }),
+        }
+    }
+
     fn drive_analysis(&mut self) -> Result<String, String> {
-        let first = engine::analyze(self.engine_input(None, None)?)?;
+        let first_input = self.analysis_engine_input(None, None)?;
+        self.last_analysis_file_count = first_input.files.len();
+        let first = self.run_engine_analysis(first_input)?;
         if matches!(first, AnalyzeResult::Complete(_)) {
-            let output = serde_json::to_string(&first)
-                .map_err(|error| format!("could not serialize analysis output: {error}"))?;
-            self.pending_callbacks = None;
-            self.capture_module_tags(&output)?;
-            return Ok(output);
+            return self.finish_analysis(first);
         }
         let first_value = serde_json::to_value(&first)
             .map_err(|error| format!("could not serialize analysis: {error}"))?;
@@ -745,7 +955,9 @@ impl ProjectHandle {
             tag_results = Some(cached.results);
         }
 
-        let second = engine::analyze(self.engine_input(tag_results.clone(), None)?)?;
+        let second_input = self.analysis_engine_input(tag_results.clone(), None)?;
+        self.last_analysis_file_count = second_input.files.len();
+        let second = self.run_engine_analysis(second_input)?;
         let second_value = serde_json::to_value(&second)
             .map_err(|error| format!("could not serialize analysis: {error}"))?;
         let mut rule_results = None;
@@ -766,18 +978,99 @@ impl ProjectHandle {
         }
 
         let complete = if rule_results.is_some() {
-            engine::analyze(self.engine_input(tag_results, rule_results)?)?
+            let complete_input = self.analysis_engine_input(tag_results, rule_results)?;
+            self.last_analysis_file_count = complete_input.files.len();
+            self.run_engine_analysis(complete_input)?
         } else {
             second
         };
         if !matches!(complete, AnalyzeResult::Complete(_)) {
             return Err("callback materialization did not converge".to_owned());
         }
+        self.finish_analysis(complete)
+    }
+
+    fn finish_analysis(&mut self, complete: AnalyzeResult) -> Result<String, String> {
         let output = serde_json::to_string(&complete)
             .map_err(|error| format!("could not serialize analysis output: {error}"))?;
         self.pending_callbacks = None;
         self.capture_module_tags(&output)?;
-        Ok(output)
+        let value: Value = serde_json::from_str(&output)
+            .map_err(|error| format!("could not cache analysis output: {error}"))?;
+        self.cache_file_violations(&value)?;
+        self.merged_analysis_output(&value)
+    }
+
+    fn cache_file_violations(&mut self, output: &Value) -> Result<(), String> {
+        let reached = self.reached_files();
+        let affected = match &self.analysis_scope {
+            AnalysisScope::Full => {
+                self.file_violations.clear();
+                reached.clone()
+            }
+            AnalysisScope::Incremental(affected) => affected.clone(),
+        };
+        self.file_violations
+            .retain(|file, _| reached.contains(file));
+        for file in &affected {
+            self.file_violations
+                .insert(*file, CachedFileViolations::default());
+        }
+        for (category, field) in [
+            ("dependency", ViolationCategory::Dependency),
+            ("encapsulation", ViolationCategory::Encapsulation),
+            ("external", ViolationCategory::External),
+        ] {
+            for violation in output["violations"][category]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                let path = violation["file"]
+                    .as_str()
+                    .ok_or_else(|| format!("{category} violation has no file"))?;
+                let file = self.interner.intern_relative(&self.root_dir, path)?;
+                if !affected.contains(&file) {
+                    continue;
+                }
+                let cached = self.file_violations.entry(file).or_default();
+                match field {
+                    ViolationCategory::Dependency => cached.dependency.push(violation.clone()),
+                    ViolationCategory::Encapsulation => {
+                        cached.encapsulation.push(violation.clone());
+                    }
+                    ViolationCategory::External => cached.external.push(violation.clone()),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn merged_analysis_output(&self, latest: &Value) -> Result<String, String> {
+        let reached = self.reached_files();
+        let mut dependency = Vec::new();
+        let mut encapsulation = Vec::new();
+        let mut external = Vec::new();
+        for file in reached {
+            if let Some(cached) = self.file_violations.get(&file) {
+                dependency.extend(cached.dependency.iter().cloned());
+                encapsulation.extend(cached.encapsulation.iter().cloned());
+                external.extend(cached.external.iter().cloned());
+            }
+        }
+        sort_json_records(&mut dependency)?;
+        sort_json_records(&mut encapsulation)?;
+        sort_json_records(&mut external)?;
+        serde_json::to_string(&json!({
+            "schemaVersion": 1,
+            "modules": latest["modules"].clone(),
+            "violations": {
+                "dependency": dependency,
+                "encapsulation": encapsulation,
+                "external": external,
+            },
+        }))
+        .map_err(|error| format!("could not serialize cached analysis output: {error}"))
     }
 
     fn materialize_cached_tags(
@@ -930,12 +1223,8 @@ impl ProjectHandle {
         if path.is_absolute() {
             Ok(normalize_lexically(&path))
         } else {
-            let base = if self.root_dir.is_empty() {
-                std::env::current_dir()
-                    .map_err(|error| format!("could not read current directory: {error}"))?
-            } else {
-                self.root_path()
-            };
+            let base = std::env::current_dir()
+                .map_err(|error| format!("could not read current directory: {error}"))?;
             Ok(normalize_lexically(&base.join(path)))
         }
     }
@@ -959,12 +1248,54 @@ impl ProjectHandle {
 
 fn callback_key(candidate: &Value) -> Result<String, String> {
     let mut candidate = candidate.clone();
+    // matcherId remains in the serialized key, so decisions from different
+    // configured callbacks cannot alias even when their contexts are equal.
+    // Only the batch-local position is intentionally ignored.
     candidate
         .as_object_mut()
         .ok_or_else(|| "callback candidate is not an object".to_owned())?
         .remove("candidateIndex");
     serde_json::to_string(&candidate)
         .map_err(|error| format!("could not key callback candidate: {error}"))
+}
+
+fn closest_module(
+    file: PathId,
+    interner: &PathInterner,
+    module_paths: &FxHashSet<PathId>,
+) -> Option<PathId> {
+    let mut candidate = interner.text(file);
+    loop {
+        if let Some(id) = interner.id(candidate)
+            && module_paths.contains(&id)
+        {
+            return Some(id);
+        }
+        if candidate == "." {
+            return None;
+        }
+        candidate = candidate
+            .rfind('/')
+            .into_iter()
+            .chain(candidate.rfind('\\'))
+            .max()
+            .filter(|index| *index > 0)
+            .map_or(".", |index| &candidate[..index]);
+    }
+}
+
+fn sort_json_records(records: &mut [Value]) -> Result<(), String> {
+    let mut serialization_error = None;
+    records.sort_by(|left, right| {
+        match (serde_json::to_string(left), serde_json::to_string(right)) {
+            (Ok(left), Ok(right)) => left.encode_utf16().cmp(right.encode_utf16()),
+            (Err(error), _) | (_, Err(error)) => {
+                serialization_error = Some(error.to_string());
+                Ordering::Equal
+            }
+        }
+    });
+    serialization_error.map_or(Ok(()), Err)
 }
 
 fn dependency_stamp(path: &Path, overlay: Option<&str>) -> DependencyStamp {
@@ -1026,6 +1357,30 @@ fn normalize_lexically(path: &Path) -> PathBuf {
 
 fn default_barrel_file_name() -> String {
     "index.ts".to_owned()
+}
+
+fn normalize_handle_paths(input: &mut ProjectHandleInput) -> Result<(), String> {
+    let current_dir = std::env::current_dir()
+        .map_err(|error| format!("could not read current directory: {error}"))?;
+    let normalize = |path: &str| {
+        let path = PathBuf::from(path);
+        let absolute = if path.is_absolute() {
+            path
+        } else {
+            current_dir.join(path)
+        };
+        normalize_lexically(&absolute)
+            .to_string_lossy()
+            .into_owned()
+    };
+    input.entry_file = normalize(&input.entry_file);
+    input.ts_config_path = normalize(&input.ts_config_path);
+    input.sheriff_config_paths = input
+        .sheriff_config_paths
+        .iter()
+        .map(|path| normalize(path))
+        .collect();
+    Ok(())
 }
 
 fn validate_handle_input(input: &ProjectHandleInput) -> Result<(), String> {
@@ -1093,6 +1448,10 @@ mod tests {
             let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
             let root =
                 std::env::temp_dir().join(format!("sheriff-r4-handle-{}-{id}", std::process::id()));
+            Self::at(root)
+        }
+
+        fn at(root: PathBuf) -> Self {
             fs::create_dir_all(root.join("src/a")).unwrap();
             fs::create_dir_all(root.join("src/b")).unwrap();
             fs::create_dir_all(root.join("src/c")).unwrap();
@@ -1247,8 +1606,20 @@ mod tests {
                     json!([{"kind":"modified","path":project.package}])
                 }
             };
-            let incremental_output =
-                incremental.apply_changes(json!({"schemaVersion":1,"events":events}).to_string());
+            let changes = if matches!(operation, 1..=3) {
+                json!({
+                    "schemaVersion": 1,
+                    "events": events,
+                    "modulePaths": [
+                        {"path": project.root.join("src/a"), "isBarrel": false},
+                        {"path": project.root.join("src/b"), "isBarrel": false},
+                        {"path": project.root.join("src/c"), "isBarrel": false},
+                    ],
+                })
+            } else {
+                json!({"schemaVersion":1,"events":events})
+            };
+            let incremental_output = incremental.apply_changes(changes.to_string());
             assert_complete(&incremental_output);
 
             let mut clean = ProjectHandle::new(input.clone());
@@ -1286,6 +1657,247 @@ mod tests {
             fs::read_to_string(&project.entry).unwrap(),
             "import './a/a';\n"
         );
+    }
+
+    #[test]
+    fn tsconfig_overlay_rebuilds_resolution_from_overlay_bytes() {
+        let project = TestProject::new();
+        fs::write(
+            &project.config,
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@x":["src/b/b.ts"]}}}"#,
+        )
+        .unwrap();
+        fs::write(&project.entry, "import '@x';\n").unwrap();
+        let input = project.input();
+        let mut incremental = ProjectHandle::new(input.clone());
+        assert!(incremental.get_reached_files().contains("src/b/b.ts"));
+
+        let overlaid_config =
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@x":["src/c/c.ts"]}}}"#;
+        let incremental_output = incremental.set_overlay(
+            project.config.to_string_lossy().into_owned(),
+            overlaid_config.to_owned(),
+        );
+        assert_complete(&incremental_output);
+        assert!(incremental.get_reached_files().contains("src/c/c.ts"));
+
+        fs::write(&project.config, overlaid_config).unwrap();
+        let clean = ProjectHandle::new(input);
+        assert_eq!(incremental_output, clean.get_result());
+        assert_eq!(incremental.get_reached_files(), clean.get_reached_files());
+
+        fs::write(
+            &project.config,
+            r#"{"compilerOptions":{"baseUrl":".","paths":{"@x":["src/b/b.ts"]}}}"#,
+        )
+        .unwrap();
+        let cleared = incremental.clear_overlay(project.config.to_string_lossy().into_owned());
+        let clean = ProjectHandle::new(project.input());
+        assert_eq!(cleared, clean.get_result());
+        assert_eq!(incremental.get_reached_files(), clean.get_reached_files());
+    }
+
+    #[test]
+    fn package_overlay_set_and_clear_match_materialized_clean_rebuilds() {
+        let project = TestProject::new();
+        fs::write(&project.entry, "import 'virtual-library';\n").unwrap();
+        let input = project.input();
+        let mut incremental = ProjectHandle::new(input.clone());
+        let disk_result = incremental.get_result();
+        let overlaid_manifest = r#"{"name":"r4-test","dependencies":{"virtual-library":"1.0.0"}}"#;
+        let overlaid = incremental.set_overlay(
+            project.package.to_string_lossy().into_owned(),
+            overlaid_manifest.to_owned(),
+        );
+        assert_complete(&overlaid);
+        fs::write(&project.package, overlaid_manifest).unwrap();
+        assert_eq!(overlaid, ProjectHandle::new(input.clone()).get_result());
+
+        fs::write(&project.package, r#"{"name":"r4-test"}"#).unwrap();
+        let cleared = incremental.clear_overlay(project.package.to_string_lossy().into_owned());
+        assert_eq!(cleared, disk_result);
+        assert_eq!(cleared, ProjectHandle::new(input).get_result());
+    }
+
+    #[test]
+    fn barrel_add_and_remove_match_refreshed_clean_module_discovery() {
+        let project = TestProject::new();
+        fs::create_dir_all(project.root.join("src/source")).unwrap();
+        fs::create_dir_all(project.root.join("src/target")).unwrap();
+        let source = project.root.join("src/source/entry.ts");
+        let target = project.root.join("src/target/public.ts");
+        let barrel = project.root.join("src/target/index.ts");
+        fs::write(&source, "import '../target/public';\n").unwrap();
+        fs::write(&target, "export const publicValue = true;\n").unwrap();
+        let make_input = |is_barrel: bool| {
+            json!({
+                "schemaVersion": 1,
+                "entryFile": source,
+                "tsConfigPath": project.config,
+                "modulePaths": [
+                    {"path": project.root.join("src/source"), "isBarrel": false},
+                    {"path": project.root.join("src/target"), "isBarrel": is_barrel},
+                ],
+                "moduleConfig": {"src/source": "source", "src/target": "target"},
+                "autoTagging": true,
+                "depRules": {"*": "*"},
+                "denyRules": {},
+                "externalRules": {},
+                "encapsulationPattern": "internal",
+                "enableBarrelLess": true,
+            })
+            .to_string()
+        };
+        let mut incremental = ProjectHandle::new(make_input(false));
+        let initial = incremental.get_result();
+        fs::write(&barrel, "export * from './public';\n").unwrap();
+        let added = incremental.apply_changes(
+            json!({
+                "schemaVersion": 1,
+                "events": [{"kind":"created", "path":barrel}],
+                "modulePaths": [
+                    {"path": project.root.join("src/source"), "isBarrel": false},
+                    {"path": project.root.join("src/target"), "isBarrel": true},
+                ],
+            })
+            .to_string(),
+        );
+        assert_eq!(added, ProjectHandle::new(make_input(true)).get_result());
+        assert!(added.contains("encapsulation"));
+        assert!(added.contains("src/target/public.ts"));
+
+        fs::remove_file(&barrel).unwrap();
+        let removed = incremental.apply_changes(
+            json!({
+                "schemaVersion": 1,
+                "events": [{"kind":"deleted", "path":barrel}],
+                "modulePaths": [
+                    {"path": project.root.join("src/source"), "isBarrel": false},
+                    {"path": project.root.join("src/target"), "isBarrel": false},
+                ],
+            })
+            .to_string(),
+        );
+        assert_eq!(removed, initial);
+        assert_eq!(removed, ProjectHandle::new(make_input(false)).get_result());
+    }
+
+    #[test]
+    fn relative_constructor_paths_remain_stable_across_rebuilds() {
+        let current = std::env::current_dir().unwrap();
+        let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+        let project = TestProject::at(
+            current
+                .join("target")
+                .join(format!("sheriff-r4-relative-{}-{id}", std::process::id())),
+        );
+        let mut input: Value = serde_json::from_str(&project.input()).unwrap();
+        input["entryFile"] = Value::from(
+            project
+                .entry
+                .strip_prefix(&current)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+        );
+        input["tsConfigPath"] = Value::from(
+            project
+                .config
+                .strip_prefix(&current)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let input = input.to_string();
+        let mut incremental = ProjectHandle::new(input.clone());
+        assert_complete(&incremental.get_result());
+        let created = project.root.join("src/new.ts");
+        fs::write(&created, "export const created = true;\n").unwrap();
+        let rebuilt = incremental.apply_changes(
+            json!({
+                "schemaVersion": 1,
+                "events": [{"kind":"created", "path":created}],
+                "modulePaths": [
+                    {"path": project.root.join("src/a"), "isBarrel": false},
+                    {"path": project.root.join("src/b"), "isBarrel": false},
+                    {"path": project.root.join("src/c"), "isBarrel": false},
+                ],
+            })
+            .to_string(),
+        );
+        assert_complete(&rebuilt);
+        assert_eq!(rebuilt, ProjectHandle::new(input).get_result());
+    }
+
+    #[test]
+    fn structural_event_without_refreshed_module_paths_is_an_error() {
+        let project = TestProject::new();
+        fs::create_dir_all(project.root.join("src/source")).unwrap();
+        fs::create_dir_all(project.root.join("src/target")).unwrap();
+        let source = project.root.join("src/source/entry.ts");
+        let target = project.root.join("src/target/public.ts");
+        fs::write(&source, "import '../target/public';\n").unwrap();
+        fs::write(&target, "export const publicValue = true;\n").unwrap();
+        let input = json!({
+            "schemaVersion": 1,
+            "entryFile": source,
+            "tsConfigPath": project.config,
+            "modulePaths": [
+                {"path": project.root.join("src/source"), "isBarrel": false},
+                {"path": project.root.join("src/target"), "isBarrel": false},
+            ],
+            "moduleConfig": {"src/source": "source", "src/target": "target"},
+            "autoTagging": true,
+            "depRules": {"*": "*"},
+            "denyRules": {},
+            "externalRules": {},
+            "encapsulationPattern": "internal",
+            "enableBarrelLess": true,
+        })
+        .to_string();
+        let mut handle = ProjectHandle::new(input);
+        assert_complete(&handle.get_result());
+        let barrel = project.root.join("src/target/index.ts");
+        fs::write(&barrel, "export * from './public';\n").unwrap();
+        let output = handle.apply_changes(
+            json!({
+                "schemaVersion": 1,
+                "events": [{"kind":"created", "path":barrel}],
+            })
+            .to_string(),
+        );
+        let error: Value = serde_json::from_str(&output).unwrap();
+        assert!(
+            error["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("modulePaths")),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn source_edit_rechecks_fewer_files_than_the_reached_graph() {
+        let project = TestProject::new();
+        let input = project.input();
+        let mut handle = ProjectHandle::new(input.clone());
+        assert_complete(&handle.get_result());
+        let changed = project.root.join("src/b/b.ts");
+        fs::write(&changed, "export const b = 2;\n").unwrap();
+        let incremental = handle.apply_changes(
+            json!({
+                "schemaVersion": 1,
+                "events": [{"kind":"modified", "path":changed}],
+            })
+            .to_string(),
+        );
+        assert_complete(&incremental);
+        assert!(
+            handle.last_analysis_file_count < handle.reached_files().len(),
+            "source edit checked {} files from a {}-file graph",
+            handle.last_analysis_file_count,
+            handle.reached_files().len()
+        );
+        assert_eq!(incremental, ProjectHandle::new(input).get_result());
     }
 
     #[test]
@@ -1374,20 +1986,17 @@ mod tests {
     }
 
     fn assert_reverse_edges(handle: &ProjectHandle) {
+        let mut expected = FxHashMap::<PathId, FxHashSet<PathId>>::default();
         for (source, imports) in &handle.forward {
             for import in imports {
                 if let GraphImport::Module { target, .. } = import {
-                    assert!(
-                        handle
-                            .reverse
-                            .get(target)
-                            .is_some_and(|importers| importers.contains(source)),
-                        "missing reverse edge {} <- {}",
-                        handle.interner.text(*target),
-                        handle.interner.text(*source)
-                    );
+                    expected.entry(*target).or_default().insert(*source);
                 }
             }
         }
+        assert_eq!(
+            handle.reverse, expected,
+            "reverse edges contain a missing or stale entry"
+        );
     }
 }

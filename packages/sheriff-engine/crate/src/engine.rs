@@ -15,6 +15,8 @@ use crate::rules::{
 };
 use crate::tags::{CalculatedTags, calculate_tags_with_callbacks, replace_tags};
 
+type ModuleTagLookup<'a> = dyn Fn(&str) -> Option<Vec<String>> + 'a;
+
 #[derive(Debug)]
 struct ModuleData {
     path: PathId,
@@ -178,6 +180,20 @@ struct FileViolations {
 }
 
 pub fn analyze(input: EngineInput) -> Result<AnalyzeResult, String> {
+    analyze_inner(input, None)
+}
+
+pub(crate) fn analyze_with_module_tags(
+    input: EngineInput,
+    module_tags: impl Fn(&str) -> Option<Vec<String>>,
+) -> Result<AnalyzeResult, String> {
+    analyze_inner(input, Some(&module_tags))
+}
+
+fn analyze_inner(
+    input: EngineInput,
+    precomputed_module_tags: Option<&ModuleTagLookup<'_>>,
+) -> Result<AnalyzeResult, String> {
     if input.schema_version != 1 {
         return Err(format!(
             "unsupported schemaVersion {}; expected 1",
@@ -236,11 +252,20 @@ pub fn analyze(input: EngineInput) -> Result<AnalyzeResult, String> {
                 interner.text(path)
             ));
         }
-        let tags = match calculate_tags_with_callbacks(
-            interner.text(path),
-            &input.module_config,
-            input.auto_tagging,
-        )? {
+        let calculated = precomputed_module_tags
+            .and_then(|get_tags| get_tags(interner.text(path)))
+            .map(CalculatedTags::Tags)
+            .map_or_else(
+                || {
+                    calculate_tags_with_callbacks(
+                        interner.text(path),
+                        &input.module_config,
+                        input.auto_tagging,
+                    )
+                },
+                Ok,
+            )?;
+        let tags = match calculated {
             CalculatedTags::Tags(tags) => tags,
             CalculatedTags::Callback(callback) => {
                 let candidate_index = tag_callback_candidates.len();

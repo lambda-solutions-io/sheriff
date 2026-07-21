@@ -189,10 +189,15 @@ export interface ResolveProjectErrorOutput extends EngineErrorOutput {
 
 export interface ProjectHandleInput
   extends Omit<EngineInput, 'rootDir' | 'files'> {
+  /** Absolute path, or a path resolved once against process.cwd() at construction. */
   entryFile: string;
+  /** Absolute path, or a path resolved once against process.cwd() at construction. */
   tsConfigPath: string;
   ignoreFileExtensions?: string[];
-  /** Evaluated Sheriff config inputs to stamp; changes require a replacement handle. */
+  /**
+   * Evaluated Sheriff config inputs to stamp. Relative paths are resolved once
+   * against process.cwd(); changes and overlays require a replacement handle.
+   */
   sheriffConfigPaths?: string[];
   /** Continue for differential measurement when the resolver fallback gate fires. */
   shadowMode?: boolean;
@@ -208,7 +213,11 @@ export type ProjectChangeEvent =
 export interface ApplyProjectChangesInput {
   schemaVersion: 1;
   events: ProjectChangeEvent[];
-  /** Updated Node-discovered modules after a directory-structure change. */
+  /**
+   * Updated Node-discovered modules. Required when events contains created,
+   * deleted, renamed, or directory because those events can change module
+   * membership and barrel status.
+   */
   modulePaths?: EngineModulePath[];
 }
 

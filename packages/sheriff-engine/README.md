@@ -32,7 +32,8 @@ Destructured and nested parameters are supported; non-computed property names an
 are not references.
 Native/opaque functions, unsupported source forms, `this`, `super`, `import.meta`, `new.target`,
 and every unresolved identifier cause `SHERIFF_ENGINE_IMPURE_CALLBACK` fallback before the
-callback is invoked.
+callback is invoked. A named callback that references its own binding is also rejected because
+properties on that function can retain mutable state across calls.
 
 This lexical gate cannot prove that calls made through a parameter are side-effect-free, nor can
 it detect mutation reachable only through such a parameter. Accepted callbacks are therefore
@@ -77,16 +78,31 @@ renamed, directory, and overlay events. A content-only edit patches that file's
 edges and reverse-edge entries; create/delete/rename, tsconfig, package manifest,
 and directory events deliberately rebuild the reached graph.
 
-Overlays are stored separately and are passed to extraction for only the
-overlaid file. They never populate or replace disk state; `clearOverlay` reads
-the file from disk again. `sheriffConfigPaths` are stamped, but executable
-Sheriff configuration remains Node-owned. A change to one of those paths returns
-a structured error requiring a new handle with the freshly evaluated config.
+Overlays are stored separately and never populate or replace disk state. Source
+overlays are passed to extraction for only the overlaid file. Tsconfig-chain and
+package-manifest overlays are read through the resolver's virtual filesystem and
+force a graph rebuild; `clearOverlay` returns to the on-disk bytes. Executable
+Sheriff configuration remains Node-owned, so setting or clearing an overlay for
+a `sheriffConfigPaths` entry returns a structured error requiring a new handle
+with the freshly evaluated config.
+
+Module discovery also remains Node-owned. An `applyChanges` batch containing a
+`created`, `deleted`, `renamed`, or `directory` event must include freshly
+discovered `modulePaths`; the handle returns an error instead of analyzing with
+possibly stale module membership or barrel status when they are omitted.
 
 Function-valued configuration uses the same purity gate and candidate protocol
 as `analyzeProject`. Candidate decisions are cached by their complete
-materialized context across native method calls. The public JavaScript class
+materialized context and matcher id across native method calls; only the
+batch-local candidate index is excluded from the key. The public JavaScript class
 settles tag and rule candidates synchronously and returns serialized
 `EngineOutput` from `applyChanges`, `setOverlay`, `clearOverlay`, and
 `getResult`. `getReachedFiles` returns the sorted root-relative transitive file
 set for differential testing.
+
+For ordinary source modifications and source overlays, analysis reuses cached
+module assignments, module tags, and per-file violation buckets. It rechecks the
+changed file, its direct reverse importers, newly reached files, and direct
+targets needed to evaluate those edges. Resolution-wide changes (tsconfig or
+package manifests), structural events, and refreshed module discovery rebuild
+the graph and conservatively reanalyze every reached file.

@@ -73,6 +73,18 @@ function obviousImpurityReason(callback) {
       return;
     }
     if (ts.isIdentifier(node) && isIdentifierReference(node)) {
+      // A named function expression declares its own name inside the callback,
+      // but reading that binding enables persistent self-mutation such as
+      // `decision.calls++`. Recursive callbacks are conservatively routed to
+      // the compatibility engine for the same reason.
+      if (
+        ts.isFunctionExpression(parsed.callback) &&
+        parsed.callback.name?.text === node.text &&
+        parsed.callback.name !== node
+      ) {
+        freeIdentifier = node.text;
+        return;
+      }
       const symbol = ts.isShorthandPropertyAssignment(node.parent)
         ? parsed.checker.getShorthandAssignmentValueSymbol(node.parent)
         : parsed.checker.getSymbolAtLocation(node);

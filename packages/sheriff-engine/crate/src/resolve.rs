@@ -1,11 +1,15 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fs;
+use std::io;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use oxc_resolver::{
-    ResolveOptions, Resolver, TsconfigDiscovery, TsconfigOptions, TsconfigReferences,
+    FileMetadata, FileSystem, FileSystemOs, ResolveError, ResolveOptions, ResolverGeneric,
+    TsconfigDiscovery, TsconfigOptions, TsconfigReferences,
 };
+use rustc_hash::FxHashMap;
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -53,6 +57,69 @@ const SUPPORTED_COMPILER_OPTIONS: &[&str] = &[
     "types",
     "useDefineForClassFields",
 ];
+
+type EngineResolver = ResolverGeneric<OverlayFileSystem>;
+
+#[derive(Clone)]
+struct OverlayFileSystem {
+    disk: FileSystemOs,
+    overlays: Arc<FxHashMap<PathBuf, String>>,
+}
+
+impl OverlayFileSystem {
+    fn with_overlays(overlays: Option<&FxHashMap<PathBuf, String>>) -> Self {
+        Self {
+            disk: <FileSystemOs as FileSystem>::new(),
+            overlays: Arc::new(overlays.cloned().unwrap_or_default()),
+        }
+    }
+
+    fn overlay(&self, path: &Path) -> Option<&str> {
+        self.overlays.get(path).map(String::as_str)
+    }
+}
+
+impl FileSystem for OverlayFileSystem {
+    fn new() -> Self {
+        Self::with_overlays(None)
+    }
+
+    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        self.overlay(path)
+            .map(|source| Ok(source.as_bytes().to_vec()))
+            .unwrap_or_else(|| self.disk.read(path))
+    }
+
+    fn read_to_string(&self, path: &Path) -> io::Result<String> {
+        self.overlay(path)
+            .map(|source| Ok(source.to_owned()))
+            .unwrap_or_else(|| self.disk.read_to_string(path))
+    }
+
+    fn metadata(&self, path: &Path) -> io::Result<FileMetadata> {
+        self.overlay(path)
+            .map(|_| Ok(FileMetadata::new(true, false, false)))
+            .unwrap_or_else(|| self.disk.metadata(path))
+    }
+
+    fn symlink_metadata(&self, path: &Path) -> io::Result<FileMetadata> {
+        self.overlay(path)
+            .map(|_| Ok(FileMetadata::new(true, false, false)))
+            .unwrap_or_else(|| self.disk.symlink_metadata(path))
+    }
+
+    fn read_link(&self, path: &Path) -> Result<PathBuf, ResolveError> {
+        self.disk.read_link(path)
+    }
+
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        if self.overlay(path).is_some() {
+            std::path::absolute(path)
+        } else {
+            self.disk.canonicalize(path)
+        }
+    }
+}
 
 const EXPLICITLY_UNSUPPORTED_COMPILER_OPTIONS: &[&str] = &[
     "allowImportingTsExtensions",
@@ -417,7 +484,8 @@ pub enum ResolveProjectError {
 /// call and is never retained by the resolver.
 pub(crate) struct ResolveSession {
     context: TsConfigContext,
-    resolver: Resolver,
+    resolver: EngineResolver,
+    overlays: FxHashMap<PathBuf, String>,
     ignored: HashSet<String>,
     reached_packages: HashSet<ReachedPackage>,
     import_count: usize,
@@ -441,18 +509,24 @@ pub(crate) struct ResolutionContextSnapshot {
 }
 
 impl ResolveSession {
-    pub(crate) fn new(
+    pub(crate) fn new_with_overlays(
         ts_config_path: &Path,
         ignore_file_extensions: &[String],
         shadow_mode: bool,
+        overlays: &FxHashMap<PathBuf, String>,
     ) -> Result<Self, ResolveProjectError> {
-        let mut context = get_ts_config_context(ts_config_path)?;
+        let mut context = get_ts_config_context_with_overlays(ts_config_path, overlays)?;
         context.fallback_reasons.sort();
         context.fallback_reasons.dedup();
-        let resolver = create_resolver(Some(ts_config_path), context.module_resolution.as_deref());
+        let resolver = create_resolver(
+            Some(ts_config_path),
+            context.module_resolution.as_deref(),
+            Some(overlays),
+        );
         Ok(Self {
             context,
             resolver,
+            overlays: overlays.clone(),
             ignored: ignore_file_extensions
                 .iter()
                 .map(|extension| extension.to_lowercase())
@@ -516,6 +590,7 @@ impl ResolveSession {
             &self.ignored,
             &self.context,
             &self.resolver,
+            &self.overlays,
             &mut self.reached_packages,
         )?;
         Ok(Some(ResolvedFile {
@@ -537,6 +612,7 @@ impl ResolveSession {
             .extend(types_versions_fallback_reasons(
                 &self.reached_packages,
                 &self.context.root_dir,
+                &self.overlays,
             ));
         self.context.fallback_reasons.sort();
         self.context.fallback_reasons.dedup();
@@ -562,15 +638,25 @@ pub fn resolve_module_name_for_shadow(
     let resolver = create_resolver(
         Some(Path::new(&input.ts_config_path)),
         context.module_resolution.as_deref(),
+        None,
     );
     let containing_file = Path::new(&input.containing_file);
-    let (alias, _) =
-        resolve_ts_path_alias(&resolver, containing_file, &input.specifier, &context.paths);
+    let (alias, _) = resolve_ts_path_alias(
+        &resolver,
+        containing_file,
+        &input.specifier,
+        &context.paths,
+        &FxHashMap::default(),
+    );
     let manifest_path = (!is_relative_import(&input.specifier)
         && !Path::new(&input.specifier).is_absolute())
     .then(|| {
         containing_file.parent().and_then(|directory| {
-            find_installed_package_manifest(directory, &extract_package_name(&input.specifier))
+            find_installed_package_manifest(
+                directory,
+                &extract_package_name(&input.specifier),
+                &FxHashMap::default(),
+            )
         })
     })
     .flatten();
@@ -582,6 +668,7 @@ pub fn resolve_module_name_for_shadow(
                 &input.specifier,
                 &context,
                 manifest_path.as_deref(),
+                &FxHashMap::default(),
             )
         })
         .map(|path| path.to_string_lossy().into_owned());
@@ -625,6 +712,7 @@ pub fn resolve_project(
     let resolver = create_resolver(
         Some(Path::new(&input.ts_config_path)),
         context.module_resolution.as_deref(),
+        None,
     );
     let ignored: HashSet<String> = input
         .ignore_file_extensions
@@ -669,6 +757,7 @@ pub fn resolve_project(
                     &ignored,
                     &context,
                     &resolver,
+                    &FxHashMap::default(),
                     &mut reached_packages,
                 )?;
                 files.push(ResolvedFile {
@@ -696,6 +785,7 @@ pub fn resolve_project(
         .extend(types_versions_fallback_reasons(
             &reached_packages,
             &context.root_dir,
+            &FxHashMap::default(),
         ));
     context.fallback_reasons.sort();
     context.fallback_reasons.dedup();
@@ -769,6 +859,13 @@ fn checked_import_total(current: usize, additional: usize) -> Result<usize, Reso
 pub fn get_ts_config_context(
     ts_config_path: &Path,
 ) -> Result<TsConfigContext, ResolveProjectError> {
+    get_ts_config_context_with_overlays(ts_config_path, &FxHashMap::default())
+}
+
+fn get_ts_config_context_with_overlays(
+    ts_config_path: &Path,
+    overlays: &FxHashMap<PathBuf, String>,
+) -> Result<TsConfigContext, ResolveProjectError> {
     let mut current_path = ts_config_path.to_path_buf();
     let mut current_dir = parent(&current_path)?;
     let mut paths: Vec<MaterializedPath> = Vec::new();
@@ -777,7 +874,7 @@ pub fn get_ts_config_context(
     let mut source_config_paths = Vec::new();
     let mut fallback_reasons = Vec::new();
     let mut unique_config_paths = HashSet::new();
-    let resolver = create_resolver(None, None);
+    let resolver = create_resolver(None, None, Some(overlays));
 
     loop {
         unique_config_paths.insert(current_path.clone());
@@ -787,7 +884,10 @@ pub fn get_ts_config_context(
             )));
         }
         source_config_paths.push(current_path.clone());
-        let config = read_ts_config(&current_path)?;
+        let config = read_ts_config(
+            &current_path,
+            overlays.get(&current_path).map(String::as_str),
+        )?;
 
         if base_url.is_none()
             && let Some(raw_base_url) = &config.compiler_options.base_url
@@ -977,10 +1077,18 @@ fn validate_option_value(
     }
 }
 
-fn read_ts_config(path: &Path) -> Result<RawTsConfig, ResolveProjectError> {
-    let raw = fs::read_to_string(path).map_err(|error| {
-        ResolveProjectError::Resolution(format!("could not read {}: {error}", path.display()))
-    })?;
+fn read_ts_config(path: &Path, overlay: Option<&str>) -> Result<RawTsConfig, ResolveProjectError> {
+    let raw = overlay.map(str::to_owned).map_or_else(
+        || {
+            fs::read_to_string(path).map_err(|error| {
+                ResolveProjectError::Resolution(format!(
+                    "could not read {}: {error}",
+                    path.display()
+                ))
+            })
+        },
+        Ok,
+    )?;
     if raw.len() > MAX_STRING_BYTES {
         return Err(ResolveProjectError::LimitExceeded(format!(
             "tsconfig {} exceeds the {MAX_STRING_BYTES} byte string/path limit",
@@ -1074,53 +1182,60 @@ fn sanitize_jsonc(source: &str) -> String {
     String::from_utf8(output).expect("JSONC sanitization preserves UTF-8")
 }
 
-fn create_resolver(ts_config_path: Option<&Path>, _module_resolution: Option<&str>) -> Resolver {
-    Resolver::new(ResolveOptions {
-        tsconfig: ts_config_path.map(|config_file| {
-            TsconfigDiscovery::Manual(TsconfigOptions {
-                config_file: config_file.to_path_buf(),
-                references: TsconfigReferences::Disabled,
-            })
-        }),
-        // Sheriff currently passes the full ts.readConfigFile result instead
-        // of its `config` member to parseJsonConfigFileContent. Consequently,
-        // ts.resolveModuleName sees none of the parsed compiler options and
-        // uses its default condition set even when the raw config says bundler.
-        condition_names: Vec::new(),
-        exports_fields: Vec::new(),
-        imports_fields: Vec::new(),
-        extensions: vec![
-            ".ts".to_owned(),
-            ".tsx".to_owned(),
-            ".d.ts".to_owned(),
-            ".mts".to_owned(),
-            ".cts".to_owned(),
-            ".js".to_owned(),
-            ".jsx".to_owned(),
-            ".mjs".to_owned(),
-            ".cjs".to_owned(),
-        ],
-        extension_alias: vec![
-            (
+fn create_resolver(
+    ts_config_path: Option<&Path>,
+    _module_resolution: Option<&str>,
+    overlays: Option<&FxHashMap<PathBuf, String>>,
+) -> EngineResolver {
+    EngineResolver::new_with_file_system(
+        OverlayFileSystem::with_overlays(overlays),
+        ResolveOptions {
+            tsconfig: ts_config_path.map(|config_file| {
+                TsconfigDiscovery::Manual(TsconfigOptions {
+                    config_file: config_file.to_path_buf(),
+                    references: TsconfigReferences::Disabled,
+                })
+            }),
+            // Sheriff currently passes the full ts.readConfigFile result instead
+            // of its `config` member to parseJsonConfigFileContent. Consequently,
+            // ts.resolveModuleName sees none of the parsed compiler options and
+            // uses its default condition set even when the raw config says bundler.
+            condition_names: Vec::new(),
+            exports_fields: Vec::new(),
+            imports_fields: Vec::new(),
+            extensions: vec![
+                ".ts".to_owned(),
+                ".tsx".to_owned(),
+                ".d.ts".to_owned(),
+                ".mts".to_owned(),
+                ".cts".to_owned(),
                 ".js".to_owned(),
-                vec![".ts".to_owned(), ".tsx".to_owned(), ".js".to_owned()],
-            ),
-            (
+                ".jsx".to_owned(),
                 ".mjs".to_owned(),
-                vec![".mts".to_owned(), ".mjs".to_owned()],
-            ),
-            (
                 ".cjs".to_owned(),
-                vec![".cts".to_owned(), ".cjs".to_owned()],
-            ),
-        ],
-        main_fields: vec!["types".to_owned(), "typings".to_owned(), "main".to_owned()],
-        // TypeScript's `isExternalLibraryImport` describes how a request was
-        // found, even when a node_modules symlink points outside the project.
-        // Keeping the unresolved symlink path preserves that classification.
-        symlinks: false,
-        ..ResolveOptions::default()
-    })
+            ],
+            extension_alias: vec![
+                (
+                    ".js".to_owned(),
+                    vec![".ts".to_owned(), ".tsx".to_owned(), ".js".to_owned()],
+                ),
+                (
+                    ".mjs".to_owned(),
+                    vec![".mts".to_owned(), ".mjs".to_owned()],
+                ),
+                (
+                    ".cjs".to_owned(),
+                    vec![".cts".to_owned(), ".cjs".to_owned()],
+                ),
+            ],
+            main_fields: vec!["types".to_owned(), "typings".to_owned(), "main".to_owned()],
+            // TypeScript's `isExternalLibraryImport` describes how a request was
+            // found, even when a node_modules symlink points outside the project.
+            // Keeping the unresolved symlink path preserves that classification.
+            symlinks: false,
+            ..ResolveOptions::default()
+        },
+    )
 }
 
 fn resolve_imports(
@@ -1128,11 +1243,12 @@ fn resolve_imports(
     extracted: Vec<ExtractedImport>,
     ignored: &HashSet<String>,
     context: &TsConfigContext,
-    resolver: &Resolver,
+    resolver: &EngineResolver,
+    overlays: &FxHashMap<PathBuf, String>,
     reached_packages: &mut HashSet<ReachedPackage>,
 ) -> Result<Vec<ResolvedImport>, String> {
     let importing_dir = parent(importing_file)?;
-    let universe = dependency_universe(&importing_dir, &context.root_dir);
+    let universe = dependency_universe(&importing_dir, &context.root_dir, overlays);
     let mut external_seen = HashSet::new();
     let mut output = Vec::new();
 
@@ -1151,7 +1267,11 @@ fn resolve_imports(
             !is_relative_import(&import.raw) && !Path::new(&import.raw).is_absolute();
         let installed_package_manifest = is_bare_import
             .then(|| {
-                find_installed_package_manifest(&importing_dir, &extract_package_name(&import.raw))
+                find_installed_package_manifest(
+                    &importing_dir,
+                    &extract_package_name(&import.raw),
+                    overlays,
+                )
             })
             .flatten();
         // Sheriff computes normal resolution eagerly even though alias resolution
@@ -1162,11 +1282,17 @@ fn resolve_imports(
             &import.raw,
             context,
             installed_package_manifest.as_deref(),
+            overlays,
         );
         let normal_is_none = normal.is_none();
         let normal_package = normal.as_deref().and_then(reached_package_from_path);
-        let (alias, alias_package) =
-            resolve_ts_path_alias(resolver, importing_file, &import.raw, &context.paths);
+        let (alias, alias_package) = resolve_ts_path_alias(
+            resolver,
+            importing_file,
+            &import.raw,
+            &context.paths,
+            overlays,
+        );
         let alias_is_none = alias.is_none();
 
         let (kind, resolved) = classify(&import.raw, alias, normal, &context.root_dir, &universe)?;
@@ -1209,10 +1335,11 @@ fn resolve_imports(
 }
 
 fn resolve_ts_path_alias(
-    resolver: &Resolver,
+    resolver: &EngineResolver,
     importing_file: &Path,
     specifier: &str,
     paths: &[MaterializedPath],
+    overlays: &FxHashMap<PathBuf, String>,
 ) -> (Option<PathBuf>, Option<ReachedPackage>) {
     let mut reached_package = None;
     let resolved = resolve_potential_ts_path(specifier, paths, |rewritten| {
@@ -1227,6 +1354,7 @@ fn resolve_ts_path_alias(
                     importing_file,
                     &package_specifier,
                     manifest_path,
+                    overlays,
                 ) {
                     return Some(mapped);
                 }
@@ -1262,11 +1390,12 @@ fn package_specifier_for_path(package: &ReachedPackage, path: &Path) -> String {
 }
 
 fn normal_resolve(
-    resolver: &Resolver,
+    resolver: &EngineResolver,
     importing_file: &Path,
     specifier: &str,
     context: &TsConfigContext,
     package_manifest: Option<&Path>,
+    overlays: &FxHashMap<PathBuf, String>,
 ) -> Option<PathBuf> {
     // resolveJsonModule never reaches Sheriff's ts.resolveModuleName call (see
     // create_resolver), while oxc resolves an explicit existing .json path even
@@ -1290,7 +1419,7 @@ fn normal_resolve(
     }
     if let Some(manifest_path) = package_manifest
         && let Ok(Some(resolved)) =
-            resolve_types_versions(resolver, importing_file, specifier, manifest_path)
+            resolve_types_versions(resolver, importing_file, specifier, manifest_path, overlays)
     {
         return Some(resolved);
     }
@@ -1385,15 +1514,22 @@ fn classify(
     ))
 }
 
-fn dependency_universe(file_dir: &Path, root_dir: &Path) -> HashSet<String> {
+fn dependency_universe(
+    file_dir: &Path,
+    root_dir: &Path,
+    overlays: &FxHashMap<PathBuf, String>,
+) -> HashSet<String> {
     if file_dir.strip_prefix(root_dir).is_err() {
         return HashSet::new();
     }
     let mut current = file_dir.to_path_buf();
     loop {
         let manifest = current.join("package.json");
-        if manifest.is_file() {
-            return parse_dependency_universe(&manifest);
+        if manifest.is_file() || overlays.contains_key(&manifest) {
+            return parse_dependency_universe(
+                &manifest,
+                overlays.get(&manifest).map(String::as_str),
+            );
         }
         if current == root_dir {
             return HashSet::new();
@@ -1788,12 +1924,16 @@ fn valid_build(build: &str) -> bool {
 }
 
 fn resolve_types_versions(
-    resolver: &Resolver,
+    resolver: &EngineResolver,
     importing_file: &Path,
     specifier: &str,
     manifest_path: &Path,
+    overlays: &FxHashMap<PathBuf, String>,
 ) -> Result<Option<PathBuf>, String> {
-    let manifest = read_ordered_json(manifest_path)?;
+    let manifest = read_ordered_json(
+        manifest_path,
+        overlays.get(manifest_path).map(String::as_str),
+    )?;
     let Some(paths) = selected_types_versions_paths(&manifest)? else {
         return Ok(None);
     };
@@ -1821,8 +1961,10 @@ fn resolve_types_versions(
     Ok(None)
 }
 
-fn read_ordered_json(path: &Path) -> Result<OrderedJson, String> {
-    let raw = fs::read_to_string(path)
+fn read_ordered_json(path: &Path, overlay: Option<&str>) -> Result<OrderedJson, String> {
+    let raw = overlay
+        .map(str::to_owned)
+        .map_or_else(|| fs::read_to_string(path), Ok)
         .map_err(|error| format!("could not read {}: {error}", path.display()))?;
     serde_json::from_str(&raw)
         .map_err(|error| format!("could not parse {}: {error}", path.display()))
@@ -1967,6 +2109,7 @@ fn object_get_last<'a>(entries: &'a [(String, OrderedJson)], key: &str) -> Optio
 fn types_versions_fallback_reasons(
     reached_packages: &HashSet<ReachedPackage>,
     root_dir: &Path,
+    overlays: &FxHashMap<PathBuf, String>,
 ) -> Vec<String> {
     let mut reasons = Vec::new();
     let mut packages: Vec<_> = reached_packages
@@ -1981,7 +2124,11 @@ fn types_versions_fallback_reasons(
     packages.sort_by(|left, right| left.1.cmp(right.1).then_with(|| left.0.cmp(right.0)));
 
     for (package, manifest_path) in packages {
-        let support_error = read_ordered_json(manifest_path).and_then(|manifest| {
+        let support_error = read_ordered_json(
+            manifest_path,
+            overlays.get(manifest_path).map(String::as_str),
+        )
+        .and_then(|manifest| {
             selected_types_versions_paths(&manifest).and_then(|selected| {
                 if let Some(paths) = selected {
                     types_versions_module_name(&manifest, package)
@@ -2054,22 +2201,29 @@ fn reached_package_from_path(resolved: &Path) -> Option<ReachedPackage> {
     None
 }
 
-fn find_installed_package_manifest(importing_dir: &Path, package: &str) -> Option<PathBuf> {
+fn find_installed_package_manifest(
+    importing_dir: &Path,
+    package: &str,
+    overlays: &FxHashMap<PathBuf, String>,
+) -> Option<PathBuf> {
     let mut current = importing_dir;
     loop {
         let manifest = current
             .join("node_modules")
             .join(package)
             .join("package.json");
-        if manifest.is_file() {
+        if manifest.is_file() || overlays.contains_key(&manifest) {
             return Some(manifest);
         }
         current = current.parent()?;
     }
 }
 
-fn parse_dependency_universe(path: &Path) -> HashSet<String> {
-    let Ok(raw) = fs::read_to_string(path) else {
+fn parse_dependency_universe(path: &Path, overlay: Option<&str>) -> HashSet<String> {
+    let Ok(raw) = overlay
+        .map(str::to_owned)
+        .map_or_else(|| fs::read_to_string(path), Ok)
+    else {
         return HashSet::new();
     };
     let Ok(manifest) = serde_json::from_str::<Value>(&raw) else {
@@ -3068,7 +3222,11 @@ mod tests {
             }"#,
         );
         fs::create_dir_all(temp.0.join("src/nested")).unwrap();
-        let universe = dependency_universe(&temp.0.join("src/nested"), &temp.0);
+        let universe = dependency_universe(
+            &temp.0.join("src/nested"),
+            &temp.0,
+            &rustc_hash::FxHashMap::default(),
+        );
         assert_eq!(
             universe,
             HashSet::from([
