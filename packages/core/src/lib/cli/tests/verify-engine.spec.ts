@@ -69,6 +69,47 @@ describe('verify with the Rust engine', () => {
     }
   });
 
+  it('reports violating files in reverse-lexical source-import order', () => {
+    const project = createReverseLexicalImportProject();
+    process.chdir(project);
+
+    try {
+      const typescript = captureVerify(false, []);
+      const engine = captureVerify(true, [], {}, true);
+
+      expect(engine).toEqual(typescript);
+      expect(reportFileLines(engine.logs)).toEqual([
+        '|-- src/z-source/index.ts',
+        '|-- src/a-source/index.ts',
+      ]);
+      expect(engine.fallbackLogs).toEqual([]);
+    } finally {
+      process.chdir(workspaceRoot);
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it('orders files when identical imports resolve to different files', () => {
+    const project = createSameSpecifierProject();
+    process.chdir(project);
+
+    try {
+      const typescript = captureVerify(false, []);
+      const engine = captureVerify(true, [], {}, true);
+
+      expect(engine).toEqual(typescript);
+      expect(reportFileLines(engine.logs)).toEqual([
+        '|-- src/main.ts',
+        '|-- src/a/index.ts',
+        '|-- src/b/index.ts',
+      ]);
+      expect(engine.fallbackLogs).toEqual([]);
+    } finally {
+      process.chdir(workspaceRoot);
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
   it('matches --files output for the requested violating file only', () => {
     process.chdir(resolve(workspaceRoot, 'test-projects/typescript-i'));
     const options = { files: ['src/web/checkout-controller.ts'] };
@@ -214,6 +255,86 @@ function createViolationProject(): string {
   return project;
 }
 
+function createReverseLexicalImportProject(): string {
+  const project = mkdtempSync('/private/tmp/sheriff-engine-order-');
+  mkdirSync(join(project, 'src/z-source'), { recursive: true });
+  mkdirSync(join(project, 'src/a-source'), { recursive: true });
+  mkdirSync(join(project, 'src/target'), { recursive: true });
+  writeFileSync(join(project, 'tsconfig.json'), '{}');
+  writeFileSync(
+    join(project, 'sheriff.config.ts'),
+    `export const config = {
+      version: 1,
+      entryFile: 'src/main.ts',
+      modules: {
+        'src/a-source': 'source',
+        'src/z-source': 'source',
+        'src/target': 'target',
+      },
+      depRules: { root: 'source', source: [], target: '*' },
+    };`,
+  );
+  writeFileSync(
+    join(project, 'src/main.ts'),
+    `import './z-source'; import './a-source';`,
+  );
+  writeFileSync(
+    join(project, 'src/z-source/index.ts'),
+    `import '../target/internal';`,
+  );
+  writeFileSync(
+    join(project, 'src/a-source/index.ts'),
+    `import '../target/internal';`,
+  );
+  writeFileSync(join(project, 'src/target/index.ts'), 'export {};');
+  writeFileSync(join(project, 'src/target/internal.ts'), 'export {};');
+  return project;
+}
+
+function createSameSpecifierProject(): string {
+  const project = mkdtempSync('/private/tmp/sheriff-engine-specifier-');
+  for (const directory of ['src/target', 'src/a/target', 'src/b/target']) {
+    mkdirSync(join(project, directory), { recursive: true });
+  }
+  writeFileSync(join(project, 'tsconfig.json'), '{}');
+  writeFileSync(
+    join(project, 'sheriff.config.ts'),
+    `export const config = {
+      version: 1,
+      entryFile: 'src/main.ts',
+      modules: {
+        'src/target': 'target',
+        'src/a': 'source',
+        'src/a/target': 'target',
+        'src/b': 'source',
+        'src/b/target': 'target',
+      },
+      depRules: { root: [], source: [], target: '*' },
+    };`,
+  );
+  writeFileSync(
+    join(project, 'src/main.ts'),
+    `import './target/internal'; import './a'; import './b';`,
+  );
+  for (const directory of ['a', 'b']) {
+    writeFileSync(
+      join(project, `src/${directory}/index.ts`),
+      `import './target/internal';`,
+    );
+  }
+  for (const file of [
+    'src/target/index.ts',
+    'src/target/internal.ts',
+    'src/a/target/index.ts',
+    'src/a/target/internal.ts',
+    'src/b/target/index.ts',
+    'src/b/target/internal.ts',
+  ]) {
+    writeFileSync(join(project, file), 'export {};');
+  }
+  return project;
+}
+
 function createRegExpFallbackProject(): string {
   const project = mkdtempSync(join(tmpdir(), 'sheriff-engine-fallback-'));
   mkdirSync(join(project, 'src/target'), { recursive: true });
@@ -290,4 +411,8 @@ function restoreEnvironment(name: string, value: string | undefined): void {
   } else {
     process.env[name] = value;
   }
+}
+
+function reportFileLines(logs: string): string[] {
+  return logs.split('\n').filter((line) => line.startsWith('|-- '));
 }

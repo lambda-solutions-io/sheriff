@@ -318,7 +318,15 @@ function prepareEngineProjectEntry(entry: Entry, fs: Fs): PreparedProjectEntry {
     const modulePaths = createEngineModulePaths(reachedPaths, projectConfig);
     const output = parseEngineOutput(handle.setModulePaths(modulePaths));
     assertReachedFilesMatchOutput(reachedPaths, output);
+    const reportPaths = orderReachedFilesForReport(
+      reachedPaths,
+      output,
+      relativeEnginePath(projectConfig.rootDir, absoluteEntryFile),
+    );
     const fileInfoPaths = reachedPaths.map((path) =>
+      toFsPath(fsPathFromEnginePath(projectConfig.rootDir, path)),
+    );
+    const reportFileInfoPaths = reportPaths.map((path) =>
       toFsPath(fsPathFromEnginePath(projectConfig.rootDir, path)),
     );
 
@@ -327,7 +335,7 @@ function prepareEngineProjectEntry(entry: Entry, fs: Fs): PreparedProjectEntry {
     // project through the original TypeScript path.
     const engineValidation = createEngineProjectValidation(
       output,
-      fileInfoPaths,
+      reportFileInfoPaths,
       projectConfig,
       fs,
     );
@@ -479,6 +487,66 @@ function assertReachedFilesMatchOutput(
       'Engine reached-files result does not match project output.',
     );
   }
+}
+
+function orderReachedFilesForReport(
+  reachedPaths: string[],
+  output: EngineOutput,
+  entryPath: string,
+): string[] {
+  const reached = new Set(reachedPaths);
+  const filesByPath = new Map(output.files.map((file) => [file.path, file]));
+  if (!reached.has(entryPath)) {
+    throw new Error(`Engine result omitted entry file ${entryPath}.`);
+  }
+
+  const visited = new Set<string>();
+  const ordered: string[] = [];
+  const visit = (path: string): void => {
+    if (visited.has(path)) {
+      return;
+    }
+
+    const file = filesByPath.get(path);
+    if (!file || !Array.isArray(file.imports)) {
+      throw new Error(`Engine result cannot reconstruct imports for ${path}.`);
+    }
+
+    visited.add(path);
+    ordered.push(path);
+
+    for (const importInfo of file.imports) {
+      if (
+        !importInfo ||
+        !['module', 'external', 'unresolvable'].includes(importInfo.kind)
+      ) {
+        throw new Error(`Engine returned an invalid import for ${path}.`);
+      }
+      if (importInfo.kind !== 'module') {
+        continue;
+      }
+      if (typeof importInfo.resolvedPath !== 'string') {
+        throw new Error(
+          `Engine result cannot reconstruct a module import for ${path}.`,
+        );
+      }
+      if (reached.has(importInfo.resolvedPath)) {
+        visit(importInfo.resolvedPath);
+      }
+    }
+  };
+
+  visit(entryPath);
+
+  // Retain the native JS-UTF16-sorted reached set for discovery and append any
+  // defensive stragglers without dropping coverage from the report.
+  for (const path of reachedPaths) {
+    if (!visited.has(path)) {
+      ordered.push(path);
+    }
+  }
+
+  return ordered;
 }
 
 function resolveFilePath(file: string, fs: Fs): string {
