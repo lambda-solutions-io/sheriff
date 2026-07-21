@@ -1,10 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { toFsPath } from '../file-info/fs-path';
-import {
-  invalidatePath,
-  invalidateStructure,
-} from '../cache/project-cache';
+import { invalidatePath, invalidateStructure } from '../cache/project-cache';
 
 const IGNORED_DIRECTORIES = new Set([
   'node_modules',
@@ -44,7 +41,14 @@ export function startWatcher(options: WatcherOptions): { close: () => void } {
     rootDir,
     { recursive: true },
     (_eventType, filename) => {
-      if (!filename || isIgnored(filename)) {
+      if (!filename) {
+        // Some platforms omit the filename. The event is still real, but
+        // cannot be classified or targeted safely, so invalidate broadly.
+        invalidateStructure();
+        onInvalidate?.(rootDir);
+        return;
+      }
+      if (isIgnored(filename)) {
         return;
       }
 

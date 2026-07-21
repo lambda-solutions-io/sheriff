@@ -95,6 +95,63 @@ describe('engine lint host', () => {
     },
   );
 
+  it.skipIf(!nativeAvailable)(
+    'refreshes a real ProjectHandle before watcher invalidation arrives',
+    () => {
+      const host = createEngineLintHost(rootDir, {
+        getConfig: () =>
+          parseConfig(toFsPath(path.join(rootDir, 'sheriff.config.ts'))),
+      });
+
+      expect(
+        host.lintFileViaEngine(entryFile)?.dependencyRuleViolations,
+      ).toHaveLength(1);
+
+      fs.writeFileSync(entryFile, 'export const clean = true;\n');
+      const advanced = new Date(Date.now() + 2_000);
+      fs.utimesSync(entryFile, advanced, advanced);
+
+      expect(host.lintFileViaEngine(entryFile)).toEqual(
+        lintDocument(entryFile),
+      );
+    },
+  );
+
+  it.skipIf(!nativeAvailable)(
+    'matches TypeScript for a symlinked directory alias',
+    () => {
+      const realDirectory = path.join(rootDir, 'src', 'real');
+      const aliasDirectory = path.join(rootDir, 'src', 'alias');
+      fs.mkdirSync(realDirectory, { recursive: true });
+      fs.writeFileSync(
+        path.join(realDirectory, 'index.ts'),
+        "import '../target/internal';\n",
+      );
+      fs.symlinkSync(realDirectory, aliasDirectory, 'dir');
+      fs.writeFileSync(
+        path.join(rootDir, 'sheriff.config.ts'),
+        `export const config = {
+  entryPoints: { app: 'src/alias/index.ts' },
+  modules: {
+    'src/alias': ['alias'],
+    'src/target': ['target'],
+  },
+  depRules: { alias: [], root: '*', target: '*' },
+};`,
+      );
+      clearProjectCache();
+      const aliasEntry = path.join(aliasDirectory, 'index.ts');
+      const host = createEngineLintHost(rootDir, {
+        getConfig: () =>
+          parseConfig(toFsPath(path.join(rootDir, 'sheriff.config.ts'))),
+      });
+
+      expect(host.lintFileViaEngine(aliasEntry)).toEqual(
+        lintDocument(aliasEntry),
+      );
+    },
+  );
+
   it('builds and caches one handle for each configured entry', () => {
     const secondEntry = path.join(rootDir, 'src', 'second', 'index.ts');
     fs.mkdirSync(path.dirname(secondEntry), { recursive: true });
@@ -127,8 +184,8 @@ describe('engine lint host', () => {
     expect(host.lintFileViaEngine(entryFile)).toBeDefined();
     expect(createHandle).toHaveBeenCalledTimes(2);
     expect(createHandle.mock.calls.map(([input]) => input.entryFile)).toEqual([
-      fs.realpathSync(entryFile),
-      fs.realpathSync(secondEntry),
+      entryFile,
+      secondEntry,
     ]);
   });
 
@@ -184,9 +241,7 @@ describe('engine lint host', () => {
       host.lintFileViaEngine(entryFile, "import '../target/internal';\n")
         ?.dependencyRuleViolations,
     ).toHaveLength(1);
-    expect(handle.clearOverlay).toHaveBeenCalledWith(
-      fs.realpathSync(entryFile),
-    );
+    expect(handle.clearOverlay).toHaveBeenCalledWith(entryFile);
     expect(host.lintFileViaEngine(entryFile)?.dependencyRuleViolations).toEqual(
       [],
     );
@@ -233,23 +288,100 @@ describe('engine lint host', () => {
     expect(createHandle).toHaveBeenCalledTimes(2);
   });
 
-  it('disables the host for its lifetime when any handle build fails', () => {
+  it('rebuilds before serving when a reached file changed on disk', () => {
+    const createHandle = vi
+      .fn<(input: ProjectHandleInput) => ReturnType<typeof createFakeHandle>>()
+      .mockReturnValueOnce(
+        createFakeHandle(fixtureEngineOutput(), [
+          'src/source/index.ts',
+          'src/target/internal.ts',
+        ]),
+      )
+      .mockReturnValueOnce(
+        createFakeHandle(emptyEngineOutput(), ['src/source/index.ts']),
+      );
+    const host = createHost(createHandle);
+
+    expect(
+      host.lintFileViaEngine(entryFile)?.dependencyRuleViolations,
+    ).toHaveLength(1);
+
+    fs.writeFileSync(entryFile, 'export const clean = true;\n');
+    const advanced = new Date(Date.now() + 2_000);
+    fs.utimesSync(entryFile, advanced, advanced);
+
+    expect(host.lintFileViaEngine(entryFile)?.dependencyRuleViolations).toEqual(
+      [],
+    );
+    expect(createHandle).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a symlink alias as the lint DTO identity', () => {
+    const alias = path.join(rootDir, 'src', 'alias.ts');
+    fs.symlinkSync(entryFile, alias);
+    const output: EngineOutput = {
+      ...emptyEngineOutput(),
+      files: [{ path: 'src/alias.ts', imports: [] }],
+    };
+    const handle = createFakeHandle(output, ['src/alias.ts']);
+    const host = createHost(() => handle);
+
+    expect(host.lintFileViaEngine(alias)).toEqual({
+      dependencyRuleViolations: [],
+      encapsulationViolations: [],
+      externalRuleViolations: [],
+      unresolvableImports: [],
+    });
+    expect(handle.setOverlay).not.toHaveBeenCalled();
+  });
+
+  it('falls back when overlapping entry handles disagree for a file', () => {
+    const secondEntry = path.join(rootDir, 'src', 'second', 'index.ts');
+    fs.mkdirSync(path.dirname(secondEntry), { recursive: true });
+    fs.writeFileSync(secondEntry, "import '../source';\n");
+    const config = parseConfig(
+      toFsPath(path.join(rootDir, 'sheriff.config.ts')),
+    );
+    config.entryPoints = {
+      first: 'src/source/index.ts',
+      second: 'src/second/index.ts',
+    };
+    const createHandle = vi
+      .fn<(input: ProjectHandleInput) => ReturnType<typeof createFakeHandle>>()
+      .mockReturnValueOnce(
+        createFakeHandle(emptyEngineOutput(), ['src/source/index.ts']),
+      )
+      .mockReturnValueOnce(
+        createFakeHandle(fixtureEngineOutput(), [
+          'src/source/index.ts',
+          'src/target/internal.ts',
+        ]),
+      );
+    const host = createEngineLintHost(rootDir, {
+      createHandle,
+      getConfig: () => config,
+    });
+
+    expect(host.lintFileViaEngine(entryFile)).toBeUndefined();
+    expect(createHandle).toHaveBeenCalledTimes(2);
+  });
+
+  it('permanently disables the host for an incompatible config', () => {
     process.env['SHERIFF_ENGINE_DEBUG'] = '1';
     const debug = vi
       .spyOn(console, 'error')
       .mockImplementation(() => undefined);
-    fs.appendFileSync(
-      path.join(rootDir, 'sheriff.config.ts'),
-      `
-const inherited = { inherited: 'tag' };
-Object.setPrototypeOf(config.modules, inherited);
-`,
+    const config = parseConfig(
+      toFsPath(path.join(rootDir, 'sheriff.config.ts')),
     );
-    clearProjectCache();
+    Object.setPrototypeOf(config.modules, { inherited: 'tag' });
     const createHandle = vi.fn(() =>
       createFakeHandle(emptyEngineOutput(), ['src/source/index.ts']),
     );
-    const host = createHost(createHandle);
+    const host = createEngineLintHost(rootDir, {
+      createHandle,
+      getConfig: () => config,
+    });
 
     expect(host.lintFileViaEngine(entryFile)).toBeUndefined();
     expect(host.lintFileViaEngine(entryFile)).toBeUndefined();
@@ -257,7 +389,30 @@ Object.setPrototypeOf(config.modules, inherited);
     expect(host.lintFileViaEngine(entryFile)).toBeUndefined();
 
     expect(createHandle).not.toHaveBeenCalled();
-    expect(debug).toHaveBeenCalledOnce();
+    expect(debug.mock.calls).toEqual([
+      [expect.stringContaining('config.modules')],
+    ]);
+  });
+
+  it('retries a transient handle build failure after invalidation', () => {
+    const createHandle = vi
+      .fn<(input: ProjectHandleInput) => ReturnType<typeof createFakeHandle>>()
+      .mockImplementationOnce(() => {
+        throw new Error('source disappeared during atomic save');
+      })
+      .mockReturnValueOnce(
+        createFakeHandle(emptyEngineOutput(), ['src/source/index.ts']),
+      );
+    const host = createHost(createHandle);
+
+    expect(host.lintFileViaEngine(entryFile)).toBeUndefined();
+    expect(host.lintFileViaEngine(entryFile)).toBeUndefined();
+    expect(createHandle).toHaveBeenCalledOnce();
+
+    host.invalidate();
+
+    expect(host.lintFileViaEngine(entryFile)).toBeDefined();
+    expect(createHandle).toHaveBeenCalledTimes(2);
   });
 
   it('discards a handle whose overlay cannot be cleared', () => {

@@ -34,6 +34,18 @@ export type DaemonServer = {
   close: () => void;
 };
 
+type EngineLintHost = ReturnType<typeof createEngineLintHost>;
+
+/** @internal Startup gate kept injectable so flag-off initialization is testable. */
+export function createEngineLintHostIfEnabled(
+  rootDir: string,
+  createHost: typeof createEngineLintHost = createEngineLintHost,
+): EngineLintHost | undefined {
+  return process.env['SHERIFF_ENGINE'] === '1'
+    ? createHost(rootDir)
+    : undefined;
+}
+
 /**
  * Long-running sheriff process. Serves verify/getProjectData/getConfig/
  * lintFile over a local socket while a filesystem watcher keeps the
@@ -49,7 +61,7 @@ export function startDaemonServer(
   const log = options.log ?? (() => void 0);
   const exit = options.exit ?? (() => process.exit(0));
   const socketPath = getDaemonSocketPath(rootDir);
-  const engineLintHost = createEngineLintHost(rootDir);
+  const engineLintHost = createEngineLintHostIfEnabled(rootDir);
 
   let shutdown: (reason: string) => void = () => void 0;
 
@@ -61,7 +73,7 @@ export function startDaemonServer(
     // the config is evaluated code; a fresh process is the only clean re-eval
     onConfigChange: () => shutdown('sheriff.config.ts changed'),
     onInvalidate: (file) => {
-      engineLintHost.invalidate();
+      engineLintHost?.invalidate();
       log(`invalidated ${file}`);
     },
   });
@@ -85,7 +97,7 @@ export function startDaemonServer(
   return new Promise((resolve, reject) => {
     server.once('error', (error) => {
       watcher.close();
-      engineLintHost.invalidate();
+      engineLintHost?.invalidate();
       clearTimeout(idleTimer);
       reject(error);
     });
@@ -96,7 +108,7 @@ export function startDaemonServer(
       shutdown = (reason: string) => {
         log(`sheriff daemon shutting down: ${reason}`);
         watcher.close();
-        engineLintHost.invalidate();
+        engineLintHost?.invalidate();
         clearTimeout(idleTimer);
         server.close();
         removeStaleSocket(socketPath);
@@ -108,7 +120,7 @@ export function startDaemonServer(
         socketPath,
         close: () => {
           watcher.close();
-          engineLintHost.invalidate();
+          engineLintHost?.invalidate();
           clearTimeout(idleTimer);
           server.close();
           removeStaleSocket(socketPath);
@@ -122,7 +134,7 @@ function handleRequestLine(
   line: string,
   rootDir: string,
   shutdown: (reason: string) => void,
-  engineLintHost: ReturnType<typeof createEngineLintHost>,
+  engineLintHost: EngineLintHost | undefined,
 ): DaemonResponse {
   let request: DaemonRequest;
   try {
@@ -150,7 +162,7 @@ function executeMethod(
   request: DaemonRequest,
   rootDir: string,
   shutdown: (reason: string) => void,
-  engineLintHost: ReturnType<typeof createEngineLintHost>,
+  engineLintHost: EngineLintHost | undefined,
 ): unknown {
   const params = request.params ?? {};
 
@@ -190,7 +202,7 @@ function executeMethod(
       );
     case 'clearCache':
       clearProjectCache();
-      engineLintHost.invalidate();
+      engineLintHost?.invalidate();
       return true;
     case 'shutdown':
       shutdown('requested by client');
@@ -219,9 +231,9 @@ function getPluginAPI() {
 function lintFile(
   filename: string,
   fileContent: string | undefined,
-  engineLintHost: ReturnType<typeof createEngineLintHost>,
+  engineLintHost: EngineLintHost | undefined,
 ) {
-  if (process.env['SHERIFF_ENGINE'] === '1') {
+  if (engineLintHost) {
     const engineResult = engineLintHost.lintFileViaEngine(
       filename,
       fileContent,

@@ -46,17 +46,22 @@ type HostedHandle = {
   handle: ProjectHandleLike;
   projectInfo: ProjectInfo;
   reachedFiles: Set<string>;
+  dependencyStamps: DependencyStamp[];
 };
+
+type DependencyStamp = { path: FsPath; lastModified: number };
 
 type HostState =
   | { kind: 'cold' }
   | { kind: 'ready'; handles: Map<string, HostedHandle> }
-  | { kind: 'disabled' };
+  | { kind: 'failedUntilInvalidate' }
+  | { kind: 'permanentlyDisabled' };
 
 /**
  * Hosts one persistent native ProjectHandle per configured entry point.
- * Filesystem invalidation deliberately drops every handle in this first cut;
- * the next lint rebuilds them from complete `traverse: true` project data.
+ * Watcher invalidation drops every handle, and each request also validates
+ * dependency mtimes before reusing a ready handle. Rebuilds always start from
+ * complete `traverse: true` project data.
  */
 export function createEngineLintHost(
   rootDir: string,
@@ -77,7 +82,7 @@ export function createEngineLintHost(
   let state: HostState = { kind: 'cold' };
 
   const discardHandles = () => {
-    if (state.kind !== 'disabled') {
+    if (state.kind !== 'permanentlyDisabled') {
       state = { kind: 'cold' };
     }
   };
@@ -91,16 +96,29 @@ export function createEngineLintHost(
       }
 
       try {
-        const absoluteFilename = canonicalFilePath(rootDir, filename);
-        const hosted = [...handles.values()].find(({ reachedFiles }) =>
-          reachedFiles.has(absoluteFilename),
+        const absoluteFilename = absoluteFilePath(rootDir, filename);
+        const coveringHandles = [...handles.values()].filter(
+          ({ reachedFiles }) => reachedFiles.has(absoluteFilename),
         );
-        if (!hosted) {
+        if (coveringHandles.length === 0) {
           logEngineFallback(`file is not reached: ${absoluteFilename}`);
           return undefined;
         }
 
-        return lintCoveredFile(hosted, absoluteFilename, fileContent);
+        const results = coveringHandles.map((hosted) =>
+          lintCoveredFile(hosted, absoluteFilename, fileContent),
+        );
+        if (results.some((result) => result === undefined)) {
+          return undefined;
+        }
+        const [first, ...rest] = results as DaemonLintResult[];
+        if (rest.some((result) => !sameLintResult(first, result))) {
+          logEngineFallback(
+            `covering entry handles disagree for ${absoluteFilename}`,
+          );
+          return undefined;
+        }
+        return first;
       } catch (error) {
         logEngineFallback(error);
         return undefined;
@@ -109,11 +127,17 @@ export function createEngineLintHost(
   };
 
   function getOrBuildHandles(): Map<string, HostedHandle> | undefined {
-    if (state.kind === 'disabled') {
+    if (
+      state.kind === 'permanentlyDisabled' ||
+      state.kind === 'failedUntilInvalidate'
+    ) {
       return undefined;
     }
     if (state.kind === 'ready') {
-      return state.handles;
+      if (areHandlesFresh(state.handles)) {
+        return state.handles;
+      }
+      state = { kind: 'cold' };
     }
 
     try {
@@ -130,7 +154,7 @@ export function createEngineLintHost(
 
       const handles = new Map(
         Object.entries(entries).map(([entry, entryFile]) => {
-          const absoluteEntryFile = canonicalFilePath(rootDir, entryFile);
+          const absoluteEntryFile = absoluteFilePath(rootDir, entryFile);
           const projectInfo = initialize(toFsPath(absoluteEntryFile), {
             traverse: true,
           });
@@ -142,14 +166,26 @@ export function createEngineLintHost(
             handle.getReachedFiles(),
             projectInfo.rootDir,
           );
-          return [entry, { handle, projectInfo, reachedFiles }] as const;
+          const dependencyStamps = createDependencyStamps(
+            rootDir,
+            projectInfo,
+            reachedFiles,
+          );
+          return [
+            entry,
+            { handle, projectInfo, reachedFiles, dependencyStamps },
+          ] as const;
         }),
       );
 
       state = { kind: 'ready', handles };
       return handles;
     } catch (error) {
-      state = { kind: 'disabled' };
+      state = {
+        kind: isPermanentBuildFailure(error)
+          ? 'permanentlyDisabled'
+          : 'failedUntilInvalidate',
+      };
       logEngineFallback(error);
       return undefined;
     }
@@ -198,12 +234,12 @@ function getDaemonConfig() {
   return getPlugins().config;
 }
 
-function canonicalFilePath(rootDir: string, filename: string): FsPath {
+function absoluteFilePath(rootDir: string, filename: string): FsPath {
   const fs = getFs();
   const absolutePath = fs.isAbsolute(filename)
     ? filename
     : fs.join(rootDir, filename);
-  return toFsPath(fs.realpath(toFsPath(absolutePath)));
+  return toFsPath(absolutePath);
 }
 
 function parseReachedFiles(serialized: string, rootDir: FsPath): Set<string> {
@@ -220,9 +256,56 @@ function parseReachedFiles(serialized: string, rootDir: FsPath): Set<string> {
         );
       }
       // ProjectHandle exposes paths relative to its tsconfig root.
-      return canonicalFilePath(rootDir, file);
+      return absoluteFilePath(rootDir, file);
     }),
   );
+}
+
+function createDependencyStamps(
+  daemonRootDir: string,
+  projectInfo: ProjectInfo,
+  reachedFiles: Set<string>,
+): DependencyStamp[] {
+  const fs = getFs();
+  const rootConfigPath = fs.join(daemonRootDir, 'sheriff.config.ts');
+  const projectRootConfigPath = fs.join(
+    projectInfo.rootDir,
+    'sheriff.config.ts',
+  );
+  const paths = new Set<FsPath>([
+    ...[...reachedFiles].map((path) => path as FsPath),
+    ...projectInfo.tsData.sourceConfigPaths,
+    ...(projectInfo.configFilePath ? [projectInfo.configFilePath] : []),
+    rootConfigPath as FsPath,
+    projectRootConfigPath as FsPath,
+  ]);
+
+  return [...paths].map((path) => ({
+    path,
+    lastModified: safeLastModified(path),
+  }));
+}
+
+function areHandlesFresh(handles: Map<string, HostedHandle>): boolean {
+  try {
+    return [...handles.values()].every(({ dependencyStamps }) =>
+      dependencyStamps.every(
+        ({ path, lastModified }) => getFs().lastModified(path) === lastModified,
+      ),
+    );
+  } catch {
+    // A dependency vanished between requests.
+    return false;
+  }
+}
+
+function safeLastModified(path: FsPath): number {
+  try {
+    return getFs().lastModified(path);
+  } catch {
+    // `NaN` never compares equal, matching project-cache dependency stamps.
+    return NaN;
+  }
 }
 
 function parseEngineOutput(serialized: string): EngineOutput {
@@ -245,9 +328,35 @@ function parseEngineJson(serialized: string): Record<string, unknown> {
   }
   if ('error' in parsed) {
     const error = (parsed as EngineErrorOutput).error;
-    throw new Error(`${error.code}: ${error.message}`);
+    throw Object.assign(new Error(`${error.code}: ${error.message}`), {
+      code: error.code,
+    });
   }
   return parsed as Record<string, unknown>;
+}
+
+function isPermanentBuildFailure(error: unknown): boolean {
+  const code =
+    error instanceof Error
+      ? (error as Error & { code?: unknown }).code
+      : undefined;
+  return (
+    typeof code === 'string' &&
+    [
+      'SHERIFF_ENGINE_PACKAGE_MISSING',
+      'SHERIFF_ENGINE_NATIVE_MISSING',
+      'SHERIFF_ENGINE_NATIVE_LOAD_FAILED',
+      'SHERIFF_ENGINE_UNSUPPORTED_CONFIG',
+      'SHERIFF_ENGINE_IMPURE_CALLBACK',
+    ].includes(code)
+  );
+}
+
+function sameLintResult(
+  left: DaemonLintResult,
+  right: DaemonLintResult,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function createLintResult(

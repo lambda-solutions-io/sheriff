@@ -9,7 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::engine::{self, AnalyzeResult};
+use crate::engine::{self, AnalyzeResult, js_string_cmp};
 use crate::input::{
     ConfigValue, EncapsulationPattern, EngineInput, ImportKind, InputFile, InputImport,
     InputModulePath, OrderedMap, RuleValue,
@@ -241,7 +241,7 @@ impl ProjectHandle {
                 .into_iter()
                 .map(|path| self.interner.text(path).to_owned())
                 .collect::<Vec<_>>();
-            files.sort();
+            files.sort_by(|left, right| js_string_cmp(left, right));
             serde_json::to_string(&json!({"schemaVersion": 1, "files": files}))
                 .map_err(|error| format!("could not serialize reached files: {error}"))
         }));
@@ -793,7 +793,9 @@ impl ProjectHandle {
         let input = self.input_ref()?;
         let reached = self.reached_files();
         let mut file_ids = reached.iter().copied().collect::<Vec<_>>();
-        file_ids.sort_by(|left, right| self.interner.text(*left).cmp(self.interner.text(*right)));
+        file_ids.sort_by(|left, right| {
+            js_string_cmp(self.interner.text(*left), self.interner.text(*right))
+        });
         let files = file_ids
             .into_iter()
             .map(|path| {
@@ -863,7 +865,9 @@ impl ProjectHandle {
             }
         }
         let mut file_ids = included.into_iter().collect::<Vec<_>>();
-        file_ids.sort_by(|left, right| self.interner.text(*left).cmp(self.interner.text(*right)));
+        file_ids.sort_by(|left, right| {
+            js_string_cmp(self.interner.text(*left), self.interner.text(*right))
+        });
         let files = file_ids
             .into_iter()
             .map(|path| {
@@ -1076,7 +1080,9 @@ impl ProjectHandle {
 
     fn reached_file_imports(&self) -> Vec<Value> {
         let mut files = self.reached_files().into_iter().collect::<Vec<_>>();
-        files.sort_by(|left, right| self.interner.text(*left).cmp(self.interner.text(*right)));
+        files.sort_by(|left, right| {
+            js_string_cmp(self.interner.text(*left), self.interner.text(*right))
+        });
         files
             .into_iter()
             .map(|path| {
@@ -1693,6 +1699,32 @@ mod tests {
             fs::read_to_string(&project.entry).unwrap(),
             "import './a/a';\n"
         );
+    }
+
+    #[test]
+    fn reached_files_use_the_stateless_utf16_path_order() {
+        let project = TestProject::new();
+        fs::write(
+            &project.entry,
+            "import './\u{10000}';\nimport './\u{e000}';\n",
+        )
+        .unwrap();
+        fs::write(project.root.join("src/\u{10000}.ts"), "export {};\n").unwrap();
+        fs::write(project.root.join("src/\u{e000}.ts"), "export {};\n").unwrap();
+
+        let handle = ProjectHandle::new(project.input());
+        let reached: Value = serde_json::from_str(&handle.get_reached_files()).unwrap();
+        let output: Value = serde_json::from_str(&handle.get_result()).unwrap();
+        let output_paths = output["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|file| file["path"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        let expected = vec!["src/entry.ts", "src/\u{10000}.ts", "src/\u{e000}.ts"];
+
+        assert_eq!(reached["files"], json!(expected));
+        assert_eq!(output_paths, expected);
     }
 
     #[test]

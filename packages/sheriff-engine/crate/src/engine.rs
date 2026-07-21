@@ -1064,7 +1064,7 @@ fn sort_records<T: Serialize>(records: &mut [T]) -> Result<(), String> {
     serialization_error.map_or(Ok(()), Err)
 }
 
-fn js_string_cmp(left: &str, right: &str) -> Ordering {
+pub(crate) fn js_string_cmp(left: &str, right: &str) -> Ordering {
     left.encode_utf16().cmp(right.encode_utf16())
 }
 

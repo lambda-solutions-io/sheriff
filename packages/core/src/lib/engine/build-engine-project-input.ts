@@ -120,8 +120,11 @@ function assertOwnKeyedEngineConfig(
 }
 
 function throwUnsupportedConfigContainer(configPath: string): never {
-  throw new Error(
-    `Sheriff Rust engine cannot faithfully serialize ${configPath}; ` +
-      'the config container must use only plain own-keyed data properties.',
+  throw Object.assign(
+    new Error(
+      `Sheriff Rust engine cannot faithfully serialize ${configPath}; ` +
+        'the config container must use only plain own-keyed data properties.',
+    ),
+    { code: 'SHERIFF_ENGINE_UNSUPPORTED_CONFIG' },
   );
 }

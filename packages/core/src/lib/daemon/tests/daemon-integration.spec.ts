@@ -35,6 +35,7 @@ describe('daemon integration', () => {
 
     writeFixtureProject(rootDir);
     process.chdir(rootDir);
+    delete process.env['SHERIFF_ENGINE'];
 
     server = await startDaemonServer({ rootDir, exit, log });
   });
@@ -145,37 +146,34 @@ describe('daemon integration', () => {
   it.skipIf(!nativeAvailable)(
     'should return the byte-identical lint DTO through the engine',
     async () => {
-      const client = await DaemonClient.connect(rootDir);
-      const filename = path.join(rootDir, 'src', 'feature', 'index.ts');
       const previousDebug = process.env['SHERIFF_ENGINE_DEBUG'];
       const debug = vi
         .spyOn(console, 'error')
         .mockImplementation(() => undefined);
 
-      delete process.env['SHERIFF_ENGINE'];
-      const typescriptResult = await client!.request('lintFile', { filename });
-      process.env['SHERIFF_ENGINE'] = '1';
       process.env['SHERIFF_ENGINE_DEBUG'] = '1';
-      const engineResult = await client!.request('lintFile', { filename });
+      await withEngineDaemon(async (engineRoot) => {
+        const client = await DaemonClient.connect(engineRoot);
+        const filename = path.join(engineRoot, 'src', 'feature', 'index.ts');
+        const engineResult = await client!.request('lintFile', { filename });
 
-      expect(engineResult).toEqual(typescriptResult);
-      expect(engineResult).toEqual({
-        dependencyRuleViolations: [
-          {
-            fromTag: 'feature',
-            toTags: ['shared'],
-            rawImport: '../shared/internal',
-          },
-        ],
-        encapsulationViolations: ['../shared/internal'],
-        externalRuleViolations: [
-          { fromTag: 'feature', externalLibrary: 'blocked-lib' },
-        ],
-        unresolvableImports: ['./missing'],
+        expect(engineResult).toEqual({
+          dependencyRuleViolations: [
+            {
+              fromTag: 'feature',
+              toTags: ['shared'],
+              rawImport: '../shared/internal',
+            },
+          ],
+          encapsulationViolations: ['../shared/internal'],
+          externalRuleViolations: [
+            { fromTag: 'feature', externalLibrary: 'blocked-lib' },
+          ],
+          unresolvableImports: ['./missing'],
+        });
+        client!.close();
       });
       expect(debug).not.toHaveBeenCalled();
-      client!.close();
-      delete process.env['SHERIFF_ENGINE'];
       if (previousDebug === undefined) {
         delete process.env['SHERIFF_ENGINE_DEBUG'];
       } else {
@@ -184,59 +182,64 @@ describe('daemon integration', () => {
     },
   );
 
-  it('should fall back for a file outside the configured entry graph', async () => {
-    const client = await DaemonClient.connect(rootDir);
-    const filename = path.join(rootDir, 'src', 'uncovered.ts');
+  it.skipIf(!nativeAvailable)(
+    'should fall back for a file outside the configured entry graph',
+    async () => {
+      await withEngineDaemon(async (engineRoot) => {
+        const client = await DaemonClient.connect(engineRoot);
+        const filename = path.join(engineRoot, 'src', 'uncovered.ts');
+        const fallbackResult = await client!.request('lintFile', { filename });
 
-    delete process.env['SHERIFF_ENGINE'];
-    const typescriptResult = await client!.request('lintFile', { filename });
-    process.env['SHERIFF_ENGINE'] = '1';
-    const fallbackResult = await client!.request('lintFile', { filename });
-
-    expect(fallbackResult).toEqual(typescriptResult);
-    client!.close();
-    delete process.env['SHERIFF_ENGINE'];
-  });
+        expect(fallbackResult).toEqual({
+          dependencyRuleViolations: [],
+          encapsulationViolations: [],
+          externalRuleViolations: [],
+          unresolvableImports: [],
+        });
+        client!.close();
+      });
+    },
+  );
 
   it.skipIf(!nativeAvailable)(
     'should rebuild the engine host after watcher invalidation',
     async () => {
-      const client = await DaemonClient.connect(rootDir);
-      const filename = path.join(rootDir, 'src', 'feature', 'index.ts');
-      process.env['SHERIFF_ENGINE'] = '1';
+      await withEngineDaemon(async (engineRoot, engineLog) => {
+        const client = await DaemonClient.connect(engineRoot);
+        const filename = path.join(engineRoot, 'src', 'feature', 'index.ts');
 
-      const before = (await client!.request('lintFile', { filename })) as {
-        dependencyRuleViolations: unknown[];
-      };
-      expect(before.dependencyRuleViolations).toHaveLength(1);
+        const before = (await client!.request('lintFile', { filename })) as {
+          dependencyRuleViolations: unknown[];
+        };
+        expect(before.dependencyRuleViolations).toHaveLength(1);
 
-      const previousLogCount = log.mock.calls.length;
-      fs.writeFileSync(filename, 'export const feature = true;\n');
-      await vi.waitFor(
-        () => {
-          expect(
-            log.mock.calls
-              .slice(previousLogCount)
-              .some(([message]) => String(message).includes('invalidated')),
-          ).toBe(true);
-        },
-        { timeout: 3_000 },
-      );
+        const previousLogCount = engineLog.mock.calls.length;
+        fs.writeFileSync(filename, 'export const feature = true;\n');
+        await vi.waitFor(
+          () => {
+            expect(
+              engineLog.mock.calls
+                .slice(previousLogCount)
+                .some(([message]) => String(message).includes('invalidated')),
+            ).toBe(true);
+          },
+          { timeout: 3_000 },
+        );
 
-      const after = (await client!.request('lintFile', { filename })) as {
-        dependencyRuleViolations: unknown[];
-        encapsulationViolations: unknown[];
-        externalRuleViolations: unknown[];
-        unresolvableImports: unknown[];
-      };
-      expect(after).toEqual({
-        dependencyRuleViolations: [],
-        encapsulationViolations: [],
-        externalRuleViolations: [],
-        unresolvableImports: [],
+        const after = (await client!.request('lintFile', { filename })) as {
+          dependencyRuleViolations: unknown[];
+          encapsulationViolations: unknown[];
+          externalRuleViolations: unknown[];
+          unresolvableImports: unknown[];
+        };
+        expect(after).toEqual({
+          dependencyRuleViolations: [],
+          encapsulationViolations: [],
+          externalRuleViolations: [],
+          unresolvableImports: [],
+        });
+        client!.close();
       });
-      client!.close();
-      delete process.env['SHERIFF_ENGINE'];
     },
   );
 
@@ -265,6 +268,42 @@ describe('daemon integration', () => {
     expect(await getDaemonStatus(rootDir)).toBeUndefined();
   });
 });
+
+async function withEngineDaemon(
+  run: (
+    engineRoot: string,
+    engineLog: ReturnType<typeof vi.fn>,
+  ) => Promise<void>,
+): Promise<void> {
+  const previousCwd = process.cwd();
+  const previousEngineFlag = process.env['SHERIFF_ENGINE'];
+  const engineRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'sheriff-engine-daemon-spec-'),
+  );
+  const engineLog = vi.fn();
+  let engineServer: DaemonServer | undefined;
+
+  try {
+    writeFixtureProject(engineRoot);
+    process.chdir(engineRoot);
+    process.env['SHERIFF_ENGINE'] = '1';
+    engineServer = await startDaemonServer({
+      rootDir: engineRoot,
+      exit: vi.fn(),
+      log: engineLog,
+    });
+    await run(engineRoot, engineLog);
+  } finally {
+    engineServer?.close();
+    process.chdir(previousCwd);
+    if (previousEngineFlag === undefined) {
+      delete process.env['SHERIFF_ENGINE'];
+    } else {
+      process.env['SHERIFF_ENGINE'] = previousEngineFlag;
+    }
+    fs.rmSync(engineRoot, { recursive: true, force: true });
+  }
+}
 
 function writeFixtureProject(rootDir: string) {
   const write = (relativePath: string, contents: string) => {
