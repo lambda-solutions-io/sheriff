@@ -136,7 +136,8 @@ node tools/perf/run-bench.mjs
 | R2.3: review round (4 findings) | **done** | `1a21352` |
 | R3: function-rule materialisation | **done** | `a2f1e45` |
 | R3.1: review round (4 parity defects) | **done** | `78ced96` |
-| R4: incremental ProjectHandle | not started | |
+| R4: incremental ProjectHandle | **done** | `d467a60` |
+| R4.1: review round (5 P0 divergences) | **done** | `8f33c92` |
 | R5: consumer cutover + packaging | not started | |
 
 ---
@@ -706,6 +707,75 @@ incremental verification.
 **Exit criteria**: 10–50ms typical single-file update; incremental and clean
 rebuilds provably identical; entry-driven reached-file sets identical between
 engines.
+
+**Result (`d467a60`, corrected by `8f33c92`)**: a `#[napi]` `ProjectHandle` class
+holds the state in Rust (owner decision — not a stateless snapshot round-trip);
+Node holds an opaque reference and calls `applyChanges`/`setOverlay`/`clearOverlay`/
+`getResult`. Graph-discovery parity closed: the shadow harness now traverses
+entry-driven on both engines and diffs the reached SET — **327 == 327 across 8
+entries, 0 divergences**. Equivalence fuzz (deterministic seeds, byte-for-byte full
+output) is the gate.
+
+**As first shipped (`d467a60`), then two independent reviewers found 5 P0
+divergences** — the initial cut was green because its equivalence-fuzz state space
+missed every one of them (absolute config paths only, no callbacks, never changed
+`modulePaths`/added a barrel, reverse-edge assertion checked presence not stale
+absence). All fixed in R4.1. The lesson repeats R3.1's: a passing self-consistent
+suite proves nothing about coverage — reviewer A reproduced each divergence against
+the native artefact before it was believed.
+
+**Incremental analysis is real, not just incremental resolution** (a reviewer B P0):
+the handle caches module assignment, tags, callback decisions, and per-file
+violation buckets; a source edit rechecks only the changed file + its importers +
+newly reached files, merging with untouched buckets. Structural (create/delete/
+rename/directory), tsconfig-chain, package-manifest, and refreshed-`modulePaths`
+changes stay full-rebuild **by design** ("over-invalidate first") — module discovery
+is Node-owned, so a structural event without refreshed `modulePaths` **fails loud**
+rather than returning a stale verdict. `engine::analyze` and stateless
+`analyzeProject` are untouched (R5 and the TS default still use them).
+
+Single-file update **11.67ms median** (p95 12.1ms) on 10.5k files, vs 1863ms full
+construction. 90 rust tests, 27 conformance (R3.1 baseline 23; R4 24, R4.1 27), 583 TS green with+without
+native, shadow 8/8 / 0 fallback / 0 divergences / 9/9 typesVersions parity, nx build
+set unchanged (`core`, `eslint-plugin`, `mcp-server`).
+
+**Process note**: the implementing/fixing codex runs each exceeded the 10-min bash
+cap and needed auto-resume (`codex exec resume --last`, which must come immediately
+after `exec` — no `--cd` before it). A reviewer's codex died mid-run but its
+auto-resuming wrapper recovered the full report on the 3rd resume — better than the
+truncated raw log. Do not trust a wrapper's "waiting on a monitor" self-report after
+it has returned; watch the codex pid directly.
+
+---
+
+## R4.1 (done) — review round, 5 P0 divergences
+
+Detailed in the R4 result above. The five, each reproduced before fixing and now a
+regression test:
+
+1. **Static purity gate accepted a self-mutating named function.** `function d(){
+   d.calls = (d.calls ?? 0) + 1; return d.calls === 1 }` reads its own binding (a
+   free identifier the gate treated as "declared inside"), so the rule-decision cache
+   served a stale `true` after an edit reproducing the same context → incremental had
+   no violation, clean did. Named/recursive self-references now reject with
+   `SHERIFF_ENGINE_IMPURE_CALLBACK` **before any invocation** (test asserts 0 calls).
+2. **Config overlays were parsed as source** → `unsupported source type for
+   tsconfig.json`. Overlays on wide deps (tsconfig chain, package.json) now rebuild
+   resolution from **overlay bytes** through a virtual resolver fs; set/clear match a
+   clean rebuild. Sheriff-config overlays error for reconstruction.
+3. **Relative `tsConfigPath`/`entryFile` drifted**: resolved against cwd at
+   construction (root_dir empty) but the discovered root on rebuild → double-prefixed
+   path, deterministic divergence. Externally-supplied paths are normalized to
+   absolute **once at construction**.
+4. **Structural change without refreshed `modulePaths` left `isBarrel` stale** →
+   missed encapsulation violation. Such events now **fail loud** unless the caller
+   supplies Node-discovered `modulePaths`.
+5. **Analysis was whole-project every call** (see the incremental-analysis note
+   above).
+
+The equivalence fuzz now covers callbacks with changing contexts, config overlays,
+relative paths, barrel add/remove with refreshed `modulePaths`, and exact
+forward↔reverse map equality (catching **stale**, not just missing, edges).
 
 ---
 
