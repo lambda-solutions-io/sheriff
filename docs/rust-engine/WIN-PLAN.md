@@ -273,13 +273,71 @@ Cheap cleanups worth folding into P1–P4 rather than a separate phase:
   rule, no callbacks, no regex config, no `paths`) hides these — **benchmark a
   realistic config before declaring victory.**
 
-### P5 — warm path: stop shipping 3.89 MB per keystroke (~75 ms → single digits)
-Return a **delta** from `applyChanges`: changed files, their imports, and violation
-deltas, keeping the full-payload call available for initial sync. This is the one
-place where the boundary genuinely matters. Editor latency is what users feel, and
-it is the half of the goal that is already 23× ahead — this is what makes it feel
-instant rather than merely fast. Validation: daemon integration test still asserts
-a byte-identical DTO; measure p95 keystroke-to-diagnostic.
+### P5 — warm path: stop rebuilding the whole payload per keystroke (~79 ms → target <20 ms)
+
+**Corrected diagnosis (measured, and it overturns this plan's first framing).** I
+originally wrote that the warm path is "bound by marshalling 3.89 MB per
+keystroke" and that the fix was a delta protocol. Measured breakdown of one
+single-file `applyChanges` on the 10.5k fixture:
+
+| | measured |
+|---|---:|
+| `applyChanges` (inside Rust) | **66.9 ms** |
+| `getResult()` serialize | 1.1 ms |
+| Node `JSON.parse` | 10.8 ms |
+| **total warm request** | **78.8 ms** |
+
+So the boundary is ~12 ms of 79 ms here too — a delta protocol would recover
+~11 ms, not the bulk. **The cost is Rust rebuilding the payload internally.**
+
+Root cause: `finish_analysis` (`handle.rs:1024`) round-trips the entire analysis
+on every change — `serde_json::to_string` the whole result (`:1025`),
+`capture_module_tags` re-scans that string (`:1028`), **`serde_json::from_str`
+re-parses the string it just wrote** (`:1029`), `cache_file_violations` walks all
+violations (`:1035`), then `merged_analysis_output` → `reached_file_imports()`
+(`:1136`) rebuilds `files[]` for **all** reached files as boxed `serde_json::Value`
+trees (a `json!` per file *and* per import), re-sorts all 10,511 paths, and
+serializes again. That is ~4 full passes over 3.89 MB for an edit whose real
+incremental work is microseconds.
+
+**ATTEMPTED AND REVERTED — the obvious fix does not work.** I implemented the
+`files[]` cache described above (memoize the built `Vec<Value>`, invalidate in
+`rebuild_graph` and `replace_edges`). Result on the 10.5k fixture: warm update
+**76.1 ms → 76.7 ms, i.e. no change**. Reverted rather than shipped.
+
+Why it fails, measured after the fact by isolating the two calls:
+
+| | measured |
+|---|---:|
+| `getResult()` repeatedly, no intervening change | **0.95 ms** |
+| `applyChanges` (one modified file) | **65.95 ms** |
+
+`getResult()` was already ~1 ms because it just clones `latest_result`, a string
+built during the mutating call — so caching `files[]` optimizes something that
+was never on the hot path. And every `applyChanges` necessarily routes through
+`replace_edges`, which invalidates the cache, so the payload is rebuilt anyway.
+A first version that cloned the cached `Vec<Value>` was actively *worse*
+(76 → 90 ms): cloning 10,511 boxed `Value` trees costs more than rebuilding them.
+
+**So the remaining ~66 ms is inside `applyChanges` and is NOT the payload
+rebuild.** Also ruled out by reading: the analysis is already correctly scoped —
+`analysis_engine_input` (`handle.rs:877`) restricts to `AnalysisScope::
+Incremental(affected)` plus direct imports, and `collect_affected_path`
+(`:653`) adds only the file and its direct importers. Neither re-analyses all
+10,511 files.
+
+**Next step is measurement, not another guess.** The cost is spread across
+`reached_files()` (a full BFS re-run, called several times per update),
+`cache_file_violations` (walks every violation), `merged_analysis_output`, and
+the double full-payload parse (`capture_module_tags` at `:1197` does its own
+`serde_json::from_str` of the whole string, then `finish_analysis` parses the
+same string again at `:1029`). P0's phase timers must land inside `applyChanges`
+before anyone attempts this again.
+
+Constraint: `getResult()`/`applyChanges()` must stay **byte-identical**, including
+`js_string_cmp` ordering of `files[]`. Validation: existing
+`randomized_incremental_results_equal_clean_rebuilds` Rust test, plus a
+fresh-handle-vs-incremental byte-identity sweep over a long mixed event sequence.
 
 ### P5b — the daemon's own two bottlenecks (verified, warm path)
 Independent of the payload fix, the daemon has two costs that P5 alone won't touch:
