@@ -16,8 +16,20 @@ import {
   ExternalRuleViolation,
 } from '../checks/check-for-external-rule-violation';
 import { ProjectInfo } from '../main/init';
-import { FsPath } from '../file-info/fs-path';
+import { FsPath, toFsPath } from '../file-info/fs-path';
 import { Fs } from '../fs/fs';
+import { buildEngineProjectInput } from '../engine/build-engine-project-input';
+import {
+  logEngineFallback,
+  runEngineProject,
+} from '../engine/run-engine-project';
+import type {
+  EngineDependencyViolation,
+  EngineEncapsulationViolation,
+  EngineExternalViolation,
+  EngineOutput,
+} from '@lambda-solutions/sheriff-engine';
+import { calcTagsForModule } from '../tags/calc-tags-for-module';
 
 type ValidationsMap = Record<
   string,
@@ -51,19 +63,7 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
   const projectValidations = new Map<string, ProjectValidation>();
 
   for (const projectEntry of projectEntries) {
-    // Initialize validation data for this project
-    const validation: ProjectValidation = {
-      deepImportsCount: 0,
-      dependencyRulesCount: 0,
-      externalRulesCount: 0,
-      filesCount: 0,
-      hasError: false,
-      validationsMap: {},
-      encapsulations: [],
-      dependencyRuleViolations: [],
-    };
-
-    projectValidations.set(projectEntry.projectName, validation);
+    projectValidations.set(projectEntry.projectName, createProjectValidation());
   }
 
   if (options.files) {
@@ -82,7 +82,11 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
     // a symlinked workspace, or case-insensitive-FS casing) would miss the
     // graph and be silently skipped -> false pass in a pre-commit gate.
     const requestedFilePaths = Array.from(
-      new Set(options.files.map((file) => canonicalize(resolveFilePath(file, fs), fs))),
+      new Set(
+        options.files.map((file) =>
+          canonicalize(resolveFilePath(file, fs), fs),
+        ),
+      ),
     );
     const projectFilePaths = new Map<string, Map<string, FsPath>>();
     const allKnownFilePaths = new Set<string>();
@@ -119,24 +123,41 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
           hasAnyProjectError = true;
         } else {
           // The file does not exist (deleted/renamed). Skipping is benign.
-          cli.log(
-            `Warning: ${relativePath} does not exist; skipping.`,
-          );
+          cli.log(`Warning: ${relativePath} does not exist; skipping.`);
         }
         return false;
       },
     );
 
     for (const projectEntry of projectEntries) {
+      const knownFilePaths = projectFilePaths.get(projectEntry.projectName)!;
+      const fileInfoPaths = validRequestedFilePaths.flatMap(
+        (requestedFilePath) => {
+          const fileInfoPath = knownFilePaths.get(requestedFilePath);
+          return fileInfoPath ? [fileInfoPath] : [];
+        },
+      );
+      const engineValidation = tryRunEngineChecksForProject(
+        projectEntry.entryFile,
+        projectEntry.projectInfo,
+        fileInfoPaths,
+        fs,
+      );
+
+      if (engineValidation) {
+        projectValidations.set(projectEntry.projectName, engineValidation);
+        if (engineValidation.hasError) {
+          hasAnyProjectError = true;
+        }
+        continue;
+      }
+
       const projectValidation = projectValidations.get(
         projectEntry.projectName,
       )!;
-      const knownFilePaths = projectFilePaths.get(projectEntry.projectName)!;
 
-      for (const requestedFilePath of validRequestedFilePaths) {
-        const fileInfoPath = knownFilePaths.get(requestedFilePath);
+      for (const fileInfoPath of fileInfoPaths) {
         if (
-          fileInfoPath &&
           runChecksForFile(
             fileInfoPath,
             projectEntry.projectInfo,
@@ -150,16 +171,32 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
     }
   } else {
     for (const projectEntry of projectEntries) {
+      const fileInfoPaths = [
+        ...traverseFileInfo(projectEntry.projectInfo.fileInfo),
+      ].map(({ fileInfo }) => fileInfo.path);
+      const engineValidation = tryRunEngineChecksForProject(
+        projectEntry.entryFile,
+        projectEntry.projectInfo,
+        fileInfoPaths,
+        fs,
+      );
+
+      if (engineValidation) {
+        projectValidations.set(projectEntry.projectName, engineValidation);
+        if (engineValidation.hasError) {
+          hasAnyProjectError = true;
+        }
+        continue;
+      }
+
       const projectValidation = projectValidations.get(
         projectEntry.projectName,
       )!;
 
-      for (const { fileInfo } of traverseFileInfo(
-        projectEntry.projectInfo.fileInfo,
-      )) {
+      for (const fileInfoPath of fileInfoPaths) {
         if (
           runChecksForFile(
-            fileInfo.path,
+            fileInfoPath,
             projectEntry.projectInfo,
             projectValidation,
             fs,
@@ -269,6 +306,277 @@ function canonicalize(absolutePath: string, fs: Fs): string {
   return fs.realpath(absolutePath);
 }
 
+function createProjectValidation(): ProjectValidation {
+  return {
+    deepImportsCount: 0,
+    dependencyRulesCount: 0,
+    externalRulesCount: 0,
+    filesCount: 0,
+    hasError: false,
+    validationsMap: {},
+    encapsulations: [],
+    dependencyRuleViolations: [],
+  };
+}
+
+function tryRunEngineChecksForProject(
+  entryFile: string,
+  projectInfo: ProjectInfo,
+  fileInfoPaths: FsPath[],
+  fs: Fs,
+): ProjectValidation | undefined {
+  if (process.env['SHERIFF_ENGINE'] !== '1' || fileInfoPaths.length === 0) {
+    return undefined;
+  }
+
+  try {
+    const output = runEngineProject(
+      buildEngineProjectInput(projectInfo, entryFile),
+    );
+    if (!output) {
+      return undefined;
+    }
+
+    const validation = createProjectValidation();
+    applyEngineChecksForFiles(
+      output,
+      fileInfoPaths,
+      projectInfo,
+      validation,
+      fs,
+    );
+    return validation;
+  } catch (error) {
+    logEngineFallback(error);
+    return undefined;
+  }
+}
+
+type EngineViolationsForFile = {
+  dependency: EngineDependencyViolation[];
+  encapsulation: EngineEncapsulationViolation[];
+  external: EngineExternalViolation[];
+};
+
+function applyEngineChecksForFiles(
+  output: EngineOutput,
+  fileInfoPaths: FsPath[],
+  projectInfo: ProjectInfo,
+  projectValidation: ProjectValidation,
+  fs: Fs,
+): void {
+  const violationsByFile = indexEngineViolations(output);
+  assertEngineViolationFilesAreKnown(violationsByFile, projectInfo);
+
+  for (const fileInfoPath of fileInfoPaths) {
+    const violations = violationsByFile.get(
+      relativeEnginePath(projectInfo.rootDir, fileInfoPath),
+    ) ?? { dependency: [], encapsulation: [], external: [] };
+    const fileInfo = projectInfo.getFileInfo(fileInfoPath);
+    const encapsulations = orderEngineEncapsulations(
+      violations.encapsulation,
+      fileInfo.importEdges,
+      projectInfo.rootDir,
+    );
+    const dependencyRuleViolations = orderEngineDependencyViolations(
+      violations.dependency,
+      fileInfo.importEdges,
+      projectInfo,
+    );
+    const externalRuleViolations = orderEngineExternalViolations(
+      violations.external,
+      fileInfo.getExternalLibraries(),
+    );
+    projectValidation.encapsulations = encapsulations;
+    projectValidation.dependencyRuleViolations = dependencyRuleViolations;
+
+    if (
+      encapsulations.length === 0 &&
+      dependencyRuleViolations.length === 0 &&
+      externalRuleViolations.length === 0
+    ) {
+      continue;
+    }
+
+    projectValidation.hasError = true;
+    projectValidation.filesCount++;
+    projectValidation.deepImportsCount += encapsulations.length;
+    projectValidation.dependencyRulesCount += dependencyRuleViolations.length;
+    projectValidation.externalRulesCount += externalRuleViolations.length;
+    projectValidation.validationsMap[fs.relativeTo(fs.cwd(), fileInfoPath)] = {
+      encapsulations,
+      dependencyRules: dependencyRuleViolations.map(
+        formatDependencyRuleViolation,
+      ),
+      externalRules: externalRuleViolations.map(formatExternalRuleViolation),
+    };
+  }
+}
+
+function indexEngineViolations(
+  output: EngineOutput,
+): Map<string, EngineViolationsForFile> {
+  const indexed = new Map<string, EngineViolationsForFile>();
+  const getEntry = (file: string) => {
+    let entry = indexed.get(file);
+    if (!entry) {
+      entry = { dependency: [], encapsulation: [], external: [] };
+      indexed.set(file, entry);
+    }
+    return entry;
+  };
+
+  for (const violation of output.violations.dependency) {
+    getEntry(violation.file).dependency.push(violation);
+  }
+  for (const violation of output.violations.encapsulation) {
+    getEntry(violation.file).encapsulation.push(violation);
+  }
+  for (const violation of output.violations.external) {
+    getEntry(violation.file).external.push(violation);
+  }
+
+  return indexed;
+}
+
+function assertEngineViolationFilesAreKnown(
+  violationsByFile: Map<string, EngineViolationsForFile>,
+  projectInfo: ProjectInfo,
+): void {
+  const knownFiles = new Set(
+    [...traverseFileInfo(projectInfo.fileInfo)].map(({ fileInfo }) =>
+      relativeEnginePath(projectInfo.rootDir, fileInfo.path),
+    ),
+  );
+  for (const file of violationsByFile.keys()) {
+    if (!knownFiles.has(file)) {
+      throw new Error(`Engine returned a violation for unknown file ${file}.`);
+    }
+  }
+}
+
+function orderEngineEncapsulations(
+  violations: EngineEncapsulationViolation[],
+  importEdges: ReturnType<ProjectInfo['getFileInfo']>['importEdges'],
+  rootDir: FsPath,
+): string[] {
+  const unmatched = new Set(violations);
+  const encapsulations: Record<string, true> = {};
+
+  for (const edge of importEdges) {
+    const violation = [...unmatched].find(
+      (candidate) =>
+        candidate.rawImport === edge.rawImport &&
+        candidate.toFilePath ===
+          relativeEnginePath(rootDir, edge.importedFileInfo.path),
+    );
+    if (violation) {
+      unmatched.delete(violation);
+      encapsulations[edge.rawImport] = true;
+    }
+  }
+  assertNoUnmatchedEngineViolations(unmatched.size, 'encapsulation');
+  return Object.keys(encapsulations);
+}
+
+function orderEngineDependencyViolations(
+  violations: EngineDependencyViolation[],
+  importEdges: ReturnType<ProjectInfo['getFileInfo']>['importEdges'],
+  projectInfo: ProjectInfo,
+): DependencyRuleViolation[] {
+  const remaining = [...violations];
+  const ordered: EngineDependencyViolation[] = [];
+
+  for (const edge of importEdges) {
+    const index = remaining.findIndex(
+      (candidate) =>
+        candidate.rawImport === edge.rawImport &&
+        candidate.toFilePath ===
+          relativeEnginePath(projectInfo.rootDir, edge.importedFileInfo.path),
+    );
+    if (index !== -1) {
+      ordered.push(remaining.splice(index, 1)[0]);
+    }
+  }
+  assertNoUnmatchedEngineViolations(remaining.length, 'dependency');
+
+  return ordered.map((violation) => {
+    const toModulePath = toFsPath(
+      fsPathFromEnginePath(projectInfo.rootDir, violation.toModulePath),
+    );
+    const toTags = calcTagsForModule(
+      toModulePath,
+      projectInfo.rootDir,
+      projectInfo.config.modules,
+      projectInfo.config.autoTagging,
+    );
+    if (!haveSameValues(toTags, violation.toTags)) {
+      throw new Error(
+        `Engine returned incompatible tags for module ${violation.toModulePath}.`,
+      );
+    }
+
+    return {
+      rawImport: violation.rawImport,
+      fromModulePath: toFsPath(
+        fsPathFromEnginePath(projectInfo.rootDir, violation.fromModulePath),
+      ),
+      toModulePath,
+      toFilePath: toFsPath(
+        fsPathFromEnginePath(projectInfo.rootDir, violation.toFilePath),
+      ),
+      fromTag: violation.fromTag,
+      toTags,
+      ...(violation.cause ? { cause: violation.cause } : {}),
+    };
+  });
+}
+
+function orderEngineExternalViolations(
+  violations: EngineExternalViolation[],
+  externalLibraries: readonly string[],
+): EngineExternalViolation[] {
+  const remaining = [...violations];
+  const ordered: EngineExternalViolation[] = [];
+
+  for (const externalLibrary of externalLibraries) {
+    const index = remaining.findIndex(
+      (candidate) => candidate.externalLibrary === externalLibrary,
+    );
+    if (index !== -1) {
+      ordered.push(remaining.splice(index, 1)[0]);
+    }
+  }
+  assertNoUnmatchedEngineViolations(remaining.length, 'external');
+  return ordered;
+}
+
+function assertNoUnmatchedEngineViolations(
+  violationCount: number,
+  category: string,
+): void {
+  if (violationCount > 0) {
+    throw new Error(`Engine returned an unmappable ${category} violation.`);
+  }
+}
+
+function haveSameValues(left: string[], right: string[]): boolean {
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return (
+    sortedLeft.length === sortedRight.length &&
+    sortedLeft.every((value, index) => value === sortedRight[index])
+  );
+}
+
+function relativeEnginePath(rootDir: FsPath, path: FsPath): string {
+  return (getFs().relativeTo(rootDir, path) || '.').replaceAll('\\', '/');
+}
+
+function fsPathFromEnginePath(rootDir: FsPath, path: string): string {
+  return path === '.' ? rootDir : getFs().join(rootDir, path);
+}
+
 function runChecksForFile(
   fileInfoPath: FsPath,
   projectInfo: ProjectInfo,
@@ -306,9 +614,7 @@ function runChecksForFile(
   const dependencyRules = dependencyRuleViolations.map(
     formatDependencyRuleViolation,
   );
-  const externalRules = externalRuleViolations.map(
-    formatExternalRuleViolation,
-  );
+  const externalRules = externalRuleViolations.map(formatExternalRuleViolation);
   const relativePath = fs.relativeTo(fs.cwd(), fileInfoPath);
   projectValidation.validationsMap[relativePath] = {
     encapsulations,
@@ -332,12 +638,14 @@ function logAppliedConfig(projectInfo: ProjectInfo): void {
   cli.log('');
 }
 
-function formatExternalRuleViolation(violation: ExternalRuleViolation): string {
+function formatExternalRuleViolation(
+  violation: Pick<ExternalRuleViolation, 'externalLibrary' | 'fromTag'>,
+): string {
   return `external library ${violation.externalLibrary} is not allowed for tag ${violation.fromTag}`;
 }
 
 function formatDependencyRuleViolation(
-  violation: DependencyRuleViolation,
+  violation: Pick<DependencyRuleViolation, 'cause' | 'fromTag' | 'toTags'>,
 ): string {
   if (violation.cause === 'deny-rule') {
     return `denyRules denied from tag ${violation.fromTag} to tags ${violation.toTags.join(', ')}`;

@@ -16,11 +16,14 @@
     "strict": true,
     "baseUrl": ".",
     "paths": {
-      "@lambda-solutions/eslint-plugin-sheriff": ["packages/eslint-plugin/src/index.ts"],
+      "@lambda-solutions/eslint-plugin-sheriff": [
+        "packages/eslint-plugin/src/index.ts"
+      ],
       "@lambda-solutions/mcp-server-sheriff": [
         "packages/mcp-server/src/index.ts"
       ],
-      "@lambda-solutions/sheriff-core": ["packages/core/src/index.ts"]
+      "@lambda-solutions/sheriff-core": ["packages/core/src/index.ts"],
+      "@lambda-solutions/sheriff-engine": ["packages/sheriff-engine/index.d.ts"]
     }
   },
   "exclude": ["node_modules", "tmp"]
