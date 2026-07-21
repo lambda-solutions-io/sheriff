@@ -1,5 +1,6 @@
 mod engine;
 mod extract;
+mod handle;
 mod input;
 mod js_regex;
 mod js_replacement;
@@ -129,7 +130,7 @@ fn resolve_imports_inner(input_json: &str) -> Result<String, resolve::ResolvePro
     })
 }
 
-fn error_json(code: &'static str, message: String) -> String {
+pub(crate) fn error_json(code: &'static str, message: String) -> String {
     serde_json::to_string(&ErrorOutput {
         schema_version: 1,
         error: StructuredError { code, message },
@@ -150,7 +151,7 @@ fn resolve_error_json(code: &'static str, message: String) -> String {
     })
 }
 
-fn panic_message(payload: Box<dyn Any + Send>) -> String {
+pub(crate) fn panic_message(payload: Box<dyn Any + Send>) -> String {
     payload
         .downcast_ref::<&str>()
         .map(|message| (*message).to_owned())

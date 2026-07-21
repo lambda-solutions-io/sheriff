@@ -66,3 +66,27 @@ The range parser is implemented locally instead of using Rust's cached `semver`
 crate because `VersionReq` has a different grammar and semantics from
 TypeScript's `VersionRange` (notably whitespace conjunctions, hyphen ranges,
 wildcard partials, and prerelease-inclusive matching). No dependency was added.
+
+## R4 incremental project handle
+
+`ProjectHandle` starts at one absolute `entryFile`, resolves its transitive
+graph, and retains interned paths, forward and reverse edges, module assignment,
+tags, resolution context, callback decisions, overlays, and dependency stamps in
+Rust. `applyChanges` accepts a versioned batch of created, modified, deleted,
+renamed, directory, and overlay events. A content-only edit patches that file's
+edges and reverse-edge entries; create/delete/rename, tsconfig, package manifest,
+and directory events deliberately rebuild the reached graph.
+
+Overlays are stored separately and are passed to extraction for only the
+overlaid file. They never populate or replace disk state; `clearOverlay` reads
+the file from disk again. `sheriffConfigPaths` are stamped, but executable
+Sheriff configuration remains Node-owned. A change to one of those paths returns
+a structured error requiring a new handle with the freshly evaluated config.
+
+Function-valued configuration uses the same purity gate and candidate protocol
+as `analyzeProject`. Candidate decisions are cached by their complete
+materialized context across native method calls. The public JavaScript class
+settles tag and rule candidates synchronously and returns serialized
+`EngineOutput` from `applyChanges`, `setOverlay`, `clearOverlay`, and
+`getResult`. `getReachedFiles` returns the sorted root-relative transitive file
+set for differential testing.

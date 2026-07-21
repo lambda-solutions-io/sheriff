@@ -29,6 +29,38 @@ if (input.operation === 'resolve-module-names') {
   return;
 }
 
+if (input.operation === 'reached-files') {
+  const reachedByEntry = input.entries.map(({ tsConfigPath, entryFile }) => {
+    const tsData = generateTsData(tsConfigPath);
+    const reached = new Set();
+    const pending = [entryFile];
+    while (pending.length > 0) {
+      const file = pending.pop();
+      if (reached.has(file)) continue;
+      reached.add(file);
+      for (const edge of resolveImportsForEngineShadow(
+        file,
+        tsData,
+        input.ignoredExtensions,
+      )) {
+        if (edge.kind === 'module' && edge.resolvedPath !== null) {
+          pending.push(path.resolve(tsData.rootDir, edge.resolvedPath));
+        }
+      }
+    }
+    return {
+      tsConfigPath,
+      entryFile,
+      rootDir: tsData.rootDir,
+      files: [...reached]
+        .map((file) => relativePath(tsData.rootDir, file))
+        .sort(),
+    };
+  });
+  process.stdout.write(JSON.stringify(reachedByEntry));
+  return;
+}
+
 const edges = [];
 for (const group of input.groups) {
   const tsData = generateTsData(group.tsConfigPath);

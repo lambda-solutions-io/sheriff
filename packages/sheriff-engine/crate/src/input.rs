@@ -244,7 +244,7 @@ impl<'de> Deserialize<'de> for RuleValue {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EngineInput {
     pub schema_version: u32,
@@ -494,7 +494,7 @@ fn default_barrel_file_name() -> String {
     "index.ts".to_owned()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InputFile {
     pub path: String,
@@ -502,7 +502,7 @@ pub struct InputFile {
     pub imports: Vec<InputImport>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InputImport {
     pub raw: String,
@@ -519,7 +519,7 @@ pub enum ImportKind {
     Unresolvable,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InputModulePath {
     pub path: String,

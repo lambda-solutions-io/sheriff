@@ -50,6 +50,12 @@
     "filesCompared": 434,
     "typescriptEdges": 1357,
     "rustEdges": 1357,
+    "reachedFiles": {
+      "entries": 8,
+      "typescript": 327,
+      "rust": 327,
+      "divergences": 0
+    },
     "fallbackRate": {
       "fixturesFellBack": 0,
       "fixturesChecked": 8,
@@ -83,6 +89,20 @@
         "checked": true,
         "fellBack": false,
         "reasons": []
+      },
+      "graphDiscovery": {
+        "entries": [
+          {
+            "tsConfigPath": "test-projects/angular-i/tsconfig.json",
+            "entryFile": "test-projects/angular-i/src/main.ts",
+            "entryRelative": "src/main.ts"
+          }
+        ],
+        "counts": {
+          "typescript": 94,
+          "rust": 94
+        },
+        "divergences": []
       },
       "divergences": {
         "kindMismatch": {
@@ -120,6 +140,20 @@
         "fellBack": false,
         "reasons": []
       },
+      "graphDiscovery": {
+        "entries": [
+          {
+            "tsConfigPath": "test-projects/angular-ii/tsconfig.json",
+            "entryFile": "test-projects/angular-ii/src/main.ts",
+            "entryRelative": "src/main.ts"
+          }
+        ],
+        "counts": {
+          "typescript": 57,
+          "rust": 57
+        },
+        "divergences": []
+      },
       "divergences": {
         "kindMismatch": {
           "count": 0,
@@ -155,6 +189,20 @@
         "checked": true,
         "fellBack": false,
         "reasons": []
+      },
+      "graphDiscovery": {
+        "entries": [
+          {
+            "tsConfigPath": "test-projects/angular-iii/tsconfig.json",
+            "entryFile": "test-projects/angular-iii/src/main.ts",
+            "entryRelative": "src/main.ts"
+          }
+        ],
+        "counts": {
+          "typescript": 59,
+          "rust": 59
+        },
+        "divergences": []
       },
       "divergences": {
         "kindMismatch": {
@@ -192,6 +240,20 @@
         "fellBack": false,
         "reasons": []
       },
+      "graphDiscovery": {
+        "entries": [
+          {
+            "tsConfigPath": "test-projects/angular-iv/tsconfig.json",
+            "entryFile": "test-projects/angular-iv/src/main.ts",
+            "entryRelative": "src/main.ts"
+          }
+        ],
+        "counts": {
+          "typescript": 94,
+          "rust": 94
+        },
+        "divergences": []
+      },
       "divergences": {
         "kindMismatch": {
           "count": 0,
@@ -227,6 +289,20 @@
         "checked": true,
         "fellBack": false,
         "reasons": []
+      },
+      "graphDiscovery": {
+        "entries": [
+          {
+            "tsConfigPath": "test-projects/angular-v-multi/tsconfig.json",
+            "entryFile": "test-projects/angular-v-multi/projects/app-i/src/main.ts",
+            "entryRelative": "projects/app-i/src/main.ts"
+          }
+        ],
+        "counts": {
+          "typescript": 10,
+          "rust": 10
+        },
+        "divergences": []
       },
       "divergences": {
         "kindMismatch": {
@@ -264,6 +340,20 @@
         "fellBack": false,
         "reasons": []
       },
+      "graphDiscovery": {
+        "entries": [
+          {
+            "tsConfigPath": "test-projects/nextjs-i/tsconfig.json",
+            "entryFile": "test-projects/nextjs-i/shared/ui/index.ts",
+            "entryRelative": "shared/ui/index.ts"
+          }
+        ],
+        "counts": {
+          "typescript": 3,
+          "rust": 3
+        },
+        "divergences": []
+      },
       "divergences": {
         "kindMismatch": {
           "count": 0,
@@ -300,6 +390,20 @@
         "fellBack": false,
         "reasons": []
       },
+      "graphDiscovery": {
+        "entries": [
+          {
+            "tsConfigPath": "test-projects/plugin-i/tsconfig.json",
+            "entryFile": "test-projects/plugin-i/src/main.ts",
+            "entryRelative": "src/main.ts"
+          }
+        ],
+        "counts": {
+          "typescript": 3,
+          "rust": 3
+        },
+        "divergences": []
+      },
       "divergences": {
         "kindMismatch": {
           "count": 0,
@@ -335,6 +439,20 @@
         "checked": true,
         "fellBack": false,
         "reasons": []
+      },
+      "graphDiscovery": {
+        "entries": [
+          {
+            "tsConfigPath": "test-projects/typescript-i/tsconfig.json",
+            "entryFile": "test-projects/typescript-i/src/main.ts",
+            "entryRelative": "src/main.ts"
+          }
+        ],
+        "counts": {
+          "typescript": 7,
+          "rust": 7
+        },
+        "divergences": []
       },
       "divergences": {
         "kindMismatch": {

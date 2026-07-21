@@ -1,6 +1,13 @@
-import { existsSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -14,7 +21,7 @@ import {
 import type { EngineErrorOutput, EngineInput, EngineOutput } from '../index.js';
 
 const require = createRequire(import.meta.url);
-const { analyzeProject, EngineImpureCallbackError } =
+const { analyzeProject, EngineImpureCallbackError, ProjectHandle } =
   require('../index.js') as typeof import('../index.js');
 const { nativeBinaryName } = require('../platform.js') as {
   nativeBinaryName: () => string;
@@ -368,6 +375,62 @@ describe.skipIf(!nativeEnabled)('function materialisation protocol', () => {
     expect(output).toHaveProperty('error.message');
     if (!('error' in output)) return;
     expect(output.error.message).toContain('SH-002');
+  });
+});
+
+describe.skipIf(!nativeEnabled)('incremental ProjectHandle', () => {
+  it('materializes callbacks across native method calls and applies an overlay', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'sheriff-r4-napi-'));
+    try {
+      const sourceDirectory = path.join(root, 'src/source');
+      const targetDirectory = path.join(root, 'src/target');
+      mkdirSync(sourceDirectory, { recursive: true });
+      mkdirSync(targetDirectory, { recursive: true });
+      const entryFile = path.join(sourceDirectory, 'entry.ts');
+      const targetFile = path.join(targetDirectory, 'entry.ts');
+      const tsConfigPath = path.join(root, 'tsconfig.json');
+      writeFileSync(tsConfigPath, '{}');
+      writeFileSync(entryFile, "import '../target/entry';\n");
+      writeFileSync(targetFile, 'export const target = true;\n');
+
+      const handle = new ProjectHandle({
+        schemaVersion: 1,
+        entryFile,
+        tsConfigPath,
+        modulePaths: [
+          { path: sourceDirectory, isBarrel: false },
+          { path: targetDirectory, isBarrel: false },
+        ],
+        moduleConfig: {
+          'src/source': 'source',
+          'src/target': 'target',
+        },
+        autoTagging: true,
+        depRules: {
+          source: ({ to, toFilePath }) =>
+            to === 'target' && toFilePath.endsWith('/src/target/entry.ts'),
+          target: [],
+        },
+        denyRules: {},
+        externalRules: {},
+        enableBarrelLess: true,
+      });
+      const initial = JSON.parse(handle.getResult()) as EngineOutput;
+      expect(initial.violations.dependency).toEqual([]);
+
+      const overlaid = JSON.parse(
+        handle.setOverlay(entryFile, 'export const local = true;\n'),
+      ) as EngineOutput;
+      expect(overlaid.violations.dependency).toEqual([]);
+      expect(JSON.parse(handle.getReachedFiles()).files).toEqual([
+        'src/source/entry.ts',
+      ]);
+
+      const restored = JSON.parse(handle.clearOverlay(entryFile)) as EngineOutput;
+      expect(restored).toEqual(initial);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

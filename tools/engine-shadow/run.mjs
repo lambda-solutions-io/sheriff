@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const {
+  ProjectHandle,
   resolveProjectImports,
 } = require('../../packages/sheriff-engine/index.js');
 
@@ -107,6 +108,12 @@ const totals = projects.reduce(
     result.filesCompared += project.filesCompared;
     result.typescriptEdges += project.edges.typescript;
     result.rustEdges += project.edges.rust;
+    result.reachedFiles.typescript +=
+      project.graphDiscovery?.counts.typescript ?? 0;
+    result.reachedFiles.rust += project.graphDiscovery?.counts.rust ?? 0;
+    result.reachedFiles.entries += project.graphDiscovery?.entries.length ?? 0;
+    result.reachedFiles.divergences +=
+      project.graphDiscovery?.divergences.length ?? 0;
     if (project.engineFallback.checked) {
       result.fallbackRate.fixturesChecked += 1;
       if (project.engineFallback.fellBack)
@@ -125,6 +132,7 @@ const totals = projects.reduce(
     filesCompared: 0,
     typescriptEdges: 0,
     rustEdges: 0,
+    reachedFiles: { entries: 0, typescript: 0, rust: 0, divergences: 0 },
     fallbackRate: {
       fixturesFellBack: 0,
       fixturesChecked: 0,
@@ -186,7 +194,12 @@ if (fallbackBaselineExceeded) {
     `Engine fallback baseline exceeded: baseline=${expectedFallbackFixtureCount}, actual=${totals.fallbackRate.fixturesFellBack}, regressed fixtures=${totals.fallbackRate.regressedFixtures.join(', ') || '(none)'}\n`,
   );
 }
-if (divergenceCount > 0 || totals.skipped > 0 || fallbackBaselineExceeded)
+if (
+  divergenceCount > 0 ||
+  totals.reachedFiles.divergences > 0 ||
+  totals.skipped > 0 ||
+  fallbackBaselineExceeded
+)
   process.exitCode = 1;
 
 function runFixture(name, fixtureDir) {
@@ -230,6 +243,7 @@ function runFixture(name, fixtureDir) {
   }
 
   const tsEdges = dumpTypeScriptEdges(groups);
+  const graphDiscovery = compareReachedFiles(groups);
   const rustEdges = [];
   const fallbackReasons = [];
   for (const [tsConfigPath, files] of groups) {
@@ -278,6 +292,7 @@ function runFixture(name, fixtureDir) {
       tsconfigGroups: groups.size,
       edges: { typescript: tsEdges.length, rust: rustEdges.length },
       engineFallback,
+      graphDiscovery,
       divergences,
     };
   }
@@ -301,8 +316,127 @@ function runFixture(name, fixtureDir) {
     filesCompared: sourceFiles.length,
     edges: { typescript: tsEdges.length, rust: rustEdges.length },
     engineFallback,
+    graphDiscovery,
     divergences,
   };
+}
+
+function compareReachedFiles(groups) {
+  const entries = [...groups].map(([tsConfigPath, files]) => ({
+    tsConfigPath,
+    entryFile: chooseEntryFile(files),
+  }));
+  const typescript = dumpTypeScriptReached(entries);
+  const comparisons = typescript.map((entry) => {
+    const handle = new ProjectHandle({
+      schemaVersion: 1,
+      entryFile: entry.entryFile,
+      tsConfigPath: entry.tsConfigPath,
+      ignoreFileExtensions: ignoredExtensions,
+      shadowMode: true,
+      modulePaths: [],
+      moduleConfig: {},
+      autoTagging: true,
+      depRules: {},
+      denyRules: {},
+      externalRules: {},
+      enableBarrelLess: false,
+      excludeRoot: false,
+      barrelFileName: 'index.ts',
+    });
+    const reachedOutput = JSON.parse(handle.getReachedFiles());
+    if (reachedOutput.error) {
+      throw new Error(
+        `${reachedOutput.error.code}: ${reachedOutput.error.message}`,
+      );
+    }
+    const rust = reachedOutput.files;
+    const typescriptOnly = entry.files.filter((file) => !rust.includes(file));
+    const rustOnly = rust.filter((file) => !entry.files.includes(file));
+    return {
+      tsConfigPath: entry.tsConfigPath,
+      entryFile: entry.entryFile,
+      entryRelative: relativePath(entry.rootDir, entry.entryFile),
+      typescript: entry.files,
+      rust,
+      typescriptOnly,
+      rustOnly,
+    };
+  });
+  return {
+    entries: comparisons.map(
+      ({ tsConfigPath, entryFile, entryRelative }) => ({
+        tsConfigPath: relativePath(repoRoot, tsConfigPath),
+        entryFile: relativePath(repoRoot, entryFile),
+        entryRelative,
+      }),
+    ),
+    counts: {
+      typescript: comparisons.reduce(
+        (count, comparison) => count + comparison.typescript.length,
+        0,
+      ),
+      rust: comparisons.reduce(
+        (count, comparison) => count + comparison.rust.length,
+        0,
+      ),
+    },
+    divergences: comparisons
+      .filter(
+        ({ typescriptOnly, rustOnly }) =>
+          typescriptOnly.length > 0 || rustOnly.length > 0,
+      )
+      .map(
+        ({ entryRelative, typescriptOnly, rustOnly }) => ({
+          entryRelative,
+          typescriptOnly,
+          rustOnly,
+        }),
+      ),
+  };
+}
+
+function chooseEntryFile(files) {
+  const priorities = ['main.ts', 'main.tsx', 'entry.ts', 'index.ts'];
+  for (const basename of priorities) {
+    const match = files.find((file) => path.basename(file) === basename);
+    if (match) return match;
+  }
+  return files[0];
+}
+
+function dumpTypeScriptReached(entries) {
+  const result = spawnSync(
+    process.execPath,
+    [
+      '-r',
+      'ts-node/register/transpile-only',
+      path.join(toolDir, 'dump-typescript.cjs'),
+    ],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      input: JSON.stringify({
+        operation: 'reached-files',
+        entries,
+        ignoredExtensions,
+      }),
+      env: {
+        ...process.env,
+        TS_NODE_COMPILER_OPTIONS: JSON.stringify({
+          module: 'CommonJS',
+          moduleResolution: 'node',
+        }),
+      },
+      maxBuffer: 100 * 1024 * 1024,
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      `TypeScript reached-file dumper failed (${result.status}): ${result.stderr || result.stdout}`,
+    );
+  }
+  return JSON.parse(result.stdout);
 }
 
 function dumpTypeScriptEdges(groups) {
@@ -461,6 +595,11 @@ function findNearestParentFile(referenceFile, filename) {
   }
 }
 
+function relativePath(root, target) {
+  const relative = path.relative(root, target).replaceAll('\\', '/');
+  return relative || '.';
+}
+
 function directoryExists(directory) {
   return fs.existsSync(directory) && fs.statSync(directory).isDirectory();
 }
@@ -474,6 +613,7 @@ function renderSummary(report) {
     `typesVersions parity: ${report.typesVersionsParity.cases.filter(({ passed }) => passed).length}/${report.typesVersionsParity.cases.length} passed against TypeScript ${report.typesVersionsParity.compilerVersion}`,
     `Coverage: ${report.totals.filesCompared} source files; ${report.totals.typescriptEdges} TS edges; ${report.totals.rustEdges} Rust edges`,
     `Divergences: kind=${report.totals.divergences.kindMismatch}, path=${report.totals.divergences.pathMismatch}, missing=${report.totals.divergences.missingEdge}, extra=${report.totals.divergences.extraEdge}`,
+    `Entry traversal: ${report.totals.reachedFiles.entries} entries; ${report.totals.reachedFiles.typescript} TS reached files; ${report.totals.reachedFiles.rust} Rust reached files; ${report.totals.reachedFiles.divergences} reached-set divergences`,
     '',
   ];
   for (const project of report.projects) {
@@ -488,6 +628,11 @@ function renderSummary(report) {
     lines.push(
       `- ${project.project}: ${project.status}; engine fallback=${engineFallback}; files=${project.filesCompared}; TS=${project.edges.typescript}; Rust=${project.edges.rust}; ${dependencyCoverage}`,
     );
+    if (project.graphDiscovery) {
+      lines.push(
+        `  reached: entries=${project.graphDiscovery.entries.map(({ entryRelative }) => entryRelative).join(', ')}; TS=${project.graphDiscovery.counts.typescript}; Rust=${project.graphDiscovery.counts.rust}; divergences=${project.graphDiscovery.divergences.length}`,
+      );
+    }
     for (const reason of project.engineFallback.reasons)
       lines.push(`  fallback reason: ${reason}`);
     for (const reason of project.skipReasons) lines.push(`  reason: ${reason}`);

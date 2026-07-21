@@ -5,15 +5,24 @@ Fallback rate: 0/8 checked fixtures fell back; 0/8 discovered fixtures fell back
 typesVersions parity: 9/9 passed against TypeScript 5.9.3
 Coverage: 434 source files; 1357 TS edges; 1357 Rust edges
 Divergences: kind=0, path=0, missing=0, extra=0
+Entry traversal: 8 entries; 327 TS reached files; 327 Rust reached files; 0 reached-set divergences
 
 - angular-i: passed; engine fallback=no; files=113; TS=391; Rust=391; no fixture-local node_modules; ancestor installs may still resolve
+  reached: entries=src/main.ts; TS=94; Rust=94; divergences=0
 - angular-ii: passed; engine fallback=no; files=61; TS=218; Rust=218; no fixture-local node_modules; ancestor installs may still resolve
+  reached: entries=src/main.ts; TS=57; Rust=57; divergences=0
 - angular-iii: passed; engine fallback=no; files=81; TS=262; Rust=262; no fixture-local node_modules; ancestor installs may still resolve
+  reached: entries=src/main.ts; TS=59; Rust=59; divergences=0
 - angular-iv: passed; engine fallback=no; files=122; TS=395; Rust=395; no fixture-local node_modules; ancestor installs may still resolve
+  reached: entries=src/main.ts; TS=94; Rust=94; divergences=0
 - angular-v-multi: passed; engine fallback=no; files=30; TS=60; Rust=60; installed dependencies present
+  reached: entries=projects/app-i/src/main.ts; TS=10; Rust=10; divergences=0
 - nextjs-i: passed; engine fallback=no; files=10; TS=16; Rust=16; installed dependencies present
+  reached: entries=shared/ui/index.ts; TS=3; Rust=3; divergences=0
 - plugin-i: passed; engine fallback=no; files=7; TS=6; Rust=6; no fixture-local node_modules; ancestor installs may still resolve
+  reached: entries=src/main.ts; TS=3; Rust=3; divergences=0
 - typescript-i: passed; engine fallback=no; files=10; TS=9; Rust=9; no fixture-local node_modules; ancestor installs may still resolve
+  reached: entries=src/main.ts; TS=7; Rust=7; divergences=0
 
 Machine report: tools/engine-shadow/report.json
 

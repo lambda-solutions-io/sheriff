@@ -480,8 +480,89 @@ function resolveModuleNameForEngineShadow(inputJson) {
   return loadNative().resolveModuleNameForEngineShadow(serialized);
 }
 
+class ProjectHandle {
+  constructor(inputJson) {
+    const prepared =
+      typeof inputJson === 'string'
+        ? { callbacks: [], serializableInput: JSON.parse(inputJson) }
+        : prepareInput(inputJson);
+    const NativeProjectHandle = loadNative().ProjectHandle;
+    this.callbacks = prepared.callbacks;
+    this.nativeHandle = new NativeProjectHandle(
+      JSON.stringify(prepared.serializableInput),
+    );
+    this.latestResult = this.settle(this.nativeHandle.getResult());
+  }
+
+  applyChanges(eventsJson) {
+    const serialized =
+      typeof eventsJson === 'string'
+        ? eventsJson
+        : JSON.stringify(eventsJson);
+    this.latestResult = this.settle(
+      this.nativeHandle.applyChanges(serialized),
+    );
+    return this.latestResult;
+  }
+
+  setOverlay(path, content) {
+    this.latestResult = this.settle(
+      this.nativeHandle.setOverlay(path, content),
+    );
+    return this.latestResult;
+  }
+
+  clearOverlay(path) {
+    this.latestResult = this.settle(this.nativeHandle.clearOverlay(path));
+    return this.latestResult;
+  }
+
+  getResult() {
+    return this.latestResult;
+  }
+
+  getReachedFiles() {
+    return this.nativeHandle.getReachedFiles();
+  }
+
+  settle(serializedOutput) {
+    for (let pass = 0; pass < 3; pass += 1) {
+      const output = JSON.parse(serializedOutput);
+      if (output.tagCallbackCandidates) {
+        serializedOutput = this.nativeHandle.provideCallbackResults(
+          JSON.stringify({
+            schemaVersion: 1,
+            results: materializeTagCallbacks(
+              output.tagCallbackCandidates,
+              this.callbacks,
+            ),
+          }),
+        );
+        continue;
+      }
+      if (output.ruleCallbackCandidates) {
+        serializedOutput = this.nativeHandle.provideCallbackResults(
+          JSON.stringify({
+            schemaVersion: 1,
+            results: materializeRuleCallbacks(
+              output.ruleCallbackCandidates,
+              this.callbacks,
+            ),
+          }),
+        );
+        continue;
+      }
+      return serializedOutput;
+    }
+    throw new Error(
+      'Sheriff Rust ProjectHandle callback materialization did not converge',
+    );
+  }
+}
+
 module.exports = {
   analyzeProject,
+  ProjectHandle,
   resolveProjectImports,
   resolveModuleNameForEngineShadow,
   EngineUnsupportedConfigError,

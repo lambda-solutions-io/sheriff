@@ -187,6 +187,41 @@ export interface ResolveProjectErrorOutput extends EngineErrorOutput {
   fallback: true;
 }
 
+export interface ProjectHandleInput
+  extends Omit<EngineInput, 'rootDir' | 'files'> {
+  entryFile: string;
+  tsConfigPath: string;
+  ignoreFileExtensions?: string[];
+  /** Evaluated Sheriff config inputs to stamp; changes require a replacement handle. */
+  sheriffConfigPaths?: string[];
+  /** Continue for differential measurement when the resolver fallback gate fires. */
+  shadowMode?: boolean;
+}
+
+export type ProjectChangeEvent =
+  | { kind: 'created' | 'modified' | 'deleted' | 'directory'; path: string }
+  | { kind: 'renamed'; oldPath: string; path: string }
+  | { kind: 'overlaySet'; path: string; content: string }
+  | { kind: 'overlayClear'; path: string }
+  | { kind: 'sheriffConfig'; path: string };
+
+export interface ApplyProjectChangesInput {
+  schemaVersion: 1;
+  events: ProjectChangeEvent[];
+  /** Updated Node-discovered modules after a directory-structure change. */
+  modulePaths?: EngineModulePath[];
+}
+
+/** Persistent native graph. Methods return the same serialized schema as analyzeProject. */
+export declare class ProjectHandle {
+  constructor(input: ProjectHandleInput | string);
+  applyChanges(input: ApplyProjectChangesInput | string): string;
+  setOverlay(path: string, content: string): string;
+  clearOverlay(path: string): string;
+  getResult(): string;
+  getReachedFiles(): string;
+}
+
 /** Shadow-only R2 API. TypeScript remains the production resolver. */
 export declare function resolveProjectImports(inputJson: string): string;
 export declare function resolveProjectImports(

@@ -412,6 +412,143 @@ pub enum ResolveProjectError {
     CyclicTsConfigExtends(String),
 }
 
+/// Stateful resolution context used by `ProjectHandle`. It deliberately owns
+/// no source cache: an overlay is supplied to `resolve_file` for exactly one
+/// call and is never retained by the resolver.
+pub(crate) struct ResolveSession {
+    context: TsConfigContext,
+    resolver: Resolver,
+    ignored: HashSet<String>,
+    reached_packages: HashSet<ReachedPackage>,
+    import_count: usize,
+    shadow_mode: bool,
+}
+
+pub(crate) struct ResolveSessionSummary {
+    pub root_dir: PathBuf,
+    pub source_config_paths: Vec<PathBuf>,
+    pub package_manifest_paths: Vec<PathBuf>,
+    pub fallback_reasons: Vec<String>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ResolutionContextSnapshot {
+    pub paths: Vec<MaterializedPath>,
+    pub root_dir: PathBuf,
+    pub base_url: Option<PathBuf>,
+    pub module_resolution: Option<String>,
+    pub source_config_paths: Vec<PathBuf>,
+}
+
+impl ResolveSession {
+    pub(crate) fn new(
+        ts_config_path: &Path,
+        ignore_file_extensions: &[String],
+        shadow_mode: bool,
+    ) -> Result<Self, ResolveProjectError> {
+        let mut context = get_ts_config_context(ts_config_path)?;
+        context.fallback_reasons.sort();
+        context.fallback_reasons.dedup();
+        let resolver = create_resolver(Some(ts_config_path), context.module_resolution.as_deref());
+        Ok(Self {
+            context,
+            resolver,
+            ignored: ignore_file_extensions
+                .iter()
+                .map(|extension| extension.to_lowercase())
+                .collect(),
+            reached_packages: HashSet::new(),
+            import_count: 0,
+            shadow_mode,
+        })
+    }
+
+    pub(crate) fn root_dir(&self) -> &Path {
+        &self.context.root_dir
+    }
+
+    pub(crate) fn context_snapshot(&self) -> ResolutionContextSnapshot {
+        ResolutionContextSnapshot {
+            paths: self.context.paths.clone(),
+            root_dir: self.context.root_dir.clone(),
+            base_url: self.context.base_url.clone(),
+            module_resolution: self.context.module_resolution.clone(),
+            source_config_paths: self.context.source_config_paths.clone(),
+        }
+    }
+
+    pub(crate) fn resolve_file(
+        &mut self,
+        path: &Path,
+        overlay: Option<&str>,
+    ) -> Result<Option<ResolvedFile>, ResolveProjectError> {
+        if !self.context.fallback_reasons.is_empty() && !self.shadow_mode {
+            return Ok(None);
+        }
+        let source = match overlay {
+            Some(source) => source.to_owned(),
+            None => fs::read_to_string(path)
+                .map_err(|error| format!("could not read {}: {error}", path.display()))?,
+        };
+        if source.len() > MAX_STRING_BYTES {
+            return Err(ResolveProjectError::LimitExceeded(format!(
+                "source file {} exceeds the {MAX_STRING_BYTES} byte string/path limit",
+                relative_for_oracle(&self.context.root_dir, path)
+            )));
+        }
+        let extracted = extract_imports(path, &source)?;
+        self.import_count = checked_import_total(self.import_count, extracted.imports.len())?;
+        if !extracted.fallback_reasons.is_empty() {
+            let file = relative_for_oracle(&self.context.root_dir, path);
+            self.context.fallback_reasons.extend(
+                extracted
+                    .fallback_reasons
+                    .into_iter()
+                    .map(|reason| format!("{reason} ({file})")),
+            );
+            if !self.shadow_mode {
+                return Ok(None);
+            }
+        }
+        let imports = resolve_imports(
+            path,
+            extracted.imports,
+            &self.ignored,
+            &self.context,
+            &self.resolver,
+            &mut self.reached_packages,
+        )?;
+        Ok(Some(ResolvedFile {
+            file: relative_for_oracle(&self.context.root_dir, path),
+            imports,
+        }))
+    }
+
+    pub(crate) fn finish(mut self) -> ResolveSessionSummary {
+        let mut package_manifest_paths = self
+            .reached_packages
+            .iter()
+            .filter_map(|package| package.manifest_path.clone())
+            .collect::<Vec<_>>();
+        package_manifest_paths.sort();
+        package_manifest_paths.dedup();
+        self.context
+            .fallback_reasons
+            .extend(types_versions_fallback_reasons(
+                &self.reached_packages,
+                &self.context.root_dir,
+            ));
+        self.context.fallback_reasons.sort();
+        self.context.fallback_reasons.dedup();
+        ResolveSessionSummary {
+            root_dir: self.context.root_dir,
+            source_config_paths: self.context.source_config_paths,
+            package_manifest_paths,
+            fallback_reasons: self.context.fallback_reasons,
+        }
+    }
+}
+
 pub fn resolve_module_name_for_shadow(
     input: ResolveModuleInput,
 ) -> Result<ResolveModuleOutput, ResolveProjectError> {

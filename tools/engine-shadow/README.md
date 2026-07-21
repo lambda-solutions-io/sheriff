@@ -25,11 +25,14 @@ Rust shadow seam for `rxjs`, range-key ordering, path-pattern specificity,
 invalid ranges, unimported packages, scoped-package subpaths, aliases into
 `node_modules`, and nested packages.
 
-The harness enumerates JavaScript and TypeScript files directly from disk,
-whereas production starts at an entry file and discovers the project by
-traversing resolved imports. Its per-file coverage is therefore a superset of
-the files production normally reaches, but it does **not** test Rust parity for
-graph discovery itself. Graph-discovery parity remains deferred to R4/R5.
+The per-edge differential still enumerates JavaScript and TypeScript files from
+disk, making it a superset of the files production normally reaches. R4 adds a
+second differential: for each tsconfig group the harness chooses `main.ts`,
+`main.tsx`, `entry.ts`, or `index.ts` (then the first source file as a fallback),
+walks imports transitively through the real TypeScript resolver seam, and
+compares that reached set with `ProjectHandle.getReachedFiles()`. The report
+names every chosen entry and lists TypeScript-only or Rust-only files. Any
+reached-set difference makes the harness fail.
 
 Only `nextjs-i` and `angular-v-multi` contain fixture-local `node_modules` and
 therefore exercise installed packages and real `exports` maps. The other six
