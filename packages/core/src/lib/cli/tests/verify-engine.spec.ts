@@ -101,6 +101,48 @@ describe('verify with the Rust engine', () => {
       rmSync(project, { recursive: true, force: true });
     }
   });
+
+  it('falls back when deny rules contain inherited enumerable keys', () => {
+    const project = createInheritedRulesFallbackProject();
+    process.chdir(project);
+
+    try {
+      const typescript = captureVerify(false, []);
+      const engine = captureVerify(true, [], {}, true);
+
+      expect(engine.logs).toBe(typescript.logs);
+      expect(engine.errorLogs).toBe(typescript.errorLogs);
+      expect(engine.exit).toBe(typescript.exit);
+      expect(engine.exit).toBe('error');
+      expect(engine.fallbackLogs).toEqual([
+        expect.stringContaining('config.denyRules'),
+      ]);
+    } finally {
+      process.chdir(workspaceRoot);
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back when a rule callback mutates the context it receives', () => {
+    const project = createMutatingCallbackFallbackProject();
+    process.chdir(project);
+
+    try {
+      const typescript = captureVerify(false, []);
+      const engine = captureVerify(true, [], {}, true);
+
+      expect(engine.logs).toBe(typescript.logs);
+      expect(engine.errorLogs).toBe(typescript.errorLogs);
+      expect(engine.exit).toBe(typescript.exit);
+      expect(engine.logs).toContain('to tags target:a, target:m, target:z');
+      expect(engine.fallbackLogs).toEqual([
+        expect.stringContaining('callback mutated its arguments'),
+      ]);
+    } finally {
+      process.chdir(workspaceRoot);
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
 });
 
 type CapturedVerify = {
@@ -186,6 +228,58 @@ function createRegExpFallbackProject(): string {
     };`,
   );
   writeFileSync(join(project, 'src/main.ts'), `import './target';`);
+  writeFileSync(join(project, 'src/target/index.ts'), 'export {};');
+  return project;
+}
+
+function createInheritedRulesFallbackProject(): string {
+  const project = mkdtempSync(join(tmpdir(), 'sheriff-engine-inherited-'));
+  mkdirSync(join(project, 'src/source'), { recursive: true });
+  mkdirSync(join(project, 'src/target'), { recursive: true });
+  writeFileSync(join(project, 'tsconfig.json'), '{}');
+  writeFileSync(
+    join(project, 'sheriff.config.ts'),
+    `const inherited = { '*': 'target' };
+    const denyRules = Object.assign(Object.create(inherited), {
+      unused: 'never',
+    });
+    export const config = {
+      version: 1,
+      entryFile: 'src/main.ts',
+      modules: { 'src/source': 'source', 'src/target': 'target' },
+      depRules: { root: 'source', source: 'target', target: '*' },
+      denyRules,
+    };`,
+  );
+  writeFileSync(join(project, 'src/main.ts'), `import './source';`);
+  writeFileSync(join(project, 'src/source/index.ts'), `import '../target';`);
+  writeFileSync(join(project, 'src/target/index.ts'), 'export {};');
+  return project;
+}
+
+function createMutatingCallbackFallbackProject(): string {
+  const project = mkdtempSync(join(tmpdir(), 'sheriff-engine-mutating-'));
+  mkdirSync(join(project, 'src/source'), { recursive: true });
+  mkdirSync(join(project, 'src/target'), { recursive: true });
+  writeFileSync(join(project, 'tsconfig.json'), '{}');
+  writeFileSync(
+    join(project, 'sheriff.config.ts'),
+    `export const config = {
+      version: 1,
+      entryFile: 'src/main.ts',
+      modules: {
+        'src/source': 'source',
+        'src/target': ['target:z', 'target:m', 'target:a'],
+      },
+      depRules: {
+        root: 'source',
+        source: ({ toTags }) => (toTags.reverse(), false),
+        target: '*',
+      },
+    };`,
+  );
+  writeFileSync(join(project, 'src/main.ts'), `import './source';`);
+  writeFileSync(join(project, 'src/source/index.ts'), `import '../target';`);
   writeFileSync(join(project, 'src/target/index.ts'), 'export {};');
   return project;
 }

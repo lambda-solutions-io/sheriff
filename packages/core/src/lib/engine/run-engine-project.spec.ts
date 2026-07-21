@@ -1,8 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vitest } from 'vitest';
 import type { ProjectHandleInput } from '@lambda-solutions/sheriff-engine';
-import { runEngineProject } from './run-engine-project';
+import { loadEnginePackage, runEngineProject } from './run-engine-project';
+
+const originalEngineDebug = process.env['SHERIFF_ENGINE_DEBUG'];
 
 describe('runEngineProject', () => {
+  afterEach(() => {
+    if (originalEngineDebug === undefined) {
+      delete process.env['SHERIFF_ENGINE_DEBUG'];
+    } else {
+      process.env['SHERIFF_ENGINE_DEBUG'] = originalEngineDebug;
+    }
+    vitest.restoreAllMocks();
+  });
+
   it.each([
     'SHERIFF_ENGINE_NATIVE_MISSING',
     'SHERIFF_ENGINE_NATIVE_LOAD_FAILED',
@@ -39,6 +50,53 @@ describe('runEngineProject', () => {
           }),
       })),
     ).toBeUndefined();
+  });
+
+  it('uses the primary package resolution when it is present', () => {
+    const enginePackage = { ProjectHandle: class {} };
+    const loadModule = vitest.fn(() => enginePackage);
+
+    expect(loadEnginePackage(loadModule)).toBe(enginePackage);
+    expect(loadModule).toHaveBeenCalledOnce();
+    expect(loadModule).toHaveBeenCalledWith('@lambda-solutions/sheriff-engine');
+  });
+
+  it('logs a requested-but-unavailable engine and returns undefined', () => {
+    process.env['SHERIFF_ENGINE_DEBUG'] = '1';
+    const debug = vitest.spyOn(console, 'error').mockImplementation(() => {});
+    const missingPackage = Object.assign(
+      new Error("Cannot find module '@lambda-solutions/sheriff-engine'"),
+      { code: 'MODULE_NOT_FOUND' },
+    );
+
+    expect(
+      runEngineProject(input, () => {
+        loadEnginePackage(() => {
+          throw missingPackage;
+        }, '/private/tmp/sheriff-engine-does-not-exist');
+        throw new Error('unreachable');
+      }),
+    ).toBeUndefined();
+    expect(debug).toHaveBeenCalledWith(
+      expect.stringContaining('SHERIFF_ENGINE_PACKAGE_MISSING'),
+    );
+    expect(debug).toHaveBeenCalledWith(
+      expect.stringContaining('source-worktree development fallback'),
+    );
+  });
+
+  it('does not treat a transitive load failure as a missing engine package', () => {
+    const transitiveFailure = Object.assign(
+      new Error("Cannot find module 'native-transitive-dependency'"),
+      { code: 'MODULE_NOT_FOUND' },
+    );
+    const loadModule = vitest.fn(() => {
+      throw transitiveFailure;
+    });
+
+    expect(() => loadEnginePackage(loadModule)).toThrow(transitiveFailure);
+    expect(loadModule).toHaveBeenCalledOnce();
+    expect(loadModule).toHaveBeenCalledWith('@lambda-solutions/sheriff-engine');
   });
 });
 

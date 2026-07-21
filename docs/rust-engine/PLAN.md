@@ -138,7 +138,8 @@ node tools/perf/run-bench.mjs
 | R3.1: review round (4 parity defects) | **done** | `78ced96` |
 | R4: incremental ProjectHandle | **done** | `d467a60` |
 | R4.1: review round (5 P0 divergences) | **done** | `8f33c92` |
-| R5: consumer cutover + packaging | not started | |
+| R5.0: CLI `verify` cutover + review round | **done** | `3109122`, +fix round |
+| R5.1–R5.3: ESLint cutover, packaging, benchmarks | not started | |
 
 ---
 
@@ -805,6 +806,32 @@ forward↔reverse map equality (catching **stale**, not just missing, edges).
 **Exit criteria**: benchmarks for cold verify / ESLint / watch on 2.1k and 10.5k
 projects; all `test-projects` goldens byte-identical; documented rollback;
 **fallback rate measured and acceptable** (R2.1 is the fix; this is the check).
+
+**Sub-phases** (owner: CLI first, `ProjectHandle` mode — Rust owns discovery +
+resolution + analysis):
+
+- **R5.0 — CLI `verify` cutover (done).** `SHERIFF_ENGINE=1` runs analysis via
+  `ProjectHandle` with byte-identical output and per-project TS fallback on
+  native-missing / unsupported-config / impure-callback (`fallback: true`) /
+  any engine error. Adapter reconstructs TS traversal/config order (engine sorts),
+  recomputes `toTags` via `calcTagsForModule` and falls back on any set divergence.
+  Review round (2 reviewers) fixed 3 findings: **(P0)** a rule/tag callback that
+  *mutates its context args* diverged silently — callback args are now deeply
+  frozen and a mutation `TypeError` becomes `EngineImpureCallbackError`
+  (`fallback: true`); **(P0)** prototype-inherited rule keys were dropped by
+  own-keys-only serialization — non-plain rule/`modules` containers now fall back
+  before serialization; **(P1)** the compiled/`dist` CLI could not resolve the
+  private engine package and silently used TS — the dev-fallback resolver is now
+  guarded, with true compiled-layout resolution deferred to R5.2 (below).
+- **R5.1 — ESLint rule cutover** (route the 3 rules through the engine behind the
+  same flag, honouring `fallback: true`; single-file `traverse: false` scope).
+- **R5.2 — packaging** (`@napi-rs/cli`, per-platform `optionalDependencies`,
+  install test without a Rust toolchain). **Exit criterion added by R5.0:** the
+  engine must resolve from the **compiled/published `core` layout**, verified by a
+  built-CLI integration test that runs `verify` under `SHERIFF_ENGINE=1` +
+  `SHERIFF_ENGINE_DEBUG=1` and asserts **zero fallback logs** (R5.0 deferred this
+  because the engine is not yet packaged).
+- **R5.3 — benchmarks + real-world fallback-rate confirmation + final review round.**
 
 ---
 

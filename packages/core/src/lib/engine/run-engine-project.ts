@@ -4,6 +4,8 @@ import type {
   ProjectHandle,
   ProjectHandleInput,
 } from '@lambda-solutions/sheriff-engine';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 
 type ProjectHandleLike = Pick<ProjectHandle, 'getResult'>;
 type ProjectHandleFactory = (input: ProjectHandleInput) => ProjectHandleLike;
@@ -34,22 +36,34 @@ export function runEngineProject(
   }
 }
 
-function loadEnginePackage(): typeof import('@lambda-solutions/sheriff-engine') {
+type EnginePackage = typeof import('@lambda-solutions/sheriff-engine');
+type ModuleLoader = (request: string) => unknown;
+
+const enginePackageName = '@lambda-solutions/sheriff-engine';
+const sourceEngineDirectory = resolve(__dirname, '../../../../sheriff-engine');
+
+export function loadEnginePackage(
+  loadModule: ModuleLoader = require,
+  devEngineDirectory = sourceEngineDirectory,
+): EnginePackage {
   // Keep the optional package out of the default CLI module-load path. This
   // require runs only after SHERIFF_ENGINE=1 entered the guarded attempt.
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    return require('@lambda-solutions/sheriff-engine') as typeof import('@lambda-solutions/sheriff-engine');
+    return loadModule(enginePackageName) as EnginePackage;
   } catch (error) {
     if (!isMissingEnginePackage(error)) {
       throw error;
     }
 
-    // The source worktree does not install its own private workspace package.
-    // This path has the same public entrypoint and is absent from a core-only
-    // published build, where the outer fallback catches that absence too.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    return require('../../../../sheriff-engine') as typeof import('@lambda-solutions/sheriff-engine');
+    // Development-only fallback: the source worktree does not install its own
+    // private workspace package. Verify both workspace manifests before using
+    // the absolute sibling path so a compiled CLI cannot load an unrelated
+    // module from a coincidentally similar directory.
+    if (!isSourceWorktreeEngineDirectory(devEngineDirectory)) {
+      throw enginePackageResolutionError(error, devEngineDirectory);
+    }
+
+    return loadModule(devEngineDirectory) as EnginePackage;
   }
 }
 
@@ -57,7 +71,61 @@ function isMissingEnginePackage(error: unknown): boolean {
   return (
     error instanceof Error &&
     (error as Error & { code?: unknown }).code === 'MODULE_NOT_FOUND' &&
-    error.message.includes("'@lambda-solutions/sheriff-engine'")
+    error.message.startsWith(`Cannot find module '${enginePackageName}'`)
+  );
+}
+
+function isSourceWorktreeEngineDirectory(engineDirectory: string): boolean {
+  const coreProjectPath = resolve(__dirname, '../../../project.json');
+  const expectedEngineDirectory = resolve(
+    dirname(coreProjectPath),
+    '../sheriff-engine',
+  );
+  if (resolve(engineDirectory) !== expectedEngineDirectory) {
+    return false;
+  }
+
+  return (
+    hasJsonProperties(coreProjectPath, {
+      name: 'core',
+      sourceRoot: 'packages/core/src',
+    }) &&
+    hasJsonProperties(resolve(engineDirectory, 'package.json'), {
+      name: enginePackageName,
+      private: true,
+    }) &&
+    existsSync(resolve(engineDirectory, 'index.js'))
+  );
+}
+
+function hasJsonProperties(
+  filePath: string,
+  expected: Record<string, unknown>,
+): boolean {
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    return Object.entries(expected).every(
+      ([key, value]) => parsed[key] === value,
+    );
+  } catch {
+    return false;
+  }
+}
+
+function enginePackageResolutionError(
+  cause: unknown,
+  devEngineDirectory: string,
+): Error {
+  return Object.assign(
+    new Error(
+      `Cannot resolve ${enginePackageName}; the source-worktree development ` +
+        `fallback is unavailable at ${devEngineDirectory}.`,
+      { cause },
+    ),
+    { code: 'SHERIFF_ENGINE_PACKAGE_MISSING' },
   );
 }
 

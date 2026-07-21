@@ -149,12 +149,7 @@ describe.skipIf(!nativeEnabled)('function materialisation protocol', () => {
     const output = analyze({
       ...dependencyInput(),
       depRules: {
-        source: ({
-          fromModulePath,
-          toModulePath,
-          fromFilePath,
-          toFilePath,
-        }) =>
+        source: ({ fromModulePath, toModulePath, fromFilePath, toFilePath }) =>
           fromModulePath === '/project/src/source' &&
           toModulePath === '/project/src/target' &&
           fromFilePath === '/project/src/source/entry.ts' &&
@@ -183,18 +178,18 @@ describe.skipIf(!nativeEnabled)('function materialisation protocol', () => {
       ruleCallbackCandidates: Array<{ context: Record<string, unknown> }>;
     };
 
-    expect(Object.keys(output.ruleCallbackCandidates[0]?.context ?? {})).toEqual(
-      [
-        'fromModulePath',
-        'toModulePath',
-        'fromFilePath',
-        'toFilePath',
-        'fromTags',
-        'toTags',
-        'from',
-        'to',
-      ],
-    );
+    expect(
+      Object.keys(output.ruleCallbackCandidates[0]?.context ?? {}),
+    ).toEqual([
+      'fromModulePath',
+      'toModulePath',
+      'fromFilePath',
+      'toFilePath',
+      'fromTags',
+      'toTags',
+      'from',
+      'to',
+    ]);
   });
 
   it('passes accumulated placeholders and the final regex matcher context to tag functions', () => {
@@ -268,13 +263,64 @@ describe.skipIf(!nativeEnabled)('function materialisation protocol', () => {
     expect((decision as typeof decision & { calls: number }).calls).toBe(0);
   });
 
-  it('evaluates each materialized callback exactly once per candidate', () => {
+  it('rejects a rule callback that mutates a nested argument array without exposing the damage', () => {
+    const targetTags = ['target:z', 'target:m', 'target:a'];
+    const input: EngineInput = {
+      ...dependencyInput(),
+      moduleConfig: {
+        'src/source': 'source',
+        'src/target': targetTags,
+      },
+      depRules: {
+        source: ({ toTags }) => (toTags.reverse(), false),
+        target: [],
+      },
+    };
+
+    expect(() => analyzeProject(input)).toThrowError(
+      expect.objectContaining({
+        name: 'EngineImpureCallbackError',
+        fallback: true,
+        message: expect.stringContaining('callback mutated its arguments'),
+      }),
+    );
+    expect(targetTags).toEqual(['target:z', 'target:m', 'target:a']);
+  });
+
+  it('rejects a tag callback that mutates its nested matcher context', () => {
+    const input: EngineInput = {
+      ...baseInput(),
+      files: [{ path: 'src/customers/feature/entry.ts', imports: [] }],
+      modulePaths: [{ path: 'src/customers/feature', isBarrel: false }],
+      moduleConfig: {
+        'src/<domain>': {
+          '/(feature)/': (placeholders, { regexMatch }) => (
+            regexMatch?.reverse(), placeholders.domain
+          ),
+        },
+      },
+      depRules: { '*': '*' },
+    };
+
+    expect(() => analyzeProject(input)).toThrowError(
+      expect.objectContaining({
+        name: 'EngineImpureCallbackError',
+        fallback: true,
+        message: expect.stringContaining('callback mutated its arguments'),
+      }),
+    );
+  });
+
+  it('continues to materialize read-only tag and rule callbacks', () => {
     const output = analyze({
       ...dependencyInput(),
+      moduleConfig: {
+        'src/source': 'source',
+        'src/<name>': (placeholders, { segment }) =>
+          segment.length >= 0 ? placeholders.name : 'unexpected',
+      },
       depRules: {
-        source: (context) => (
-          context.fromTags.push('seen'), context.fromTags.length === 2
-        ),
+        source: ({ toTags }) => toTags.includes('target'),
         target: [],
       },
     });
@@ -431,10 +477,7 @@ describe.skipIf(!nativeEnabled)('incremental ProjectHandle', () => {
       });
 
       expect(() =>
-        handle.setOverlay(
-          entryFile,
-          "import '../config/module-config';\n",
-        ),
+        handle.setOverlay(entryFile, "import '../config/module-config';\n"),
       ).toThrow(EngineImpureCallbackError);
       expect((decision as typeof decision & { calls: number }).calls).toBe(0);
     } finally {
@@ -489,7 +532,9 @@ describe.skipIf(!nativeEnabled)('incremental ProjectHandle', () => {
         'src/source/entry.ts',
       ]);
 
-      const restored = JSON.parse(handle.clearOverlay(entryFile)) as EngineOutput;
+      const restored = JSON.parse(
+        handle.clearOverlay(entryFile),
+      ) as EngineOutput;
       expect(restored).toEqual(initial);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -566,10 +611,15 @@ describe.skipIf(!nativeEnabled)('incremental ProjectHandle', () => {
           events: [{ kind: 'modified', path: entryFile }],
         }),
       ) as EngineOutput;
-      const clean = JSON.parse(new ProjectHandle(input).getResult()) as EngineOutput;
+      const clean = JSON.parse(
+        new ProjectHandle(input).getResult(),
+      ) as EngineOutput;
       expect(updated).toEqual(clean);
       expect(updated.violations.dependency).toEqual([
-        expect.objectContaining({ cause: 'deny-rule', toFilePath: 'src/target/second.ts' }),
+        expect.objectContaining({
+          cause: 'deny-rule',
+          toFilePath: 'src/target/second.ts',
+        }),
       ]);
       expect(updated.violations.external).toEqual([]);
     } finally {

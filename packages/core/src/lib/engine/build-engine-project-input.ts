@@ -20,6 +20,15 @@ export function buildEngineProjectInput(
     throw new Error('Cannot run the Sheriff engine without a tsconfig path.');
   }
 
+  assertOwnKeyedEngineConfig(config.modules, 'config.modules', true);
+  assertOwnKeyedEngineConfig(config.depRules, 'config.depRules', false);
+  assertOwnKeyedEngineConfig(config.denyRules, 'config.denyRules', false);
+  assertOwnKeyedEngineConfig(
+    config.externalRules,
+    'config.externalRules',
+    false,
+  );
+
   const modulePaths = projectInfo.modules
     .map((moduleInfo) => ({
       moduleInfo,
@@ -59,4 +68,60 @@ export function buildEngineProjectInput(
 
 function relativeEnginePath(rootDir: string, path: string): string {
   return (getFs().relativeTo(rootDir, path) || '.').replaceAll('\\', '/');
+}
+
+function assertOwnKeyedEngineConfig(
+  value: unknown,
+  configPath: string,
+  inspectObjectValues: boolean,
+): void {
+  if (value === null || typeof value !== 'object') {
+    return;
+  }
+
+  const expectedPrototype = Array.isArray(value)
+    ? Array.prototype
+    : Object.prototype;
+  const prototype = Object.getPrototypeOf(value) as unknown;
+  if (prototype !== expectedPrototype && prototype !== null) {
+    throwUnsupportedConfigContainer(configPath);
+  }
+
+  const ownEnumerableKeys = new Set(Object.keys(value));
+  for (const key in value) {
+    if (!ownEnumerableKeys.has(key)) {
+      throwUnsupportedConfigContainer(configPath);
+    }
+  }
+
+  for (const [key, descriptor] of Object.entries(
+    Object.getOwnPropertyDescriptors(value),
+  )) {
+    if (!descriptor.enumerable) {
+      continue;
+    }
+    if (!('value' in descriptor)) {
+      throwUnsupportedConfigContainer(`${configPath}.${key}`);
+    }
+    if (
+      Array.isArray(descriptor.value) ||
+      (inspectObjectValues &&
+        descriptor.value !== null &&
+        typeof descriptor.value === 'object' &&
+        !(descriptor.value instanceof RegExp))
+    ) {
+      assertOwnKeyedEngineConfig(
+        descriptor.value,
+        `${configPath}.${key}`,
+        inspectObjectValues,
+      );
+    }
+  }
+}
+
+function throwUnsupportedConfigContainer(configPath: string): never {
+  throw new Error(
+    `Sheriff Rust engine cannot faithfully serialize ${configPath}; ` +
+      'the config container must use only plain own-keyed data properties.',
+  );
 }

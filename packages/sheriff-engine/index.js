@@ -186,10 +186,7 @@ function isIdentifierReference(node) {
 }
 
 function unsupportedLexicalKeyword(node) {
-  if (
-    node.kind === ts.SyntaxKind.SuperKeyword ||
-    ts.isMetaProperty(node)
-  ) {
+  if (node.kind === ts.SyntaxKind.SuperKeyword || ts.isMetaProperty(node)) {
     return true;
   }
   let found = false;
@@ -351,7 +348,43 @@ function prepareInput(input) {
 
 function evaluateOnce(callbackEntry, args, normalize) {
   assertProvablyPure(callbackEntry);
-  return normalize(callbackEntry.callback(...args), callbackEntry);
+  const frozenArgs = args.map((argument) => deepFreeze(argument));
+  try {
+    return normalize(callbackEntry.callback(...frozenArgs), callbackEntry);
+  } catch (error) {
+    if (isFrozenArgumentMutationError(error)) {
+      throw new EngineImpureCallbackError(
+        callbackEntry.configPath,
+        'callback mutated its arguments',
+      );
+    }
+    throw error;
+  }
+}
+
+function deepFreeze(value, seen = new WeakSet()) {
+  if (
+    (typeof value !== 'object' && typeof value !== 'function') ||
+    value === null ||
+    seen.has(value)
+  ) {
+    return value;
+  }
+
+  seen.add(value);
+  for (const propertyValue of Object.values(value)) {
+    deepFreeze(propertyValue, seen);
+  }
+  return Object.freeze(value);
+}
+
+function isFrozenArgumentMutationError(error) {
+  return (
+    error instanceof TypeError &&
+    /(?:read only|not extensible|Cannot delete property|Cannot redefine property)/u.test(
+      error.message,
+    )
+  );
 }
 
 function normalizeTags(value, callbackEntry) {
@@ -508,12 +541,8 @@ class ProjectHandle {
 
   applyChanges(eventsJson) {
     const serialized =
-      typeof eventsJson === 'string'
-        ? eventsJson
-        : JSON.stringify(eventsJson);
-    this.latestResult = this.settle(
-      this.nativeHandle.applyChanges(serialized),
-    );
+      typeof eventsJson === 'string' ? eventsJson : JSON.stringify(eventsJson);
+    this.latestResult = this.settle(this.nativeHandle.applyChanges(serialized));
     return this.latestResult;
   }
 
