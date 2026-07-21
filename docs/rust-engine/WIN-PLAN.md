@@ -1,8 +1,17 @@
 # How Rust wins — measured diagnosis and plan (2026-07-21)
 
-Status: diagnosis complete, all numbers measured this session on the 10.5k synthetic
-project (10,511 files reached, 38,010 imports, 1.94 MB of source). Machine: darwin
+Status: diagnosis complete, all numbers measured this session. Machine: darwin
 arm64, 10 cores (8 performance + 2 efficiency), Node 22.
+
+**Baseline (compiled CLI, measured):**
+
+| project | TS verify | Rust construction | payload |
+|---|---|---|---|
+| 2.1k (2,103 files) | **~430 ms** | **186 ms** | 0.77 MB |
+| 10.5k (10,511 files, 38,010 imports, 1.94 MB source) | **~1670 ms** | **~960 ms** | 3.89 MB |
+
+Most of the analysis below is on the 10.5k project; see §4 for why **2.1k is the
+target that should drive the plan**.
 
 ---
 
@@ -160,11 +169,26 @@ TS only on fallback. Also delete the two dead full-payload round trips in
 it** (only to check for an `error` key), and `getReachedFiles()` at line 317 ships
 a third copy of a path list already present in `output.files[]`.
 
-**Cold-path arithmetic:** 1697 − 313 (P1) − ~250 (P2 on the parse/resolve+read
+**Cold-path arithmetic (10.5k):** 1697 − 313 (P1) − ~250 (P2 on the parse/resolve+read
 remainder) − ~200 (P3, overlapping P2) − ~100 (P4) lands in the **~600–850 ms**
-band against TS's ~1650 ms — a clear 2–2.7× win, without a daemon, without
+band against TS's ~1670 ms — a clear 2–2.7× win, without a daemon, without
 touching parity. That is the case for cold verify being winnable; P0's numbers
 decide whether it holds.
+
+**The 2.1k case is the harder target and it reorders the plan.** Measured this
+session (compiled CLI, 3 runs): **TS is ~430 ms at 2.1k** and ~1670 ms at 10.5k —
+so the "TS does 400 ms" figure is the 2.1k project. Rust construction on the same
+2,103-file shape is **186 ms** (median of 5) with a 0.77 MB payload.
+
+At 2.1k the fixed Node floor stops being a rounding error: bare Node ~20 ms and
+`require('typescript')` ~120 ms, so ~140 ms of a 430 ms budget is startup the
+engine currently still pays. Applying P1–P3 proportionally takes Rust analysis to
+roughly **60–90 ms**, which lands the run near **200–250 ms vs 430 ms** — still a
+clear win, but one where **P4 (never loading the TS compiler on the fast path)
+moves from a nice-to-have to decisive**: it is ~100 ms of a ~250 ms target, i.e.
+the largest single remaining item at this size. Small projects are also the common
+case in CI and pre-commit, so treat 2.1k — not 10.5k — as the primary cold
+benchmark, and promote P4 to run alongside P1.
 
 ### P4b — other dead/duplicated state (codex findings, ~1.1–1.25×, low risk)
 Cheap cleanups worth folding into P1–P4 rather than a separate phase:
@@ -197,7 +221,42 @@ it is the half of the goal that is already 23× ahead — this is what makes it 
 instant rather than merely fast. Validation: daemon integration test still asserts
 a byte-identical DTO; measure p95 keystroke-to-diagnostic.
 
-### P6 — re-benchmark and decide the default
+### P5b — the daemon's own two bottlenecks (verified, warm path)
+Independent of the payload fix, the daemon has two costs that P5 alone won't touch:
+- **`initialize(..., { traverse: true })` still runs before the Rust handle is
+  built** (`engine-lint-host.ts:157`) — the full TypeScript traversal, i.e. exactly
+  the double work R5.4 removed from `verify`, still live here. Port R5.4's
+  two-phase discovery (`setModulePaths` + the `parseProject`-free config resolver)
+  to the daemon. This is the "obvious next win" already flagged in PLAN.md.
+- **`areHandlesFresh` stats every dependency path on every request**
+  (`engine-lint-host.ts:289-293`) — a synchronous `O(files)` scan per keystroke.
+  Replace with watcher-driven invalidation, or batch/stagger the check.
+  (Careful: R5.1's review established that the engine handle *needs* a
+  request-time freshness barrier because the TS cache revalidates mtimes per read.
+  So this must become event-driven, not simply deleted — the barrier's *purpose*
+  is load-bearing even though its current implementation is O(files).)
+
+### P6 — attribute the Node/CLI remainder before assuming it's irreducible
+The ~1697 ms cold run minus ~960 ms Rust minus ~12 ms marshalling leaves ~700 ms
+that this plan attributes only partially (P4's ~100 ms TS load). Note the direct
+constructor benchmark and the real CLI do **not** execute identical control flow,
+so that remainder is CLI/control-plane, not simply "Node being slow". Known
+contributors worth timing individually before optimizing:
+- `generateTsData` → `ts.parseJsonConfigFileContent` with the fixture's
+  `include: ["src/**/*.ts"]` may enumerate the whole 10.5k tree just to get config
+  metadata (`generate-ts-data.ts:34`).
+- Executable `sheriff.config.ts` cold load: read + `ts.transpileModule` + evaluate
+  (`parse-config.ts:40`) — unavoidable per fresh process, cacheable within one.
+- `createEngineModulePaths` → `findModulePaths` walks the tree **again** in Node
+  with synchronous `readdirSync` (`default-fs.ts:47`) after Rust already walked it.
+- **Callback settlement can trigger repeated full native analyses**: `drive_analysis`
+  may run first/second/complete passes (`handle.rs:991`, re-entry at `:526`). The
+  10.5k *handle* bench uses static `depRules: {'*':'*'}`, but the generated **CLI**
+  config uses `sameTag` — so the CLI can pay extra `engine::analyze` slices that my
+  960 ms direct measurement never included. **This is a live risk to the P0 sum
+  reconciling; check it first.**
+
+### P7 — re-benchmark and decide the default
 Re-run `tools/perf/run-engine-bench.mjs` (it hard-fails on any fallback — keep that)
 on 2.1k, 10.5k, and both real fixtures. Then revisit "when does the engine become
 the default".
