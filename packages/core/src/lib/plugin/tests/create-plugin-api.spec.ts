@@ -23,6 +23,7 @@ const config = {
   barrelFileName: 'index.ts',
   entryPoints: undefined,
   ignoreFileExtensions: defaultIgnoreFileExtensions,
+  configImports: [],
   plugins: undefined,
 };
 

@@ -1,0 +1,8 @@
+
+[1mVerification Report[0m
+
+Config: projects/app-i/sheriff.config.ts
+Config imports:
+  @sheriff-test/blueprint → ./packages/blueprint/index.js
+
+[32mNo issues found. Well done![0m

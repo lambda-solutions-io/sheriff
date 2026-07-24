@@ -16,6 +16,54 @@ describe('verify', () => {
 
   verifyCliWrappers('verify', 'src/main.ts');
 
+  it('should print the resolved config path in the header', () => {
+    const { allLogs } = mockCli();
+
+    createProject({
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': sheriffConfig({
+        modules: { 'src/customers': ['customers'] },
+        depRules: { root: ['customers'], customers: [] },
+      }),
+      src: {
+        'main.ts': ['./customers'],
+        customers: { 'index.ts': [] },
+      },
+    });
+
+    main('verify', 'src/main.ts');
+
+    expect(allLogs()).toContain('Config: sheriff.config.ts');
+  });
+
+  it('should print the config import provenance with --verbose', () => {
+    const { allLogs } = mockCli();
+
+    createProject({
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': `
+import * as ts from 'typescript';
+
+export const config = {
+  depRules: { root: 'noTag', noTag: 'noTag' },
+  log: !ts.version,
+};
+      `,
+      src: {
+        'main.ts': [],
+      },
+    });
+
+    main('verify', 'src/main.ts', '--verbose');
+
+    const logs = allLogs();
+    expect(logs).toContain('Config: sheriff.config.ts');
+    expect(logs).toContain('Config imports:');
+    expect(logs).toContain(
+      `  typescript → ${require.resolve('typescript')}`,
+    );
+  });
+
   it('should find no errors', () => {
     const { allLogs, allErrorLogs } = mockCli();
 
@@ -328,6 +376,7 @@ describe('verify', () => {
 
       expect(verifySpy).toHaveBeenCalledWith([], {
         files: ['a.ts', 'b.ts'],
+        verbose: false,
       });
     });
 
@@ -341,6 +390,7 @@ describe('verify', () => {
 
       expect(verifySpy).toHaveBeenCalledWith([], {
         files: ['a.ts', 'b.ts'],
+        verbose: false,
       });
     });
 
@@ -354,6 +404,7 @@ describe('verify', () => {
 
       expect(verifySpy).toHaveBeenCalledWith([], {
         files: ['a.ts', 'b.ts'],
+        verbose: false,
       });
     });
 
@@ -367,6 +418,21 @@ describe('verify', () => {
 
       expect(verifySpy).toHaveBeenCalledWith([], {
         files: ['a.ts', 'b.ts'],
+        verbose: false,
+      });
+    });
+
+    it('does not leak --verbose into the files list', () => {
+      mockCli();
+      const verifySpy = vitest
+        .spyOn(verifyFile, 'verify')
+        .mockImplementation(() => undefined);
+
+      main('verify', 'src/main.ts', '--files', 'a.ts', '--verbose');
+
+      expect(verifySpy).toHaveBeenCalledWith(['src/main.ts'], {
+        files: ['a.ts'],
+        verbose: true,
       });
     });
 
@@ -380,6 +446,7 @@ describe('verify', () => {
 
       expect(verifySpy).toHaveBeenCalledWith(['src/main.ts'], {
         files: ['bad.ts'],
+        verbose: false,
       });
     });
 
@@ -393,6 +460,7 @@ describe('verify', () => {
 
       expect(verifySpy).toHaveBeenCalledWith(['src/main.ts'], {
         files: ['bad.ts'],
+        verbose: false,
       });
     });
 
@@ -406,6 +474,7 @@ describe('verify', () => {
 
       expect(verifySpy).toHaveBeenCalledWith(['src/main.ts'], {
         files: [],
+        verbose: false,
       });
     });
 
@@ -423,7 +492,9 @@ describe('verify', () => {
         '--watch',
       );
 
-      expect(verifyWatchSpy).toHaveBeenCalledWith(['src/main.ts']);
+      expect(verifyWatchSpy).toHaveBeenCalledWith(['src/main.ts'], {
+        verbose: false,
+      });
       expect(verifySpy).not.toHaveBeenCalled();
     });
   });

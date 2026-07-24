@@ -45,6 +45,7 @@ describe('parse Config', () => {
       'barrelFileName',
       'entryPoints',
       'ignoreFileExtensions',
+      'configImports',
     ]);
   });
 
@@ -91,6 +92,7 @@ export const config: SheriffConfig = {
         barrelFileName: 'index.ts',
         entryPoints: undefined,
         ignoreFileExtensions: defaultIgnoreFileExtensions,
+        configImports: [],
       });
     });
 
@@ -226,6 +228,200 @@ export const config: SheriffConfig = {
       expect(() =>
         parseConfig(toFsPath(getFs().cwd() + '/sheriff.config.ts')),
       ).toThrowUserError(new TaggingAndModulesError());
+    });
+
+    describe('configImports', () => {
+      it('should record the provenance of a config import', () => {
+        getFs().writeFile(
+          'sheriff.config.ts',
+          `
+import * as ts from 'typescript';
+
+export const config = {
+  depRules: {},
+  log: !ts.version,
+};
+      `,
+        );
+
+        const config = parseConfig(
+          toFsPath(getFs().cwd() + '/sheriff.config.ts'),
+        );
+
+        const resolvedPath = require.resolve('typescript');
+        expect(config.configImports).toEqual([
+          {
+            specifier: 'typescript',
+            resolvedPath,
+            // VirtualFs#realpath is the identity function
+            realPath: resolvedPath,
+          },
+        ]);
+      });
+
+      it('should keep configImports empty for a config without runtime imports', () => {
+        getFs().writeFile(
+          'sheriff.config.ts',
+          `export const config = { depRules: {} };`,
+        );
+
+        const config = parseConfig(
+          toFsPath(getFs().cwd() + '/sheriff.config.ts'),
+        );
+
+        expect(config.configImports).toEqual([]);
+      });
+
+      it('should not record type-only imports', () => {
+        getFs().writeFile(
+          'sheriff.config.ts',
+          `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  depRules: {},
+};
+      `,
+        );
+
+        const config = parseConfig(
+          toFsPath(getFs().cwd() + '/sheriff.config.ts'),
+        );
+
+        expect(config.configImports).toEqual([]);
+      });
+
+      it('should rethrow the original error for an unresolvable import', () => {
+        getFs().writeFile(
+          'sheriff.config.ts',
+          `
+import { blueprint } from '@does-not/exist';
+
+export const config = {
+  depRules: blueprint,
+};
+      `,
+        );
+
+        let thrownError: unknown;
+        try {
+          parseConfig(toFsPath(getFs().cwd() + '/sheriff.config.ts'));
+        } catch (error) {
+          thrownError = error;
+        }
+
+        expect(thrownError).toBeInstanceOf(Error);
+        expect((thrownError as Error).message).toContain(
+          "Cannot find module '@does-not/exist'",
+        );
+        expect((thrownError as NodeJS.ErrnoException).code).toBe(
+          'MODULE_NOT_FOUND',
+        );
+      });
+
+      it('should support require.resolve inside the config and record it', () => {
+        getFs().writeFile(
+          'sheriff.config.ts',
+          `
+export const config = {
+  depRules: {},
+  log: !require.resolve('typescript'),
+};
+      `,
+        );
+
+        const config = parseConfig(
+          toFsPath(getFs().cwd() + '/sheriff.config.ts'),
+        );
+
+        const resolvedPath = require.resolve('typescript');
+        expect(config.log).toBe(false);
+        expect(config.configImports).toEqual([
+          { specifier: 'typescript', resolvedPath, realPath: resolvedPath },
+        ]);
+      });
+
+      it('should record each specifier only once', () => {
+        getFs().writeFile(
+          'sheriff.config.ts',
+          `
+import * as ts from 'typescript';
+
+export const config = {
+  depRules: {},
+  log: !ts.version && !require.resolve('typescript'),
+};
+      `,
+        );
+
+        const config = parseConfig(
+          toFsPath(getFs().cwd() + '/sheriff.config.ts'),
+        );
+
+        const resolvedPath = require.resolve('typescript');
+        expect(config.configImports).toEqual([
+          { specifier: 'typescript', resolvedPath, realPath: resolvedPath },
+        ]);
+      });
+
+      it('should not record Node builtins', () => {
+        getFs().writeFile(
+          'sheriff.config.ts',
+          `
+import * as path from 'path';
+import * as nodeFs from 'node:fs';
+
+export const config = {
+  depRules: {},
+  log: !path.join('a', 'b') || !nodeFs.constants,
+};
+      `,
+        );
+
+        const config = parseConfig(
+          toFsPath(getFs().cwd() + '/sheriff.config.ts'),
+        );
+
+        expect(config.configImports).toEqual([]);
+      });
+
+      it('should capture provenance up to a failing import', () => {
+        getFs().writeFile(
+          'sheriff.config.ts',
+          `
+import * as ts from 'typescript';
+
+let optional: unknown;
+try {
+  optional = require('@does-not/exist');
+} catch {
+  optional = undefined;
+}
+
+export const config = {
+  depRules: {},
+  log: !ts.version && Boolean(optional),
+};
+      `,
+        );
+
+        const config = parseConfig(
+          toFsPath(getFs().cwd() + '/sheriff.config.ts'),
+        );
+
+        const resolvedPath = require.resolve('typescript');
+        expect(config.configImports).toEqual([
+          { specifier: 'typescript', resolvedPath, realPath: resolvedPath },
+          {
+            specifier: '@does-not/exist',
+            resolvedPath: '',
+            realPath: '',
+            error: expect.stringContaining(
+              "Cannot find module '@does-not/exist'",
+            ),
+          },
+        ]);
+      });
     });
   });
 

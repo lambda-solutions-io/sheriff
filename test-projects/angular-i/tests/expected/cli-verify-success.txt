@@ -1,4 +1,6 @@
 
 [1mVerification Report[0m
 
+Config: sheriff.config.ts
+
 [32mNo issues found. Well done![0m

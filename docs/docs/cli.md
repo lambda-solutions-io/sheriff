@@ -61,6 +61,37 @@ Run `npx sheriff list main.ts` to print out all your modules along their tags.
 
 See [Entry Files and Entry Points](#entry-files-and-entry-points) for configuration options.
 
+## `list|verify --verbose [main.ts]` {#verbose}
+
+Both `list` and `verify` print a header with the path of the
+`sheriff.config.ts` they use, relative to the project root:
+
+```
+Config: sheriff.config.ts
+```
+
+With `--verbose`, they additionally print the provenance of every module the
+config loaded during evaluation — the import specifier and the real path of
+the loaded file, with symlinks resolved:
+
+```
+Config: sheriff.config.ts
+Config imports:
+  @company/sheriff-blueprint → /workspace/packages/blueprint/dist/index.js (symlinked from /workspace/node_modules/@company/sheriff-blueprint/dist/index.js)
+  typescript → /workspace/node_modules/typescript/lib/typescript.js
+```
+
+Because the config is evaluated in-process, its imports resolve through
+Node's `require` against the **built** output in `node_modules`. A stale
+`dist` of a config package would silently enforce an outdated architecture —
+the provenance output makes visible which build is actually running. Entries
+whose resolved path differs from the real path are marked as symlinked; this
+is what reveals workspace-linked builds (pnpm, yalc, npm/yarn workspaces).
+
+Known quirk: due to the evaluation context, import specifiers resolve
+relative to the Sheriff core package, not relative to the config file's
+location. Failed resolutions are shown as `failed to resolve: …`.
+
 ## `export [main.ts]`
 
 Run `npx sheriff export main.ts > export.json` to export the dependency graph in JSON format. The dependency graph includes all reachable files. For every file, it will include the assigned module as well as the tags.

@@ -36,6 +36,7 @@ const testConfig = (plugin: SheriffPlugin) => ({
   barrelFileName: 'index.ts',
   entryPoints: undefined,
   ignoreFileExtensions: [],
+  configImports: [],
   plugins: [plugin],
 });
 

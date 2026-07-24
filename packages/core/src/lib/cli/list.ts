@@ -8,8 +8,9 @@ import {
 import getFs from '../fs/getFs';
 import { cli } from './cli';
 import { logInfoForMissingSheriffConfig } from './internal/log-info-for-missing-sheriff-config';
+import { logConfigDetails } from './internal/log-config-details';
 
-export function list(args: string[]) {
+export function list(args: string[], options: { verbose?: boolean } = {}) {
   const projectEntries = getEntriesFromCliOrConfig(args[0]);
   if (projectEntries.length > 0) {
     logInfoForMissingSheriffConfig(projectEntries[0].projectInfo);
@@ -26,7 +27,7 @@ export function list(args: string[]) {
       cli.log(cli.bold(`Project: ${projectName}`));
       cli.log('');
     }
-    logAppliedConfig(projectEntry.projectInfo);
+    logConfigDetails(projectEntry.projectInfo, options.verbose);
     cli.log(`This project contains ${modulesCount} modules:`);
     cli.log('');
 
@@ -41,19 +42,6 @@ export function list(args: string[]) {
     );
     printDirectory(directory);
   }
-}
-
-function logAppliedConfig(projectInfo: ProjectInfo): void {
-  if (!projectInfo.usesMultipleConfigs || !projectInfo.configFilePath) {
-    return;
-  }
-
-  const configPath = getFs().relativeTo(
-    projectInfo.rootDir,
-    projectInfo.configFilePath,
-  );
-  cli.log(`Config: ${configPath}`);
-  cli.log('');
 }
 
 type Directory = Record<

@@ -42,6 +42,9 @@ function showHelp(plugins: SheriffPlugin[]): void {
     '  sheriff verify --watch [main.ts]: re-runs the verification on file changes.',
   );
   cli.log(
+    '  sheriff list|verify --verbose [main.ts]: additionally prints the config import provenance.',
+  );
+  cli.log(
     '  sheriff daemon <start|stop|status>: manages the background daemon.',
   );
   cli.log('  sheriff version: prints out the current version.');
@@ -99,18 +102,25 @@ export function main(...argv: string[]) {
         handleError(() => init());
         break;
       case 'verify': {
-        const { args: verifyArgs, files } = parseVerifyFilesOption(args);
+        const { args: argsWithoutVerbose, verbose } = parseVerboseOption(args);
+        const { args: verifyArgs, files } =
+          parseVerifyFilesOption(argsWithoutVerbose);
         if (verifyArgs.includes('--watch')) {
           // watch mode keeps the process alive; no endProcess handling
-          verifyWatch(verifyArgs.filter((arg) => arg !== '--watch'));
+          verifyWatch(
+            verifyArgs.filter((arg) => arg !== '--watch'),
+            { verbose },
+          );
           break;
         }
-        handleError(() => verify(verifyArgs, { files }));
+        handleError(() => verify(verifyArgs, { files, verbose }));
         break;
       }
-      case 'list':
-        handleError(() => list(args));
+      case 'list': {
+        const { args: listArgs, verbose } = parseVerboseOption(args);
+        handleError(() => list(listArgs, { verbose }));
         break;
+      }
       case 'export':
         handleError(() => exportData(...args));
         break;
@@ -131,6 +141,24 @@ export function main(...argv: string[]) {
   }
 
   return handleErrorAsync(() => handlePluginOrHelp(cmd, args));
+}
+
+/**
+ * Parses the `--verbose` flag for `list` and `verify`.
+ *
+ * With `--verbose`, both commands additionally print the provenance of the
+ * modules loaded by `sheriff.config.ts` (specifier, resolved path, real
+ * path). The flag is positionally independent and removed from the
+ * remaining arguments.
+ */
+function parseVerboseOption(args: string[]): {
+  args: string[];
+  verbose: boolean;
+} {
+  return {
+    args: args.filter((arg) => arg !== '--verbose'),
+    verbose: args.includes('--verbose'),
+  };
 }
 
 function splitFileValues(values: string[]): string[] {

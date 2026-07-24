@@ -1,6 +1,8 @@
 
 [1mVerification Report[0m
 
+Config: sheriff.config.ts
+
 Issues found:
   Total Invalid Files: 8
   Total Encapsulation Violations: 0

@@ -1,3 +1,5 @@
+Config: sheriff.config.ts
+
 This project contains 19 modules:
 
 . (root)

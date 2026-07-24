@@ -11,6 +11,7 @@ import {
   getEntriesFromCliOrConfig,
 } from './internal/get-entries-from-cli-or-config';
 import { logInfoForMissingSheriffConfig } from './internal/log-info-for-missing-sheriff-config';
+import { logConfigDetails } from './internal/log-config-details';
 import {
   checkForExternalRuleViolation,
   ExternalRuleViolation,
@@ -39,7 +40,10 @@ type ProjectValidation = {
   dependencyRuleViolations: DependencyRuleViolation[];
 };
 
-export function verify(args: string[], options: { files?: string[] } = {}) {
+export function verify(
+  args: string[],
+  options: { files?: string[]; verbose?: boolean } = {},
+) {
   const fs = getFs();
   const projectEntries = getEntriesFromCliOrConfig(args[0]);
   logInfoForMissingSheriffConfig(projectEntries[0].projectInfo);
@@ -184,7 +188,7 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
       cli.log(cli.bold(`Project: ${projectName}`));
       cli.log('');
     }
-    logAppliedConfig(projectInfo);
+    logConfigDetails(projectInfo, options.verbose);
 
     if (validation.hasError) {
       cli.log('Issues found:');
@@ -317,19 +321,6 @@ function runChecksForFile(
   };
 
   return true;
-}
-
-function logAppliedConfig(projectInfo: ProjectInfo): void {
-  if (!projectInfo.usesMultipleConfigs || !projectInfo.configFilePath) {
-    return;
-  }
-
-  const configPath = getFs().relativeTo(
-    projectInfo.rootDir,
-    projectInfo.configFilePath,
-  );
-  cli.log(`Config: ${configPath}`);
-  cli.log('');
 }
 
 function formatExternalRuleViolation(violation: ExternalRuleViolation): string {

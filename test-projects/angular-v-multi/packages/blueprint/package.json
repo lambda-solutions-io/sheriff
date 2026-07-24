@@ -1,0 +1,6 @@
+{
+  "name": "@sheriff-test/blueprint",
+  "version": "1.0.0",
+  "description": "Stand-in for a workspace-built architecture blueprint package, symlinked into node_modules by the integration test.",
+  "main": "index.js"
+}

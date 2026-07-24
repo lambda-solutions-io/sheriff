@@ -29,5 +29,6 @@ export {
   invalidatePath,
   invalidateStructure,
 } from './lib/cache/project-cache';
+export { ConfigImport } from './lib/config/configuration';
 export { init, InitOptions, ProjectInfo } from './lib/main/init';
 export { FsPath, toFsPath } from './lib/file-info/fs-path';

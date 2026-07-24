@@ -8,6 +8,8 @@ exports[`verify > Multi project setup > should find errors > logs.log 1`] = `
 
 <b>Project: project-i</b>
 
+Config: sheriff.config.ts
+
 Issues found:
   Total Invalid Files: 2
   Total Encapsulation Violations: 1
@@ -23,6 +25,8 @@ Issues found:
 
 <b>Project: project-ii</b>
 
+Config: sheriff.config.ts
+
 
 [32mNo issues found for this project. Well done![0m"
 `;
@@ -35,6 +39,8 @@ exports[`verify > Multi project setup > should find no errors when passing a sin
 
 <b>Project: project-i</b>
 
+Config: sheriff.config.ts
+
 [32mNo issues found. Well done![0m"
 `;
 
@@ -46,10 +52,14 @@ exports[`verify > Multi project setup > should find no errors when passing multi
 
 <b>Project: project-i</b>
 
+Config: sheriff.config.ts
+
 
 [32mNo issues found for this project. Well done![0m
 
 <b>Project: project-ii</b>
+
+Config: sheriff.config.ts
 
 
 [32mNo issues found for this project. Well done![0m
@@ -62,6 +72,8 @@ exports[`verify > should find errors > error.log 1`] = `""`;
 exports[`verify > should find errors > logs.log 1`] = `
 "
 <b>Verification Report</b>
+
+Config: sheriff.config.ts
 
 Issues found:
   Total Invalid Files: 2

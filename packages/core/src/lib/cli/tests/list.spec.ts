@@ -223,5 +223,75 @@ describe('list', () => {
     expect(allLogs()).toMatchSnapshot('log');
   });
 
+  it('should print the resolved config path in the header', () => {
+    const { allLogs } = mockCli();
+
+    createProject({
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': sheriffConfig({
+        modules: { 'src/customers': ['customers'] },
+        depRules: {},
+      }),
+      src: {
+        'main.ts': [],
+        customers: { 'index.ts': [] },
+      },
+    });
+
+    main('list', 'src/main.ts');
+
+    expect(allLogs()).toContain('Config: sheriff.config.ts');
+  });
+
+  it('should print the config import provenance with --verbose', () => {
+    const { allLogs } = mockCli();
+
+    createProject({
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': `
+import * as ts from 'typescript';
+
+export const config = {
+  depRules: { root: 'noTag', noTag: 'noTag' },
+  log: !ts.version,
+};
+      `,
+      src: {
+        'main.ts': [],
+      },
+    });
+
+    main('list', 'src/main.ts', '--verbose');
+
+    const logs = allLogs();
+    expect(logs).toContain('Config: sheriff.config.ts');
+    expect(logs).toContain('Config imports:');
+    expect(logs).toContain(
+      `  typescript → ${require.resolve('typescript')}`,
+    );
+  });
+
+  it('should mark a config without runtime imports with --verbose', () => {
+    const { allLogs } = mockCli();
+
+    createProject({
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': sheriffConfig({
+        modules: { 'src/customers': ['customers'] },
+        depRules: {},
+      }),
+      src: {
+        'main.ts': [],
+        customers: { 'index.ts': [] },
+      },
+    });
+
+    main('list', 'src/main.ts', '--verbose');
+
+    const logs = allLogs();
+    expect(logs).toContain('Config imports:');
+    expect(logs).toContain('  (none)');
+  });
+
   verifyCliWrappers('list', 'src/main.ts');
 });

@@ -1,7 +1,9 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
 exports[`list > should include modules not reachable by entryFile > log 1`] = `
-"This project contains 4 modules:
+"Config: sheriff.config.ts
+
+This project contains 4 modules:
 
 . (root)
 └── src
@@ -15,6 +17,8 @@ exports[`list > should include modules not reachable by entryFile > log 1`] = `
 
 exports[`list > should list all files reachable by entryPoints > log 1`] = `
 "<b>Project: holidays</b>
+
+Config: sheriff.config.ts
 
 This project contains 5 modules:
 
@@ -33,6 +37,8 @@ This project contains 5 modules:
         └── <b>model</b> (noTag)
 
 <b>Project: customer-support</b>
+
+Config: sheriff.config.ts
 
 This project contains 5 modules:
 
@@ -62,7 +68,9 @@ This project contains 2 modules:
 `;
 
 exports[`list > should show tags in modules > log 1`] = `
-"This project contains 4 modules:
+"Config: sheriff.config.ts
+
+This project contains 4 modules:
 
 . (root)
 └── src
@@ -75,7 +83,9 @@ exports[`list > should show tags in modules > log 1`] = `
 `;
 
 exports[`list > should work with nested modules (Nx use case) > log 1`] = `
-"This project contains 6 modules:
+"Config: sheriff.config.ts
+
+This project contains 6 modules:
 
 . (root)
 └── libs

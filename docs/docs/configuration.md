@@ -340,6 +340,28 @@ export const config: SheriffConfig = {
 - **Default**: `1`
 - **Description**: Configuration version. Currently only version 1 is supported. This option is rarely needed as Sheriff automatically uses the latest supported version.
 
+## Config Import Provenance {#config-import-provenance}
+
+`sheriff.config.ts` is transpiled and evaluated in-process. Every `import` in
+the config therefore resolves through Node's `require` against the **built**
+output in `node_modules` — not against package sources. If such a package (for
+example a shared architecture blueprint) has a stale `dist`, an outdated
+architecture would be enforced without any signal.
+
+Sheriff records the provenance of every module the config loads: the import
+specifier, the path `require.resolve` returned, and its real path with
+symlinks resolved. For pnpm-/workspace-linked packages the real path reveals
+which workspace build is actually running. The recorded entries are available
+on the parsed configuration as `configImports` (a `ConfigImport[]`, purely
+informational) and are printed by `sheriff list --verbose` and
+`sheriff verify --verbose` — see the [CLI documentation](./cli.md#verbose).
+
+Known quirk: because the config is evaluated inside the Sheriff core package,
+import specifiers resolve relative to the Sheriff core package, not relative
+to the config file's location. For packages installed in the workspace's
+`node_modules` this makes no practical difference, but relative imports in
+`sheriff.config.ts` will not resolve from the config file's directory.
+
 ## Configuration Validation
 
 Sheriff validates your configuration and will throw helpful errors if:

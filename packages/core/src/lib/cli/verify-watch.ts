@@ -11,7 +11,10 @@ const RERUN_DEBOUNCE_MS = 100;
  * every relevant filesystem change, and reuses the project cache so
  * only changed files are re-analyzed.
  */
-export function verifyWatch(args: string[]): void {
+export function verifyWatch(
+  args: string[],
+  options: { verbose?: boolean } = {},
+): void {
   const rootDir = process.cwd();
 
   // verify() ends the process after a single run; watch runs must survive
@@ -22,7 +25,7 @@ export function verifyWatch(args: string[]): void {
 
   const runVerification = () => {
     try {
-      verify(args);
+      verify(args, options);
     } catch (error) {
       handleErrorOutput(error);
     }
