@@ -129,6 +129,46 @@ describe('encapsulation', () => {
     );
   });
 
+  it('should return a violation for a nested internal folder in a barrel-less module', () => {
+    // repro from issue #31: `data/foo/internal/secret.ts` used to be
+    // silently public because only `startsWith` was checked.
+    // The config needs `enableBarrelLess: true` and a permissive
+    // `root: '*'` dep rule so the test cannot pass for the wrong reason.
+    testInit('src/app/main.ts', {
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': sheriffConfig({
+        modules: { 'src/app/customers': 'customers' },
+        depRules: { root: '*', customers: '*' },
+        enableBarrelLess: true,
+      }),
+      src: {
+        app: {
+          'main.ts': ['./customers/data/foo/internal/secret'],
+          customers: {
+            data: {
+              foo: {
+                internal: {
+                  'secret.ts': [],
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const message = violatesEncapsulationRule(
+      '/project/src/app/main.ts',
+      './customers/data/foo/internal/secret',
+      true,
+      getFs().readFile(toFsPath('/project/src/app/main.ts')),
+      false,
+    );
+    expect(message).toBe(
+      `'./customers/data/foo/internal/secret' cannot be imported. It is encapsulated.`,
+    );
+  });
+
   it('should return a violation to a barrel modules', () => {
     testInit('src/app/main.ts', {
       'tsconfig.json': tsConfig(),

@@ -188,7 +188,9 @@ describe('barrel-less', () => {
       });
   });
 
-  it('should be by default first level only', () => {
+  it('should encapsulate the pattern folder at any depth', () => {
+    // was 'should be by default first level only' and asserted `{}`:
+    // a nested internal folder used to be silently public
     assertProject()
       .withCustomerRoute({
         feature: {
@@ -201,7 +203,79 @@ describe('barrel-less', () => {
           },
         },
       })
+      .hasEncapsulationViolations({
+        'feature/customers.component.ts': [
+          '../data/sub1/internal/hidden.service.ts',
+        ],
+      });
+  });
+
+  it('should keep the prefix match for top-level folders starting with the pattern', () => {
+    assertProject()
+      .withCustomerRoute({
+        feature: {
+          'customer.component.ts': [],
+          'customers.component.ts': ['../data/internals/hidden.service.ts'],
+        },
+        data: {
+          internals: { 'hidden.service.ts': [] },
+        },
+      })
+      .hasEncapsulationViolations({
+        'feature/customers.component.ts': [
+          '../data/internals/hidden.service.ts',
+        ],
+      });
+  });
+
+  it('should expose a nested folder that only starts with the pattern', () => {
+    // segment matching requires equality; the prefix rule only
+    // applies to the start of the module-relative path
+    assertProject()
+      .withCustomerRoute({
+        feature: {
+          'customer.component.ts': [],
+          'customers.component.ts': ['../data/sub1/internals/open.service.ts'],
+        },
+        data: {
+          sub1: {
+            internals: { 'open.service.ts': [] },
+          },
+        },
+      })
       .hasEncapsulationViolations({});
+  });
+
+  it('should expose a nested file named like the pattern', () => {
+    // the filename does not count as a directory segment
+    assertProject()
+      .withCustomerRoute({
+        feature: {
+          'customer.component.ts': [],
+          'customers.component.ts': ['../data/sub1/internal.ts'],
+        },
+        data: {
+          sub1: { 'internal.ts': [] },
+        },
+      })
+      .hasEncapsulationViolations({});
+  });
+
+  it('should keep a top-level file starting with the pattern encapsulated', () => {
+    // preserved prefix rule: 'internal.ts'.startsWith('internal')
+    assertProject()
+      .withCustomerRoute({
+        feature: {
+          'customer.component.ts': [],
+          'customers.component.ts': ['../data/internal.ts'],
+        },
+        data: {
+          'internal.ts': [],
+        },
+      })
+      .hasEncapsulationViolations({
+        'feature/customers.component.ts': ['../data/internal.ts'],
+      });
   });
 
   it.skip('should support wildcards', () => {

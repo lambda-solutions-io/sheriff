@@ -335,6 +335,56 @@ describe('module exports', () => {
         ),
       ).toEqual([]);
     });
+
+    it('should keep exports precedence over any-depth encapsulationPattern matching', () => {
+      // `encapsulationPattern` strings now match directory segments at any
+      // depth, but `exports` still fully defines the public API: a file inside
+      // a nested `internal` folder stays public when an export pattern matches
+      // it, and its non-exported neighbour is a violation because of `exports`,
+      // not because of the pattern.
+      const projectInfo = testInit('src/main.ts', {
+        'tsconfig.json': tsConfig(),
+        'sheriff.config.ts': sheriffConfig({
+          modules: {
+            'src/booking/api': {
+              tags: ['type:api'],
+              exports: ['sub/internal/public.ts'],
+            },
+            'src/booking/feature': ['type:feature'],
+          },
+          depRules: { '*': '*' },
+          enableBarrelLess: true,
+        } as UserSheriffConfig),
+        src: {
+          'main.ts': ['./booking/feature/booking.ts'],
+          booking: {
+            api: {
+              sub: {
+                internal: {
+                  'public.ts': [],
+                  'secret.ts': [],
+                },
+              },
+            },
+            feature: {
+              'booking.ts': [
+                '../api/sub/internal/public.ts',
+                '../api/sub/internal/secret.ts',
+              ],
+            },
+          },
+        },
+      });
+
+      expect(
+        Object.keys(
+          hasEncapsulationViolations(
+            toFsPath('/project/src/booking/feature/booking.ts'),
+            projectInfo,
+          ),
+        ),
+      ).toEqual(['../api/sub/internal/secret.ts']);
+    });
   });
 
   describe('exports are attached to the matched module key only', () => {
