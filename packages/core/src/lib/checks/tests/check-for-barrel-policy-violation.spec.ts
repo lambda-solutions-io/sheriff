@@ -1,0 +1,222 @@
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { UserSheriffConfig } from '../../config/user-sheriff-config';
+import getFs, { useVirtualFs } from '../../fs/getFs';
+import { FileTree, sheriffConfig } from '../../test/project-configurator';
+import { tsConfig } from '../../test/fixtures/ts-config';
+import { testInit } from '../../test/test-init';
+import { checkForBarrelPolicyViolation } from '../check-for-barrel-policy-violation';
+import '../../test/expect.extensions';
+
+function initProject(config: Partial<UserSheriffConfig>, src: FileTree) {
+  return testInit('src/main.ts', {
+    'tsconfig.json': tsConfig(),
+    'sheriff.config.ts': sheriffConfig({
+      ...{
+        modules: { 'src/<domain>': ['domain:<domain>'] },
+        depRules: { root: '*', 'domain:*': '*' },
+        enableBarrelLess: true,
+      },
+      ...config,
+    }),
+    src,
+  });
+}
+
+function violatedBarrelFiles(
+  config: Partial<UserSheriffConfig>,
+  src: FileTree,
+): string[] {
+  const projectInfo = initProject(config, src);
+  return checkForBarrelPolicyViolation(projectInfo).map((violation) =>
+    violation.barrelFilePath.replace('/project/', ''),
+  );
+}
+
+const strayBarrelTree: FileTree = {
+  'main.ts': ['./ui/customer.component'],
+  ui: {
+    'customer.component.ts': [],
+    'index.ts': [],
+  },
+};
+
+const barrelLessTree: FileTree = {
+  'main.ts': ['./ui/customer.component'],
+  ui: {
+    'customer.component.ts': [],
+  },
+};
+
+describe('checkForBarrelPolicyViolation', () => {
+  beforeAll(() => {
+    useVirtualFs();
+  });
+
+  beforeEach(() => {
+    getFs().reset();
+  });
+
+  describe('policy matrix', () => {
+    it('should not report with allow and a stray barrel', () => {
+      expect(
+        violatedBarrelFiles({ barrelPolicy: 'allow' }, strayBarrelTree),
+      ).toEqual([]);
+    });
+
+    it('should not report with allow and no barrel', () => {
+      expect(
+        violatedBarrelFiles({ barrelPolicy: 'allow' }, barrelLessTree),
+      ).toEqual([]);
+    });
+
+    it('should report with warn and a stray barrel', () => {
+      expect(
+        violatedBarrelFiles({ barrelPolicy: 'warn' }, strayBarrelTree),
+      ).toEqual(['src/ui/index.ts']);
+    });
+
+    it('should not report with warn and no barrel', () => {
+      expect(
+        violatedBarrelFiles({ barrelPolicy: 'warn' }, barrelLessTree),
+      ).toEqual([]);
+    });
+
+    it('should report with forbid and a stray barrel', () => {
+      expect(
+        violatedBarrelFiles({ barrelPolicy: 'forbid' }, strayBarrelTree),
+      ).toEqual(['src/ui/index.ts']);
+    });
+
+    it('should not report with forbid and no barrel', () => {
+      expect(
+        violatedBarrelFiles({ barrelPolicy: 'forbid' }, barrelLessTree),
+      ).toEqual([]);
+    });
+
+    it('should not report a matching allowBarrelsIn glob', () => {
+      expect(
+        violatedBarrelFiles(
+          { barrelPolicy: 'forbid', allowBarrelsIn: ['src/ui'] },
+          strayBarrelTree,
+        ),
+      ).toEqual([]);
+    });
+
+    it('should report a non-matching allowBarrelsIn glob', () => {
+      expect(
+        violatedBarrelFiles(
+          { barrelPolicy: 'forbid', allowBarrelsIn: ['src/api'] },
+          strayBarrelTree,
+        ),
+      ).toEqual(['src/ui/index.ts']);
+    });
+  });
+
+  it('should not report when barrel-less mode is disabled', () => {
+    // parse-config rejects barrelPolicy without enableBarrelLess, so the
+    // guard inside the check is exercised with a modified configuration.
+    const projectInfo = initProject({ barrelPolicy: 'forbid' }, strayBarrelTree);
+    expect(
+      checkForBarrelPolicyViolation({
+        ...projectInfo,
+        config: { ...projectInfo.config, enableBarrelLess: false },
+      }),
+    ).toEqual([]);
+  });
+
+  it('should report modulePath, barrelFilePath and a message naming the consequence', () => {
+    const projectInfo = initProject({ barrelPolicy: 'forbid' }, strayBarrelTree);
+    const violations = checkForBarrelPolicyViolation(projectInfo);
+
+    expect(violations).toEqual([
+      {
+        modulePath: '/project/src/ui',
+        barrelFilePath: '/project/src/ui/index.ts',
+        message:
+          'index.ts turns a barrel-less module into a barrel module and changes its encapsulation semantics. Remove it or add the module to `allowBarrelsIn`.',
+      },
+    ]);
+  });
+
+  it('should use the configured barrelFileName', () => {
+    const violations = checkForBarrelPolicyViolation(
+      initProject(
+        { barrelPolicy: 'forbid', barrelFileName: 'public-api.ts' },
+        {
+          'main.ts': ['./ui/customer.component'],
+          ui: {
+            'customer.component.ts': [],
+            'public-api.ts': [],
+          },
+        },
+      ),
+    );
+
+    expect(violations).toEqual([
+      {
+        modulePath: '/project/src/ui',
+        barrelFilePath: '/project/src/ui/public-api.ts',
+        message:
+          'public-api.ts turns a barrel-less module into a barrel module and changes its encapsulation semantics. Remove it or add the module to `allowBarrelsIn`.',
+      },
+    ]);
+  });
+
+  describe('issue repro: bucket barrels stay legal, lib barrels are flagged', () => {
+    const bucketTree: FileTree = {
+      'main.ts': ['./customers/feature/customers.component'],
+      customers: {
+        'index.ts': [],
+        api: {
+          'index.ts': [],
+          'customers.port.ts': [],
+        },
+        feature: {
+          'customers.component.ts': ['../api/customers.port'],
+        },
+      },
+    };
+
+    const bucketConfig: Partial<UserSheriffConfig> = {
+      modules: {
+        'src/<domain>': ['domain:<domain>'],
+        'src/<domain>/<type>': ['domain:<domain>', 'type:<type>'],
+      },
+    };
+
+    it('should flag every barrel under forbid without exceptions', () => {
+      expect(
+        violatedBarrelFiles(
+          { ...bucketConfig, barrelPolicy: 'forbid' },
+          bucketTree,
+        ),
+      ).toEqual(['src/customers/index.ts', 'src/customers/api/index.ts']);
+    });
+
+    it('should keep the api bucket barrel legal via **/api and still flag the lib barrel', () => {
+      expect(
+        violatedBarrelFiles(
+          {
+            ...bucketConfig,
+            barrelPolicy: 'forbid',
+            allowBarrelsIn: ['**/api'],
+          },
+          bucketTree,
+        ),
+      ).toEqual(['src/customers/index.ts']);
+    });
+
+    it('should support single-segment wildcards in allowBarrelsIn', () => {
+      expect(
+        violatedBarrelFiles(
+          {
+            ...bucketConfig,
+            barrelPolicy: 'forbid',
+            allowBarrelsIn: ['src/*/api'],
+          },
+          bucketTree,
+        ),
+      ).toEqual(['src/customers/index.ts']);
+    });
+  });
+});

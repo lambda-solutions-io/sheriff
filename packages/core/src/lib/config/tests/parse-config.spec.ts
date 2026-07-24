@@ -4,6 +4,8 @@ import { parseConfig } from '../parse-config';
 import { toFsPath } from '../../file-info/fs-path';
 import getFs, { useVirtualFs } from '../../fs/getFs';
 import {
+  AllowBarrelsInWithoutBarrelPolicyError,
+  BarrelPolicyWithoutBarrelLessError,
   CollidingEncapsulationSettings,
   CollidingEntrySettings,
   MissingModulesWithoutAutoTaggingError,
@@ -38,6 +40,8 @@ describe('parse Config', () => {
       'configs',
       'excludeRoot',
       'enableBarrelLess',
+      'barrelPolicy',
+      'allowBarrelsIn',
       'encapsulationPattern',
       'log',
       'entryFile',
@@ -83,6 +87,8 @@ export const config: SheriffConfig = {
         externalRules: {},
         configs: {},
         enableBarrelLess: false,
+        barrelPolicy: 'allow',
+        allowBarrelsIn: [],
         encapsulationPattern: 'internal',
         excludeRoot: false,
         log: false,
@@ -335,6 +341,147 @@ export const config: SheriffConfig = {
     expect(() =>
       parseConfig(toFsPath(getFs().cwd() + '/sheriff.config.ts')),
     ).toThrowUserError(new NoEntryPointsFoundError());
+  });
+
+  describe('barrelPolicy and allowBarrelsIn', () => {
+    it.each(['warn', 'forbid'] as const)(
+      'should throw if barrelPolicy is %s without enableBarrelLess',
+      (barrelPolicy) => {
+        getFs().writeFile(
+          'sheriff.config.ts',
+          `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  depRules: { root: 'noTag', noTag: 'noTag' },
+  barrelPolicy: '${barrelPolicy}',
+};
+      `,
+        );
+
+        expect(() =>
+          parseConfig(toFsPath(getFs().cwd() + '/sheriff.config.ts')),
+        ).toThrowUserError(new BarrelPolicyWithoutBarrelLessError(barrelPolicy));
+      },
+    );
+
+    it('should not throw if barrelPolicy is allow without enableBarrelLess', () => {
+      getFs().writeFile(
+        'sheriff.config.ts',
+        `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  depRules: { root: 'noTag', noTag: 'noTag' },
+  barrelPolicy: 'allow',
+};
+      `,
+      );
+
+      expect(() =>
+        parseConfig(toFsPath(getFs().cwd() + '/sheriff.config.ts')),
+      ).not.toThrow();
+    });
+
+    it('should throw if allowBarrelsIn is set without barrelPolicy', () => {
+      getFs().writeFile(
+        'sheriff.config.ts',
+        `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  depRules: { root: 'noTag', noTag: 'noTag' },
+  enableBarrelLess: true,
+  allowBarrelsIn: ['**/api'],
+};
+      `,
+      );
+
+      expect(() =>
+        parseConfig(toFsPath(getFs().cwd() + '/sheriff.config.ts')),
+      ).toThrowUserError(new AllowBarrelsInWithoutBarrelPolicyError());
+    });
+
+    it('should throw if allowBarrelsIn is set with barrelPolicy allow', () => {
+      getFs().writeFile(
+        'sheriff.config.ts',
+        `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  depRules: { root: 'noTag', noTag: 'noTag' },
+  enableBarrelLess: true,
+  barrelPolicy: 'allow',
+  allowBarrelsIn: ['**/api'],
+};
+      `,
+      );
+
+      expect(() =>
+        parseConfig(toFsPath(getFs().cwd() + '/sheriff.config.ts')),
+      ).toThrowUserError(new AllowBarrelsInWithoutBarrelPolicyError());
+    });
+
+    it('should not throw if allowBarrelsIn is empty with barrelPolicy allow', () => {
+      getFs().writeFile(
+        'sheriff.config.ts',
+        `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  depRules: { root: 'noTag', noTag: 'noTag' },
+  allowBarrelsIn: [],
+};
+      `,
+      );
+
+      expect(() =>
+        parseConfig(toFsPath(getFs().cwd() + '/sheriff.config.ts')),
+      ).not.toThrow();
+    });
+
+    it('should pass a valid barrelPolicy configuration through', () => {
+      getFs().writeFile(
+        'sheriff.config.ts',
+        `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  depRules: { root: 'noTag', noTag: 'noTag' },
+  enableBarrelLess: true,
+  barrelPolicy: 'forbid',
+  allowBarrelsIn: ['**/api', 'libs/*/src/api'],
+};
+      `,
+      );
+
+      const config = parseConfig(
+        toFsPath(getFs().cwd() + '/sheriff.config.ts'),
+      );
+
+      expect(config.barrelPolicy).toBe('forbid');
+      expect(config.allowBarrelsIn).toEqual(['**/api', 'libs/*/src/api']);
+    });
+
+    it('should default barrelPolicy to allow and allowBarrelsIn to an empty array', () => {
+      getFs().writeFile(
+        'sheriff.config.ts',
+        `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  depRules: { root: 'noTag', noTag: 'noTag' },
+};
+      `,
+      );
+
+      const config = parseConfig(
+        toFsPath(getFs().cwd() + '/sheriff.config.ts'),
+      );
+
+      expect(config.barrelPolicy).toBe('allow');
+      expect(config.allowBarrelsIn).toEqual([]);
+    });
   });
 
   describe('ignoreFileExtensions', () => {

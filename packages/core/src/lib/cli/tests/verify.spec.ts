@@ -427,6 +427,96 @@ describe('verify', () => {
       expect(verifySpy).not.toHaveBeenCalled();
     });
   });
+
+  describe('barrel policy', () => {
+    function createBarrelPolicyProject(
+      barrelPolicy: 'allow' | 'warn' | 'forbid',
+      allowBarrelsIn?: string[],
+    ): void {
+      createProject({
+        'tsconfig.json': tsConfig(),
+        'sheriff.config.ts': sheriffConfig({
+          modules: {
+            'src/<domain>': ['domain:<domain>'],
+            'src/<domain>/<type>': ['domain:<domain>', 'type:<type>'],
+          },
+          depRules: { '*': '*' },
+          enableBarrelLess: true,
+          ...(barrelPolicy === 'allow' ? {} : { barrelPolicy }),
+          ...(allowBarrelsIn ? { allowBarrelsIn } : {}),
+        }),
+        src: {
+          'main.ts': ['./customers/feature/customers.component'],
+          customers: {
+            api: {
+              'index.ts': ['./customers.port'],
+              'customers.port.ts': [],
+            },
+            feature: {
+              'customers.component.ts': ['../api'],
+            },
+            ui: {
+              'customer.component.ts': [],
+              'index.ts': [],
+            },
+          },
+        },
+      });
+    }
+
+    it('should fail with barrelPolicy forbid on stray barrels', () => {
+      const { allLogs, mockedCli } = mockCli();
+      createBarrelPolicyProject('forbid');
+
+      main('verify', 'src/main.ts');
+
+      expect(mockedCli.endProcessError).toHaveBeenCalled();
+      expect(allLogs()).toContain('Total Barrel Policy Violations: 2');
+      expect(allLogs()).toContain('|-- src/customers/api/index.ts');
+      expect(allLogs()).toContain('|-- src/customers/ui/index.ts');
+      expect(allLogs()).toContain(
+        'index.ts turns a barrel-less module into a barrel module and changes its encapsulation semantics. Remove it or add the module to `allowBarrelsIn`.',
+      );
+    });
+
+    it('should keep allowed barrels legal and flag the rest under forbid', () => {
+      const { allLogs, mockedCli } = mockCli();
+      createBarrelPolicyProject('forbid', ['**/api']);
+
+      main('verify', 'src/main.ts');
+
+      expect(mockedCli.endProcessError).toHaveBeenCalled();
+      expect(allLogs()).toContain('Total Barrel Policy Violations: 1');
+      expect(allLogs()).not.toContain('|-- src/customers/api/index.ts');
+      expect(allLogs()).toContain('|-- src/customers/ui/index.ts');
+    });
+
+    it('should only warn with barrelPolicy warn', () => {
+      const { allLogs, mockedCli } = mockCli();
+      createBarrelPolicyProject('warn');
+
+      main('verify', 'src/main.ts');
+
+      expect(mockedCli.endProcessError).not.toHaveBeenCalled();
+      expect(mockedCli.endProcessOk).toHaveBeenCalled();
+      expect(allLogs()).toContain(
+        'Warning: src/customers/api/index.ts: index.ts turns a barrel-less module into a barrel module and changes its encapsulation semantics. Remove it or add the module to `allowBarrelsIn`.',
+      );
+      expect(allLogs()).toContain('Warning: src/customers/ui/index.ts:');
+      expect(allLogs()).not.toContain('Total Barrel Policy Violations');
+    });
+
+    it('should not report stray barrels with the default policy', () => {
+      const { allLogs, mockedCli } = mockCli();
+      createBarrelPolicyProject('allow');
+
+      main('verify', 'src/main.ts');
+
+      expect(mockedCli.endProcessOk).toHaveBeenCalled();
+      expect(allLogs()).not.toContain('Barrel Policy');
+      expect(allLogs()).not.toContain('Warning:');
+    });
+  });
 });
 
 function createProjectWithFileViolations(): void {
