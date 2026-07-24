@@ -16,7 +16,9 @@ export type UserErrorCode =
   | 'SH-015'
   | 'SH-016'
   | 'SH-017'
-  | 'SH-018';
+  | 'SH-018'
+  | 'SH-019'
+  | 'SH-020';
 
 export class UserError extends Error {
   constructor(
@@ -178,6 +180,24 @@ export class DuplicatePluginNameError extends UserError {
     super(
       'SH-018',
       `Plugin '${pluginName}' is registered more than once. Plugin names must be unique.`,
+    );
+  }
+}
+
+export class BarrelPolicyWithoutBarrelLessError extends UserError {
+  constructor(barrelPolicy: string) {
+    super(
+      'SH-019',
+      `sheriff.config.ts sets barrelPolicy: '${barrelPolicy}' without enableBarrelLess: true. The policy would silently have no effect. Enable barrel-less mode or remove barrelPolicy.`,
+    );
+  }
+}
+
+export class AllowBarrelsInWithoutBarrelPolicyError extends UserError {
+  constructor() {
+    super(
+      'SH-020',
+      `sheriff.config.ts sets allowBarrelsIn while barrelPolicy is absent or 'allow'. The exceptions would be dead configuration. Set barrelPolicy to 'warn' or 'forbid' or remove allowBarrelsIn.`,
     );
   }
 }

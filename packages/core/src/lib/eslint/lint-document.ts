@@ -7,6 +7,10 @@ import {
   checkForExternalRuleViolation,
   ExternalRuleViolation,
 } from '../checks/check-for-external-rule-violation';
+import {
+  BarrelPolicyViolation,
+  checkForBarrelPolicyViolation,
+} from '../checks/check-for-barrel-policy-violation';
 import { hasEncapsulationViolations } from '../checks/has-encapsulation-violations';
 import {
   DEFAULT_STRUCTURE_CACHE_TTL_MS,
@@ -38,6 +42,7 @@ type InternalDocumentLintResult = {
   dependencyRuleViolations: DependencyRuleViolation[];
   encapsulationViolations: Record<string, FileInfo>;
   externalRuleViolations: ExternalRuleViolation[];
+  barrelPolicyViolations: BarrelPolicyViolation[];
   unresolvableImports: string[];
 };
 
@@ -229,6 +234,7 @@ function createInternalDocumentLintResult(
   let dependencyRuleViolations: DependencyRuleViolation[] | undefined;
   let encapsulationViolations: Record<string, FileInfo> | undefined;
   let externalRuleViolations: ExternalRuleViolation[] | undefined;
+  let barrelPolicyViolations: BarrelPolicyViolation[] | undefined;
 
   return {
     get dependencyRuleViolations() {
@@ -251,6 +257,10 @@ function createInternalDocumentLintResult(
         projectInfo,
       );
       return externalRuleViolations;
+    },
+    get barrelPolicyViolations() {
+      barrelPolicyViolations ??= checkForBarrelPolicyViolation(projectInfo);
+      return barrelPolicyViolations;
     },
     unresolvableImports: projectInfo.fileInfo.unresolvableImports.filter(
       (importCommand) => isRelativeImport(importCommand),
@@ -285,6 +295,7 @@ function emptyMissingConfigAnalysis(): DocumentLintAnalysis {
       dependencyRuleViolations: [],
       encapsulationViolations: {},
       externalRuleViolations: [],
+      barrelPolicyViolations: [],
       unresolvableImports: [],
     },
     configFileIsMissing: true,

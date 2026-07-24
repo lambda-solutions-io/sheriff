@@ -15,6 +15,7 @@ import {
   checkForExternalRuleViolation,
   ExternalRuleViolation,
 } from '../checks/check-for-external-rule-violation';
+import { checkForBarrelPolicyViolation } from '../checks/check-for-barrel-policy-violation';
 import { ProjectInfo } from '../main/init';
 import { FsPath } from '../file-info/fs-path';
 import { Fs } from '../fs/fs';
@@ -25,6 +26,7 @@ type ValidationsMap = Record<
     encapsulations: string[];
     dependencyRules: string[];
     externalRules: string[];
+    barrelPolicy: string[];
   }
 >;
 
@@ -32,11 +34,13 @@ type ProjectValidation = {
   deepImportsCount: number;
   dependencyRulesCount: number;
   externalRulesCount: number;
+  barrelPolicyCount: number;
   filesCount: number;
   hasError: boolean;
   validationsMap: ValidationsMap;
   encapsulations: string[];
   dependencyRuleViolations: DependencyRuleViolation[];
+  barrelPolicyWarnings: string[];
 };
 
 export function verify(args: string[], options: { files?: string[] } = {}) {
@@ -56,11 +60,13 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
       deepImportsCount: 0,
       dependencyRulesCount: 0,
       externalRulesCount: 0,
+      barrelPolicyCount: 0,
       filesCount: 0,
       hasError: false,
       validationsMap: {},
       encapsulations: [],
       dependencyRuleViolations: [],
+      barrelPolicyWarnings: [],
     };
 
     projectValidations.set(projectEntry.projectName, validation);
@@ -171,6 +177,18 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
     }
   }
 
+  // Barrel policy is a module-level check: it flags stray barrel files in
+  // barrel-less mode and is independent of any single verified file, so it
+  // runs once per project in both full and `--files` mode.
+  for (const projectEntry of projectEntries) {
+    const validation = projectValidations.get(projectEntry.projectName)!;
+    if (
+      runBarrelPolicyCheck(projectEntry.projectInfo, validation, fs)
+    ) {
+      hasAnyProjectError = true;
+    }
+  }
+
   cli.log('');
   cli.log(cli.bold('Verification Report'));
 
@@ -186,6 +204,13 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
     }
     logAppliedConfig(projectInfo);
 
+    for (const warning of validation.barrelPolicyWarnings) {
+      cli.log(`Warning: ${warning}`);
+    }
+    if (validation.barrelPolicyWarnings.length > 0) {
+      cli.log('');
+    }
+
     if (validation.hasError) {
       cli.log('Issues found:');
       cli.log(`  Total Invalid Files: ${validation.filesCount}`);
@@ -200,13 +225,18 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
           `  Total External Rule Violations: ${validation.externalRulesCount}`,
         );
       }
+      if (validation.barrelPolicyCount > 0) {
+        cli.log(
+          `  Total Barrel Policy Violations: ${validation.barrelPolicyCount}`,
+        );
+      }
       cli.log('----------------------------------');
       cli.log('');
 
       // Display detailed validation information for this project
       for (const [
         file,
-        { encapsulations, dependencyRules, externalRules },
+        { encapsulations, dependencyRules, externalRules, barrelPolicy },
       ] of Object.entries(validation.validationsMap)) {
         cli.log('|-- ' + file);
         if (encapsulations.length > 0) {
@@ -227,6 +257,13 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
           cli.log('|   |-- External Rule Violations');
           externalRules.forEach((externalRule) => {
             cli.log('|   |   |-- ' + externalRule);
+          });
+        }
+
+        if (barrelPolicy.length > 0) {
+          cli.log('|   |-- Barrel Policy Violations');
+          barrelPolicy.forEach((barrelPolicyViolation) => {
+            cli.log('|   |   |-- ' + barrelPolicyViolation);
           });
         }
       }
@@ -314,7 +351,58 @@ function runChecksForFile(
     encapsulations,
     dependencyRules,
     externalRules,
+    barrelPolicy: [],
   };
+
+  return true;
+}
+
+/**
+ * Runs the module-level barrel policy check for one project.
+ *
+ * With `barrelPolicy: 'forbid'` every violation is recorded as an error,
+ * with `'warn'` it is collected as a warning line only. Returns whether the
+ * project has to fail because of barrel policy violations.
+ */
+function runBarrelPolicyCheck(
+  projectInfo: ProjectInfo,
+  projectValidation: ProjectValidation,
+  fs: Fs,
+): boolean {
+  const violations = checkForBarrelPolicyViolation(projectInfo);
+  if (violations.length === 0) {
+    return false;
+  }
+
+  if (projectInfo.config.barrelPolicy === 'warn') {
+    projectValidation.barrelPolicyWarnings = violations.map(
+      (violation) =>
+        `${fs.relativeTo(fs.cwd(), violation.barrelFilePath)}: ${violation.message}`,
+    );
+    return false;
+  }
+
+  projectValidation.hasError = true;
+  projectValidation.barrelPolicyCount += violations.length;
+
+  for (const violation of violations) {
+    const relativePath = fs.relativeTo(fs.cwd(), violation.barrelFilePath);
+    const entry = (projectValidation.validationsMap[relativePath] ??= {
+      encapsulations: [],
+      dependencyRules: [],
+      externalRules: [],
+      barrelPolicy: [],
+    });
+    if (
+      entry.encapsulations.length === 0 &&
+      entry.dependencyRules.length === 0 &&
+      entry.externalRules.length === 0 &&
+      entry.barrelPolicy.length === 0
+    ) {
+      projectValidation.filesCount++;
+    }
+    entry.barrelPolicy.push(violation.message);
+  }
 
   return true;
 }

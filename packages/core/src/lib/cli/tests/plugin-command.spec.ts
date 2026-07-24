@@ -25,6 +25,8 @@ const pluginConfig = (plugins: SheriffPlugin[]) => ({
   modules: {},
   depRules: {},
   enableBarrelLess: false,
+  barrelPolicy: 'allow' as const,
+  allowBarrelsIn: [],
   encapsulationPattern: 'internal',
   excludeRoot: false,
   log: false,

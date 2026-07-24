@@ -11,6 +11,8 @@ export const defaultConfig: Configuration = {
   configs: {},
   excludeRoot: false,
   enableBarrelLess: false,
+  barrelPolicy: 'allow',
+  allowBarrelsIn: [],
   encapsulationPattern: 'internal',
   log: false,
   entryFile: '',

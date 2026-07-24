@@ -4,6 +4,8 @@ import { UserSheriffConfig } from './user-sheriff-config';
 import getFs from '../fs/getFs';
 import { Configuration } from './configuration';
 import {
+  AllowBarrelsInWithoutBarrelPolicyError,
+  BarrelPolicyWithoutBarrelLessError,
   CollidingEncapsulationSettings,
   CollidingEntrySettings,
   InvalidConfigsDirectoryError,
@@ -87,6 +89,18 @@ const computeParsedConfig = (
     isEmptyRecord(userSheriffConfig.entryPoints)
   ) {
     throw new NoEntryPointsFoundError();
+  }
+
+  const barrelPolicy = userSheriffConfig.barrelPolicy ?? 'allow';
+  if (barrelPolicy !== 'allow' && userSheriffConfig.enableBarrelLess !== true) {
+    throw new BarrelPolicyWithoutBarrelLessError(barrelPolicy);
+  }
+
+  if (
+    (userSheriffConfig.allowBarrelsIn ?? []).length > 0 &&
+    barrelPolicy === 'allow'
+  ) {
+    throw new AllowBarrelsInWithoutBarrelPolicyError();
   }
 
   if (fullOptions.validateConfigs) {

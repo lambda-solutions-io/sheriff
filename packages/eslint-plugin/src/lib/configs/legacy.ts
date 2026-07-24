@@ -15,5 +15,6 @@ export const legacy: ESLint.ConfigData = {
   rules: {
     '@lambda-solutions/sheriff/dependency-rule': 'error',
     '@lambda-solutions/sheriff/encapsulation': 'error',
+    '@lambda-solutions/sheriff/barrel-policy': 'error',
   },
 };

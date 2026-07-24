@@ -27,5 +27,6 @@ export const all: TSESLint.FlatConfig.Config = {
   rules: {
     '@lambda-solutions/sheriff/dependency-rule': 'error',
     '@lambda-solutions/sheriff/encapsulation': 'error',
+    '@lambda-solutions/sheriff/barrel-policy': 'error',
   },
 };

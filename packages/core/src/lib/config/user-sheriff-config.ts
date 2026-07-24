@@ -238,6 +238,60 @@ export interface UserSheriffConfig {
   enableBarrelLess?: boolean;
 
   /**
+   * Only effective with {@link enableBarrelLess}: controls whether barrel
+   * files (`index.ts`, or the configured {@link barrelFileName}) are allowed
+   * inside the module tree.
+   *
+   * In barrel-less mode the absence of a barrel file is load-bearing
+   * configuration: a single stray `index.ts` silently turns a barrel-less
+   * module into a barrel module and changes its encapsulation semantics.
+   *
+   * - `'allow'` (default): keeps the current behaviour, barrels stay legal.
+   * - `'warn'`: `sheriff verify` prints a warning for every barrel module.
+   * - `'forbid'`: every barrel module becomes a violation (ESLint reports on
+   *   the barrel file, `sheriff verify` exits with a non-zero code).
+   *
+   * Intentional barrels can be excluded via {@link allowBarrelsIn}.
+   *
+   * Setting `barrelPolicy` to `'warn'` or `'forbid'` without
+   * `enableBarrelLess: true` is an error, because the policy would silently
+   * have no effect.
+   *
+   * @example
+   * ```typescript
+   * export const config: SheriffConfig = {
+   *   enableBarrelLess: true,
+   *   barrelPolicy: 'forbid',
+   *   // ... other configuration
+   * };
+   * ```
+   */
+  barrelPolicy?: 'allow' | 'warn' | 'forbid';
+
+  /**
+   * Glob patterns, relative to the project root and matched against the
+   * module path, for barrel modules that stay legal despite a restrictive
+   * {@link barrelPolicy}. `**` matches any number of path segments.
+   *
+   * Use this for intentional bucket-level barrels, e.g. an `api` folder
+   * whose `index.ts` acts as a port with a short import path.
+   *
+   * Setting `allowBarrelsIn` while `barrelPolicy` is absent or `'allow'` is
+   * an error, because the exceptions would be dead configuration.
+   *
+   * @example
+   * ```typescript
+   * export const config: SheriffConfig = {
+   *   enableBarrelLess: true,
+   *   barrelPolicy: 'forbid',
+   *   allowBarrelsIn: ['libs/domains/*\/src/api', '**\/api'],
+   *   // ... other configuration
+   * };
+   * ```
+   */
+  allowBarrelsIn?: string[];
+
+  /**
    * The encapsulated folder contains all files
    * which are not available outside the module.
    * By default, it is set to `internal`.

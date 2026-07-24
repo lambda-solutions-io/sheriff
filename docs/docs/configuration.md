@@ -288,6 +288,51 @@ export const config: SheriffConfig = {
 - **Default**: `false`
 - **Description**: Enables barrel-less modules where files are directly available except those in the `internal` folder.
 
+#### `barrelPolicy` {#barrelpolicy}
+
+- **Type**: `'allow' | 'warn' | 'forbid'`
+- **Default**: `'allow'`
+- **Description**: Only effective with `enableBarrelLess: true`. Controls whether barrel files (`index.ts`, or the configured `barrelFileName`) are allowed inside the module tree.
+
+In barrel-less mode the absence of a barrel file is load-bearing configuration: a single stray `index.ts` — created by an IDE, a schematic, or habit — silently turns a barrel-less module into a barrel module and changes its encapsulation semantics.
+
+- `'allow'` (default): keeps the current behaviour, barrels stay legal.
+- `'warn'`: `sheriff verify` prints a warning for every barrel module.
+- `'forbid'`: every barrel module becomes a violation — the `barrel-policy` ESLint rule reports on the barrel file, and `sheriff verify` exits with a non-zero code.
+
+Setting `barrelPolicy` to `'warn'` or `'forbid'` without `enableBarrelLess: true` is a configuration error, because the policy would silently have no effect.
+
+```typescript
+export const config: SheriffConfig = {
+  enableBarrelLess: true,
+  barrelPolicy: 'forbid',
+  // ... other configuration
+};
+```
+
+Intentional barrels can be excluded via [`allowBarrelsIn`](#allowbarrelsin).
+
+#### `allowBarrelsIn` {#allowbarrelsin}
+
+- **Type**: `string[]`
+- **Default**: `[]`
+- **Description**: Glob patterns, relative to the project root and matched against the module path, for barrel modules that stay legal despite a restrictive `barrelPolicy`. `**` matches any number of path segments; `*` matches within a single segment.
+
+Use this for intentional bucket-level barrels, e.g. an `api` folder whose `index.ts` acts as a port with a short import path:
+
+```typescript
+export const config: SheriffConfig = {
+  enableBarrelLess: true,
+  barrelPolicy: 'forbid',
+  allowBarrelsIn: ['**/api'],
+  // ... other configuration
+};
+```
+
+With this configuration, `libs/domains/booking/src/api/index.ts` stays legal while a library-level barrel such as `libs/domains/booking/src/index.ts` is still flagged.
+
+Setting `allowBarrelsIn` while `barrelPolicy` is absent or `'allow'` is a configuration error, because the exceptions would be dead configuration.
+
 #### `encapsulationPattern` {#encapsulationpattern}
 
 - **Type**: `string`
