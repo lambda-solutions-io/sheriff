@@ -77,6 +77,17 @@ diff tests/actual/exports-lint.json tests/expected/exports-lint.json
 mv src/app/bookings/overview/overview.component.ts.original src/app/bookings/overview/overview.component.ts
 cp sheriff.config.ts.original sheriff.config.ts
 
+## Nested Internal Encapsulation Check
+echo 'checking for nested internal encapsulation error'
+cp tests/nested-internal.config.ts sheriff.config.ts
+mv src/app/bookings/overview/overview.component.ts src/app/bookings/overview/overview.component.ts.original
+cp tests/overview.nested-internal.component.ts src/app/bookings/overview/overview.component.ts
+npx ng lint --lint-file-patterns 'src/app/bookings/overview/overview.component.ts' --force --format json --output-file tests/actual/nested-internal-lint.json
+../remove-paths.mjs tests/actual/nested-internal-lint.json
+diff tests/actual/nested-internal-lint.json tests/expected/nested-internal-lint.json
+mv src/app/bookings/overview/overview.component.ts.original src/app/bookings/overview/overview.component.ts
+cp sheriff.config.ts.original sheriff.config.ts
+
 ## External Rule Checks
 echo 'checking for external rule error in CLI verify'
 cp tests/external-rules.config.ts sheriff.config.ts
