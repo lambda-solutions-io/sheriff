@@ -247,9 +247,12 @@ export interface UserSheriffConfig {
    * module into a barrel module and changes its encapsulation semantics.
    *
    * - `'allow'` (default): keeps the current behaviour, barrels stay legal.
-   * - `'warn'`: `sheriff verify` prints a warning for every barrel module.
-   * - `'forbid'`: every barrel module becomes a violation (ESLint reports on
-   *   the barrel file, `sheriff verify` exits with a non-zero code).
+   * - `'warn'`: observation phase, surfaced by `sheriff verify` only — it
+   *   prints a warning line for every barrel module but still exits
+   *   successfully. The ESLint rule stays silent.
+   * - `'forbid'`: every barrel module becomes a violation — the
+   *   `barrel-policy` ESLint rule reports on the barrel file and
+   *   `sheriff verify` exits with a non-zero code.
    *
    * Intentional barrels can be excluded via {@link allowBarrelsIn}.
    *
@@ -271,13 +274,15 @@ export interface UserSheriffConfig {
   /**
    * Glob patterns, relative to the project root and matched against the
    * module path, for barrel modules that stay legal despite a restrictive
-   * {@link barrelPolicy}. `**` matches any number of path segments.
+   * {@link barrelPolicy}. `**` matches any number of path segments;
+   * leading and trailing path separators in a pattern are ignored.
    *
    * Use this for intentional bucket-level barrels, e.g. an `api` folder
    * whose `index.ts` acts as a port with a short import path.
    *
-   * Setting `allowBarrelsIn` while `barrelPolicy` is absent or `'allow'` is
-   * an error, because the exceptions would be dead configuration.
+   * Setting a non-empty `allowBarrelsIn` while `barrelPolicy` is absent or
+   * `'allow'` is an error, because the exceptions would be dead
+   * configuration. An explicitly set empty array is legal.
    *
    * @example
    * ```typescript

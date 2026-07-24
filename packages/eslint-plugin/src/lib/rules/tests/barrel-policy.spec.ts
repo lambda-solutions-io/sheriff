@@ -15,7 +15,7 @@ describe('barrel-policy', () => {
     spy.mockReset();
   });
 
-  it('should check the linted file once on its first import', () => {
+  it('should check the linted file exactly once', () => {
     const code = 'export {a} from "./a"; export {b} from "./b";';
     spy.mockImplementation(() => '');
     tester.run('barrel-policy', barrelPolicy, {
@@ -26,12 +26,41 @@ describe('barrel-policy', () => {
     expect(spy).toHaveBeenCalledWith('<input>', code);
   });
 
-  it('should not check for violations if no import is present', () => {
+  it('should check a file without imports via the Program node', () => {
+    spy.mockImplementation(() => '');
     tester.run('barrel-policy', barrelPolicy, {
       valid: [{ code: 'const a = 1' }],
       invalid: [],
     });
-    expect(spy).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith('<input>', 'const a = 1');
+  });
+
+  it('should report an empty stray barrel file', () => {
+    spy.mockImplementation(() => 'stray barrel');
+    tester.run('barrel-policy', barrelPolicy, {
+      valid: [],
+      invalid: [
+        {
+          code: '',
+          errors: [
+            {
+              message: 'stray barrel',
+            },
+          ],
+        },
+      ],
+    });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('should keep an empty legal file silent', () => {
+    spy.mockImplementation(() => '');
+    tester.run('barrel-policy', barrelPolicy, {
+      valid: [{ code: '' }],
+      invalid: [],
+    });
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 
   it('should directly use the message from the barrel policy check', () => {

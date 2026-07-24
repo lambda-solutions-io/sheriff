@@ -39,6 +39,16 @@ function lint(filename: string): string {
   );
 }
 
+// the canonical Issue-31 footgun: a completely empty stray index.ts
+const emptyBarrelTree: FileTree = {
+  'main.ts': ['./ui/customer.component'],
+  ui: {
+    'customer.component.ts': [],
+    'empty.helper.ts': [],
+    'index.ts': [],
+  },
+};
+
 describe('violatesBarrelPolicy', () => {
   beforeAll(() => {
     useVirtualFs();
@@ -53,9 +63,32 @@ describe('violatesBarrelPolicy', () => {
     expect(lint('/project/src/ui/index.ts')).toBe(barrelPolicyMessage);
   });
 
-  it('should report on the barrel file itself under warn', () => {
+  it('should not report under warn - warn is verify-only', () => {
     setupProject({ barrelPolicy: 'warn' });
+    expect(lint('/project/src/ui/index.ts')).toBe('');
+  });
+
+  it('should report an empty stray barrel file under forbid', () => {
+    setupProject({ barrelPolicy: 'forbid' }, emptyBarrelTree);
     expect(lint('/project/src/ui/index.ts')).toBe(barrelPolicyMessage);
+  });
+
+  it('should not report an empty stray barrel file under the default policy', () => {
+    setupProject({}, emptyBarrelTree);
+    expect(lint('/project/src/ui/index.ts')).toBe('');
+  });
+
+  it('should not report an empty barrel file allowed via allowBarrelsIn', () => {
+    setupProject(
+      { barrelPolicy: 'forbid', allowBarrelsIn: ['**/ui'] },
+      emptyBarrelTree,
+    );
+    expect(lint('/project/src/ui/index.ts')).toBe('');
+  });
+
+  it('should not report an empty non-barrel file', () => {
+    setupProject({ barrelPolicy: 'forbid' }, emptyBarrelTree);
+    expect(lint('/project/src/ui/empty.helper.ts')).toBe('');
   });
 
   it('should not report on a regular file of the module', () => {

@@ -89,4 +89,30 @@ describe('create rule', () => {
 
     expect(spy).toHaveBeenCalledTimes(2);
   });
+
+  it('should not run on files without imports by default', () => {
+    tester.run('test-rule', testRule, {
+      valid: [{ code: 'const a = 1' }],
+      invalid: [],
+    });
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('should run on the Program node with checkOnProgramNode', () => {
+    const programRule = createRule(
+      'Program Rule',
+      () => {
+        ruleExecutor.foo();
+      },
+      { checkOnProgramNode: true },
+    );
+
+    tester.run('program-rule', programRule, {
+      valid: [{ code: 'const a = 1' }],
+      invalid: [],
+    });
+
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
 });

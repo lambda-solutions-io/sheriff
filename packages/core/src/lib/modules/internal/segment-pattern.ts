@@ -42,9 +42,14 @@ export function matchesFolderPathPattern(
  * Like {@link matchesFolderPathPattern}, but a pattern segment of `**`
  * matches any number of path segments (including none). All other segments
  * keep the single-segment semantics of {@link matchesFolderSegmentPattern}.
+ *
+ * Leading and trailing separators (`/` or `\`) in the pattern are ignored,
+ * so `src/api/` and `/src/api` match the same paths as `src/api`.
  */
 export function matchesFolderPathGlob(pattern: string, path: string): boolean {
-  const patternSegments = normalizePathSeparators(pattern).split('/');
+  const patternSegments = normalizePathSeparators(pattern)
+    .replace(/^\/+|\/+$/g, '')
+    .split('/');
   const pathSegments = normalizePathSeparators(path).split('/');
 
   return matchesSegments(patternSegments, pathSegments);

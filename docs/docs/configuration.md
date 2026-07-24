@@ -297,8 +297,10 @@ export const config: SheriffConfig = {
 In barrel-less mode the absence of a barrel file is load-bearing configuration: a single stray `index.ts` — created by an IDE, a schematic, or habit — silently turns a barrel-less module into a barrel module and changes its encapsulation semantics.
 
 - `'allow'` (default): keeps the current behaviour, barrels stay legal.
-- `'warn'`: `sheriff verify` prints a warning for every barrel module.
+- `'warn'`: observation phase, surfaced by `sheriff verify` only — it prints a warning line for every barrel module (and a warning-aware success line) but still exits successfully. The `barrel-policy` ESLint rule stays silent.
 - `'forbid'`: every barrel module becomes a violation — the `barrel-policy` ESLint rule reports on the barrel file, and `sheriff verify` exits with a non-zero code.
+
+Teams that want editor visibility during an observation phase can set `barrelPolicy: 'forbid'` and downgrade the rule severity in their ESLint config instead: `'@lambda-solutions/sheriff/barrel-policy': 'warn'`.
 
 Setting `barrelPolicy` to `'warn'` or `'forbid'` without `enableBarrelLess: true` is a configuration error, because the policy would silently have no effect.
 
@@ -316,7 +318,7 @@ Intentional barrels can be excluded via [`allowBarrelsIn`](#allowbarrelsin).
 
 - **Type**: `string[]`
 - **Default**: `[]`
-- **Description**: Glob patterns, relative to the project root and matched against the module path, for barrel modules that stay legal despite a restrictive `barrelPolicy`. `**` matches any number of path segments; `*` matches within a single segment.
+- **Description**: Glob patterns, relative to the project root and matched against the module path, for barrel modules that stay legal despite a restrictive `barrelPolicy`. `**` matches any number of path segments; `*` matches within a single segment. Leading and trailing path separators in a pattern are ignored, so `src/api/` behaves like `src/api`.
 
 Use this for intentional bucket-level barrels, e.g. an `api` folder whose `index.ts` acts as a port with a short import path:
 
@@ -331,7 +333,7 @@ export const config: SheriffConfig = {
 
 With this configuration, `libs/domains/booking/src/api/index.ts` stays legal while a library-level barrel such as `libs/domains/booking/src/index.ts` is still flagged.
 
-Setting `allowBarrelsIn` while `barrelPolicy` is absent or `'allow'` is a configuration error, because the exceptions would be dead configuration.
+Setting a non-empty `allowBarrelsIn` while `barrelPolicy` is absent or `'allow'` is a configuration error, because the exceptions would be dead configuration. An explicitly set empty array (`allowBarrelsIn: []`) is legal — it simply keeps the defaults.
 
 #### `encapsulationPattern` {#encapsulationpattern}
 
