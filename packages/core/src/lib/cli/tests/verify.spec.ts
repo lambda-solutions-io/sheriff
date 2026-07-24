@@ -503,7 +503,83 @@ describe('verify', () => {
         'Warning: src/customers/api/index.ts: index.ts turns a barrel-less module into a barrel module and changes its encapsulation semantics. Remove it or add the module to `allowBarrelsIn`.',
       );
       expect(allLogs()).toContain('Warning: src/customers/ui/index.ts:');
+      expect(allLogs()).toContain('No issues found. 2 warnings.');
+      expect(allLogs()).not.toContain('Well done!');
       expect(allLogs()).not.toContain('Total Barrel Policy Violations');
+    });
+
+    it('should use the singular for a single warning', () => {
+      const { allLogs, mockedCli } = mockCli();
+      createBarrelPolicyProject('warn', ['**/api']);
+
+      main('verify', 'src/main.ts');
+
+      expect(mockedCli.endProcessOk).toHaveBeenCalled();
+      expect(allLogs()).toContain('No issues found. 1 warning.');
+    });
+
+    it('should short-circuit to OK when --files resolves to zero files', () => {
+      // `--files` with an empty list is a successful no-op which returns
+      // before any check runs - including the barrel policy check.
+      const { allLogs, mockedCli } = mockCli();
+      createBarrelPolicyProject('forbid');
+
+      verifyFile.verify(['src/main.ts'], { files: [] });
+
+      expect(allLogs()).toContain('No files to verify.');
+      expect(mockedCli.endProcessOk).toHaveBeenCalledOnce();
+      expect(mockedCli.endProcessError).not.toHaveBeenCalled();
+    });
+
+    it('should run the barrel policy check in --files mode', () => {
+      const { allLogs, mockedCli } = mockCli();
+      createBarrelPolicyProject('forbid');
+
+      verifyFile.verify(['src/main.ts'], {
+        files: ['src/customers/feature/customers.component.ts'],
+      });
+
+      expect(allLogs()).toContain('Total Barrel Policy Violations: 2');
+      expect(mockedCli.endProcessError).toHaveBeenCalledOnce();
+      expect(mockedCli.endProcessOk).not.toHaveBeenCalled();
+    });
+
+    it('should not double-count a barrel file which also has import violations', () => {
+      const { allLogs, mockedCli } = mockCli();
+      createProject({
+        'tsconfig.json': tsConfig(),
+        'sheriff.config.ts': sheriffConfig({
+          modules: {
+            'src/customers/<type>': ['type:<type>'],
+          },
+          depRules: { '*': '*' },
+          enableBarrelLess: true,
+          barrelPolicy: 'forbid',
+        }),
+        src: {
+          'main.ts': ['./customers/ui'],
+          customers: {
+            api: {
+              'index.ts': ['./customers.port'],
+              'customers.port.ts': [],
+            },
+            ui: {
+              // deep import into the api barrel module: an encapsulation
+              // violation on the very file that also violates the policy
+              'index.ts': ['../api/customers.port'],
+            },
+          },
+        },
+      });
+
+      main('verify', 'src/main.ts');
+
+      expect(mockedCli.endProcessError).toHaveBeenCalled();
+      // ui/index.ts (encapsulation + policy) and api/index.ts (policy):
+      // the shared entry must be counted once, not twice
+      expect(allLogs()).toContain('Total Invalid Files: 2');
+      expect(allLogs()).toContain('Total Encapsulation Violations: 1');
+      expect(allLogs()).toContain('Total Barrel Policy Violations: 2');
     });
 
     it('should not report stray barrels with the default policy', () => {

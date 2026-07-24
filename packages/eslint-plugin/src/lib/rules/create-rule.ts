@@ -1,6 +1,20 @@
 import { Rule } from 'eslint';
+import { Program } from 'estree';
 import {Executor, ExecutorNode} from './executor';
 import { UserError } from '@lambda-solutions/sheriff-core';
+
+export type CreateRuleOptions = {
+  /**
+   * Also run the executor on the `Program` node, i.e. once per file even
+   * when it contains no import or export at all.
+   *
+   * File-level rules like `barrel-policy` need this: an empty barrel file
+   * has no import/export nodes, so it would otherwise never be checked.
+   * The `Program` node is traversed first, so such an executor sees
+   * `isFirstRun === true` exactly once per file.
+   */
+  checkOnProgramNode?: boolean;
+};
 
 /**
  * Factory function generating a rule that traverses
@@ -16,13 +30,14 @@ import { UserError } from '@lambda-solutions/sheriff-core';
 export const createRule: (
   ruleName: string,
   executor: Executor,
-) => Rule.RuleModule = (ruleName, executor) => ({
+  options?: CreateRuleOptions,
+) => Rule.RuleModule = (ruleName, executor, options = {}) => ({
   create: (context) => {
     let isFirstRun = true;
     let hasInternalError = false;
     const lintRun = context.sourceCode ?? context.getSourceCode();
     const executeRuleWithContext = (
-      node: ExecutorNode,
+      node: ExecutorNode | Program,
     ) => {
       const filename = context.filename ?? context.getFilename();
       const sourceCode =
@@ -31,11 +46,20 @@ export const createRule: (
       if (!hasInternalError) {
         try {
           // don't process special export `export const value = {n: 1};`
-          if (!node.source) {
+          if (node.type !== 'Program' && !node.source) {
             return;
           }
 
-          executor(context, node, isFirstRun, filename, sourceCode, lintRun);
+          // a `Program` node only arrives with `checkOnProgramNode` opted
+          // in; such executors are file-level and don't read `node.source`.
+          executor(
+            context,
+            node as ExecutorNode,
+            isFirstRun,
+            filename,
+            sourceCode,
+            lintRun,
+          );
         } catch (error) {
           hasInternalError = true;
           const message =
@@ -54,6 +78,9 @@ export const createRule: (
     };
 
     return {
+      ...(options.checkOnProgramNode
+        ? { Program: executeRuleWithContext }
+        : {}),
       ImportExpression: executeRuleWithContext,
       ImportDeclaration: executeRuleWithContext,
       ExportAllDeclaration: executeRuleWithContext,

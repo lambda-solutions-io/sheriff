@@ -5,6 +5,8 @@ import { FileTree, sheriffConfig } from '../../test/project-configurator';
 import { tsConfig } from '../../test/fixtures/ts-config';
 import { testInit } from '../../test/test-init';
 import { checkForBarrelPolicyViolation } from '../check-for-barrel-policy-violation';
+import { checkForDependencyRuleViolation } from '../check-for-dependency-rule-violation';
+import { toFsPath } from '../../file-info/fs-path';
 import '../../test/expect.extensions';
 
 function initProject(config: Partial<UserSheriffConfig>, src: FileTree) {
@@ -204,6 +206,46 @@ describe('checkForBarrelPolicyViolation', () => {
           bucketTree,
         ),
       ).toEqual(['src/customers/index.ts']);
+    });
+
+    it('should keep blocking ui -> api via dependency rules while the api barrel is allowed', () => {
+      const projectInfo = initProject(
+        {
+          modules: { 'src/customers/<type>': ['type:<type>'] },
+          depRules: {
+            root: '*',
+            'type:api': '*',
+            'type:ui': [],
+          },
+          barrelPolicy: 'forbid',
+          allowBarrelsIn: ['**/api'],
+        },
+        {
+          'main.ts': ['./customers/ui/customer.component'],
+          customers: {
+            api: {
+              'index.ts': ['./customers.port'],
+              'customers.port.ts': [],
+            },
+            ui: {
+              'customer.component.ts': ['../api'],
+            },
+          },
+        },
+      );
+
+      // the allowed barrel produces no barrel policy violation ...
+      expect(checkForBarrelPolicyViolation(projectInfo)).toEqual([]);
+
+      // ... but allowBarrelsIn only legalizes the barrel file itself:
+      // ui -> api still has to pass the dependency rules.
+      const dependencyRuleViolations = checkForDependencyRuleViolation(
+        toFsPath('/project/src/customers/ui/customer.component.ts'),
+        projectInfo,
+      );
+      expect(dependencyRuleViolations).toHaveLength(1);
+      expect(dependencyRuleViolations[0].fromTag).toBe('type:ui');
+      expect(dependencyRuleViolations[0].toTags).toEqual(['type:api']);
     });
 
     it('should support single-segment wildcards in allowBarrelsIn', () => {

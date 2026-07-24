@@ -29,7 +29,7 @@ Path handling:
 - Requested paths are canonicalized (symlinks resolved, on-disk casing applied) before they are matched against the project graph, so equivalent-but-differently-spelled paths from git or lint-staged still match.
 - A file that **does not exist** (deleted/renamed) is skipped with a warning.
 - A file that **exists on disk but is not in the project graph** is treated as an **error** (non-zero exit), not a silent skip. In a pre-commit gate this usually signals a resolution problem or a brand-new file that should be wired into the graph.
-- Supplying `--files` with an empty list (a bare `--files`, or a substitution matching zero TypeScript files) is a successful no-op — it does **not** fall through to a full-project verification.
+- Supplying `--files` with an empty list (a bare `--files`, or a substitution matching zero TypeScript files) is a successful no-op — it does **not** fall through to a full-project verification, and it also skips the module-level [`barrelPolicy`](./configuration.md#barrelpolicy) check. With a non-empty file list, the barrel policy check still runs for the whole project, because a stray barrel is a project-level finding not attributable to a single changed file.
 
 Argument order: the optional entry file must come **before** `--files`. Everything after `--files` is treated as a file:
 

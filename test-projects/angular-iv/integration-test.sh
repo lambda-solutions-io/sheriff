@@ -132,3 +132,18 @@ npx ng lint --lint-file-patterns '**/different-file-extension-imports.ts' --forc
 ../remove-paths.mjs tests/actual/ignore-file-extensions-lint.json
 diff tests/actual/ignore-file-extensions-lint.json tests/expected/ignore-file-extensions-lint.json
 cp sheriff.config.ts.original sheriff.config.ts
+
+## Barrel Policy Check
+# Issue #31 repro: a stray index.ts silently turns the barrel-less module
+# customers/contract into a barrel module. Under barrelPolicy: 'forbid' the
+# stray barrel must be reported on the barrel file itself, while the
+# intentional customers/api barrel stays legal via allowBarrelsIn: ['**/api']
+# (its absence from the lint output is the assertion).
+echo 'checking for barrel policy error'
+cp tests/barrel-policy.config.ts sheriff.config.ts
+cp tests/contract-stray.index.ts src/app/customers/contract/index.ts
+npx ng lint --lint-file-patterns 'src/app/customers/contract/index.ts' --lint-file-patterns 'src/app/customers/api/index.ts' --force --format json --output-file tests/actual/barrel-policy-lint.json
+../remove-paths.mjs tests/actual/barrel-policy-lint.json
+diff tests/actual/barrel-policy-lint.json tests/expected/barrel-policy-lint.json
+rm src/app/customers/contract/index.ts
+cp sheriff.config.ts.original sheriff.config.ts

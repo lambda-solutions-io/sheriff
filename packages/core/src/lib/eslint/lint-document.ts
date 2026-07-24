@@ -259,7 +259,12 @@ function createInternalDocumentLintResult(
       return externalRuleViolations;
     },
     get barrelPolicyViolations() {
-      barrelPolicyViolations ??= checkForBarrelPolicyViolation(projectInfo);
+      // The ESLint surface only reports under `barrelPolicy: 'forbid'`;
+      // `'warn'` is verify-only and must not turn into editor errors.
+      barrelPolicyViolations ??=
+        projectInfo.config.barrelPolicy === 'forbid'
+          ? checkForBarrelPolicyViolation(projectInfo)
+          : [];
       return barrelPolicyViolations;
     },
     unresolvableImports: projectInfo.fileInfo.unresolvableImports.filter(

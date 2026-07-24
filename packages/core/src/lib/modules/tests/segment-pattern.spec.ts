@@ -27,6 +27,12 @@ describe('matchesFolderPathGlob', () => {
     ['**', 'any/path/at/all', true],
     // windows separators are normalized
     ['src\\api', 'src/api', true],
+    // leading/trailing separators in the pattern are ignored
+    ['src/api/', 'src/api', true],
+    ['/src/api', 'src/api', true],
+    ['/src/api/', 'src/api', true],
+    ['src\\api\\', 'src/api', true],
+    ['**/api/', 'libs/booking/api', true],
   ])('should match %s against %s -> %s', (pattern, path, expected) => {
     expect(matchesFolderPathGlob(pattern, path)).toBe(expected);
   });

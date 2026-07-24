@@ -268,13 +268,18 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
         }
       }
     } else {
+      const warningCount = validation.barrelPolicyWarnings.length;
+      const successSuffix =
+        warningCount === 0
+          ? 'Well done!'
+          : `${warningCount} warning${warningCount === 1 ? '' : 's'}.`;
       if (projectValidations.size > 1) {
         cli.log('');
         cli.log(
-          '\u001b[32mNo issues found for this project. Well done!\u001b[0m',
+          `\u001b[32mNo issues found for this project. ${successSuffix}\u001b[0m`,
         );
       } else {
-        cli.log('\u001b[32mNo issues found. Well done!\u001b[0m');
+        cli.log(`\u001b[32mNo issues found. ${successSuffix}\u001b[0m`);
       }
     }
   }

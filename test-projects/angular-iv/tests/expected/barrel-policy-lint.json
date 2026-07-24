@@ -1,0 +1,25 @@
+[
+  {
+    "filePath": "./src/app/customers/contract/index.ts",
+    "messages": [
+      {
+        "ruleId": "@lambda-solutions/sheriff/barrel-policy",
+        "severity": 2,
+        "message": "index.ts turns a barrel-less module into a barrel module and changes its encapsulation semantics. Remove it or add the module to `allowBarrelsIn`.",
+        "line": 2,
+        "column": 1,
+        "nodeType": "Program",
+        "endLine": 2,
+        "endColumn": 1
+      }
+    ],
+    "suppressedMessages": [],
+    "errorCount": 1,
+    "fatalErrorCount": 0,
+    "warningCount": 0,
+    "fixableErrorCount": 0,
+    "fixableWarningCount": 0,
+    "source": "// a stray barrel file accidentally created by an IDE or schematic\n",
+    "usedDeprecatedRules": []
+  }
+]

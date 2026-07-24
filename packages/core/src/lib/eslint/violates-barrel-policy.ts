@@ -5,10 +5,11 @@ import { getDocumentLintAnalysis } from './lint-document';
  * This is the adapter for the ESLint plugin's `barrel-policy` rule.
  *
  * It reports on the barrel file itself: if the linted file is the barrel
- * file of a module which violates the configured `barrelPolicy`
- * (`'warn'` or `'forbid'` in barrel-less mode and not excluded via
- * `allowBarrelsIn`), the violation message is returned. For any other file,
- * or with `barrelPolicy: 'allow'`, an empty string is returned.
+ * file of a module which violates `barrelPolicy: 'forbid'` (barrel-less
+ * mode and not excluded via `allowBarrelsIn`), the violation message is
+ * returned. For any other file, or with `barrelPolicy` set to `'allow'` or
+ * `'warn'`, an empty string is returned — `'warn'` is an observation phase
+ * surfaced by `sheriff verify` only and never turns into ESLint reports.
  *
  * @param filename Name of the linted file
  * @param fileContent Content of the linted file
