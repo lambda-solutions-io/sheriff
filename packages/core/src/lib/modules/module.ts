@@ -114,8 +114,30 @@ export class Module {
 
     const { encapsulationPattern } = this.exposureConfig;
     if (typeof encapsulationPattern === 'string') {
-      return !relativePath.startsWith(encapsulationPattern);
+      return !isEncapsulatedByStringPattern(relativePath, encapsulationPattern);
     }
     return !relativePath.match(encapsulationPattern);
   }
+}
+
+/**
+ * A string `encapsulationPattern` encapsulates a file if
+ *
+ * - the module-relative path starts with the pattern
+ *   (original prefix behavior, kept for backwards compatibility;
+ *   it also covers folders like `internals` for pattern `internal`), or
+ * - any directory segment of the path equals the pattern exactly,
+ *   which encapsulates pattern folders at any depth. The filename
+ *   itself does not count as a segment.
+ */
+function isEncapsulatedByStringPattern(
+  relativePath: string,
+  encapsulationPattern: string,
+): boolean {
+  if (relativePath.startsWith(encapsulationPattern)) {
+    return true;
+  }
+
+  const directorySegments = relativePath.split('/').slice(0, -1);
+  return directorySegments.includes(encapsulationPattern);
 }

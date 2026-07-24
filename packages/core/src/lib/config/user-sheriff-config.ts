@@ -248,12 +248,20 @@ export interface UserSheriffConfig {
 
   /**
    * By default, it is set to `internal`, meaning
-   * all files within the subfolder `internal` of
+   * all files within a folder `internal` of
    * a module are encapsulated.
    *
-   * You can choose a string value, a global value
-   * or a regex to define the location/pattern for
-   * encapsulation in barrel-less modules.
+   * You can choose a string value or a regex to
+   * define the location/pattern for encapsulation
+   * in barrel-less modules.
+   *
+   * A **string** pattern encapsulates a file if
+   *
+   * - the module-relative path starts with the pattern, or
+   * - any directory segment of the path equals the pattern
+   *   exactly — the pattern folder is encapsulated at any
+   *   depth of the module. The filename itself does not
+   *   count as a segment.
    *
    * Examples:
    *
@@ -262,9 +270,13 @@ export interface UserSheriffConfig {
    *
    * - `private/main.ts`
    * - `private/sub/sub.ts`
+   * - `sub/private/main.ts` (directory segment at any depth)
+   * - `privates/main.ts` (prefix match)
    *
    * But would expose
    * - `main.ts`
+   * - `sub/private.ts` (a filename is not a directory segment)
+   * - `sub/privates/main.ts` (nested segment must match exactly)
    * - `internal/hidden.ts`
    *
    * ---
