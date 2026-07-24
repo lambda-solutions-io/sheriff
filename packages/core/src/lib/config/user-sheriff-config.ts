@@ -242,6 +242,11 @@ export interface UserSheriffConfig {
    * which are not available outside the module.
    * By default, it is set to `internal`.
    *
+   * This option is an alias for {@link encapsulationPattern}:
+   * its value is copied onto `encapsulationPattern` and
+   * therefore inherits the any-depth directory-segment
+   * matching of string patterns.
+   *
    * @deprecated use {@link encapsulationPattern} instead
    */
   encapsulatedFolderNameForBarrelLess?: string;
@@ -262,6 +267,11 @@ export interface UserSheriffConfig {
    *   exactly — the pattern folder is encapsulated at any
    *   depth of the module. The filename itself does not
    *   count as a segment.
+   *
+   * A string pattern containing a path separator (e.g.
+   * `'internal/'` or `'sub/internal'`) can never equal a
+   * single directory segment and therefore only gets the
+   * legacy prefix behavior.
    *
    * Examples:
    *

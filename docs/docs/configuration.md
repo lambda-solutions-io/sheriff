@@ -292,7 +292,7 @@ export const config: SheriffConfig = {
 
 - **Type**: `string | RegExp`
 - **Default**: `'internal'`
-- **Description**: Pattern for files that are not available outside their barrel-less module. A string encapsulates a file when the module-relative path starts with the pattern, or when any directory segment of the path equals the pattern exactly — so an `internal` folder is encapsulated at any depth of the module (e.g. `data/foo/internal/secret.ts`). The filename itself does not count as a segment: `data/internal.ts` stays public, while a top-level `internal.ts` remains encapsulated via the prefix rule. A regular expression is matched against the module-relative path. `exports` of a module definition take precedence over this pattern.
+- **Description**: Pattern for files that are not available outside their barrel-less module. A string encapsulates a file when the module-relative path starts with the pattern, or when any directory segment of the path equals the pattern exactly — so an `internal` folder is encapsulated at any depth of the module (e.g. `data/foo/internal/secret.ts`). The filename itself does not count as a segment: `data/internal.ts` stays public, while a top-level `internal.ts` remains encapsulated via the prefix rule. A string pattern containing a path separator (e.g. `'internal/'` or `'sub/internal'`) can never equal a single directory segment and therefore only gets the legacy prefix behavior. A regular expression is matched against the module-relative path. `exports` of a module definition take precedence over this pattern.
 
 #### `barrelFileName` {#barrelfilename}
 
