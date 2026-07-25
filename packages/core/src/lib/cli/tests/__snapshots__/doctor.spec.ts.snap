@@ -1,0 +1,47 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`doctor > --json > should match the report snapshot 1`] = `
+"{
+  "findings": {
+    "noTagModules": 1,
+    "unenforcedEncapsulations": 1,
+    "barrelPolicyViolations": 2,
+    "missingTsConfigs": 0,
+    "total": 4
+  },
+  "checks": {
+    "noTagModules": [
+      {
+        "project": "default",
+        "module": "src/holidays"
+      }
+    ],
+    "unenforcedEncapsulations": [
+      {
+        "project": "default",
+        "folder": "src/customers/internal",
+        "reason": "module-has-barrel"
+      }
+    ],
+    "barrelFiles": [
+      {
+        "project": "default",
+        "barrelFile": "src/customers/index.ts",
+        "policy": "warn",
+        "severity": "error",
+        "message": "index.ts turns a barrel-less module into a barrel module and changes its encapsulation semantics. Remove it or add the module to \`allowBarrelsIn\`."
+      },
+      {
+        "project": "default",
+        "barrelFile": "src/holidays/index.ts",
+        "policy": "warn",
+        "severity": "error",
+        "message": "index.ts turns a barrel-less module into a barrel module and changes its encapsulation semantics. Remove it or add the module to \`allowBarrelsIn\`."
+      }
+    ],
+    "allowedBarrels": [],
+    "missingTsConfigs": []
+  },
+  "exitCode": 1
+}"
+`;
