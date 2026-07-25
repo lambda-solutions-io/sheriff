@@ -1,0 +1,17 @@
+
+[1mVerification Report[0m
+
+Issues found:
+  Total Invalid Files: 2
+  Total Encapsulation Violations: 1
+  Total Dependency Rule Violations: 2
+----------------------------------
+
+|-- libs/domains/booking/src/ui/booking-card.ts
+|   |-- Encapsulation Violations
+|   |   |-- ./widgets/booking-badge
+|   |-- Dependency Rule Violations
+|   |   |-- from tag domain:booking to tags noTag
+|-- libs/domains/booking/src/ui/widgets/booking-badge.ts
+|   |-- Dependency Rule Violations
+|   |   |-- from tag noTag to tags domain:booking, type:types
