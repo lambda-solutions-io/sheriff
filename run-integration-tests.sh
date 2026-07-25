@@ -28,6 +28,10 @@ bash ./integration-test.sh
 cd ../typescript-i
 bash ./integration-test.sh
 
+echo "Testing Nx-style monorepo layout in barrel-less mode (app + extracted lib)"
+cd ../nx-i
+bash ./integration-test.sh
+
 echo "Testing multiple configs in an Angular workspace"
 cd ../angular-v-multi
 bash ./integration-test.sh

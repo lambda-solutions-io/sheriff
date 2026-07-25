@@ -1,0 +1,15 @@
+{
+  "name": "domain-booking",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "libs/domains/booking/src",
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "options": {
+        "main": "libs/domains/booking/src/booking.routes.ts",
+        "tsConfig": "tsconfig.json"
+      }
+    }
+  }
+}

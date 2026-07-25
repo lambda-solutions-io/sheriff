@@ -1,0 +1,12 @@
+
+[1mVerification Report[0m
+
+Issues found:
+  Total Invalid Files: 1
+  Total Encapsulation Violations: 0
+  Total Dependency Rule Violations: 1
+----------------------------------
+
+|-- apps/client/src/app/domains/checkin/feat-history/feat-history.ts
+|   |-- Dependency Rule Violations
+|   |   |-- from tag feat:history to tags domain:checkin, feat:checkin, type:data

@@ -1,0 +1,12 @@
+
+[1mVerification Report[0m
+
+Issues found:
+  Total Invalid Files: 1
+  Total Encapsulation Violations: 1
+  Total Dependency Rule Violations: 0
+----------------------------------
+
+|-- apps/client/src/app/domains/checkin/feat-checkin/feat-checkin.ts
+|   |-- Encapsulation Violations
+|   |   |-- ../ui/arrival-list

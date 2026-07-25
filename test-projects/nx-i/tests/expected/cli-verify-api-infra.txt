@@ -1,0 +1,12 @@
+
+[1mVerification Report[0m
+
+Issues found:
+  Total Invalid Files: 1
+  Total Encapsulation Violations: 0
+  Total Dependency Rule Violations: 1
+----------------------------------
+
+|-- apps/client/src/app/domains/checkin/api/checkin-api.ts
+|   |-- Dependency Rule Violations
+|   |   |-- from tag type:api to tags domain:checkin, type:infra
