@@ -1,0 +1,13 @@
+
+[1mDoctor Report[0m
+
+Modules without tags:
+  none
+Unenforced encapsulation folders:
+  none
+Barrel files in barrel-less modules (barrelPolicy: allow):
+  none
+Entry points without tsconfig.json:
+  none
+
+[32mDoctor found no issues. Well done![0m

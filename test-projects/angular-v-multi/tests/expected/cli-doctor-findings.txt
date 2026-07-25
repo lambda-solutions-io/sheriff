@@ -1,0 +1,14 @@
+
+[1mDoctor Report[0m
+
+Modules without tags:
+  |-- projects/app-i/src/app/non-compliant/ui
+Unenforced encapsulation folders:
+  |-- projects/app-i/src/app/non-compliant/util/internal (the module has a barrel file; the barrel alone controls exposure)
+Barrel files in barrel-less modules (barrelPolicy: warn):
+  |-- projects/app-i/src/app/non-compliant/ui/index.ts: index.ts turns a barrel-less module into a barrel module and changes its encapsulation semantics. Remove it or add the module to `allowBarrelsIn`.
+  |-- projects/app-i/src/app/non-compliant/util/index.ts: index.ts turns a barrel-less module into a barrel module and changes its encapsulation semantics. Remove it or add the module to `allowBarrelsIn`.
+Entry points without tsconfig.json:
+  none
+
+Doctor found 4 issues.
