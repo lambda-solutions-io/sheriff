@@ -16,7 +16,6 @@ import { lastPathSeparatorIndex } from '../util/path-separators';
 interface CreateModulesContext {
   entryFileInfo: UnassignedFileInfo;
   rootDir: FsPath;
-  barrelFile: string;
   exposureConfig: ModuleExposureConfig;
 }
 
@@ -24,7 +23,7 @@ export function createModules(
   modulePathMap: ModulePathMap,
   fileInfoMap: Map<FsPath, FileInfo>,
   getFileInfo: (path: FsPath) => FileInfo,
-  { entryFileInfo, rootDir, barrelFile, exposureConfig }: CreateModulesContext,
+  { entryFileInfo, rootDir, exposureConfig }: CreateModulesContext,
 ): Module[] {
   const moduleMap = fromEntries(
     entries(modulePathMap).map(([path, rawModulePathInfo]) => {
@@ -35,7 +34,6 @@ export function createModules(
         getFileInfo,
         false,
         modulePathInfo.hasBarrel,
-        barrelFile,
         exposureConfig,
       );
       module.exportedFilePatterns = modulePathInfo.exports;
@@ -49,7 +47,6 @@ export function createModules(
     getFileInfo,
     true,
     false,
-    barrelFile,
     exposureConfig,
   );
 

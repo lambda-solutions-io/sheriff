@@ -246,8 +246,11 @@ function assertModule(createTestParams: () => TestParameter) {
   const modules = createModules(modulePathMap, fileInfoMap, getFileInfo, {
     entryFileInfo: fileInfo,
     rootDir: toFsPath('/'),
-    barrelFile: 'index.ts',
-    exposureConfig: { enableBarrelLess: false, encapsulationPattern: 'internal' },
+    exposureConfig: {
+      barrelFile: 'index.ts',
+      enableBarrelLess: false,
+      encapsulationPattern: 'internal',
+    },
   });
 
   const expectedModules = testParams.expectedModules.map((mi) => {
@@ -263,8 +266,11 @@ function assertModule(createTestParams: () => TestParameter) {
       getFileInfo,
       mi.path === '/',
       mi.path !== '/',
-      'index.ts',
-      { enableBarrelLess: false, encapsulationPattern: 'internal' },
+      {
+        barrelFile: 'index.ts',
+        enableBarrelLess: false,
+        encapsulationPattern: 'internal',
+      },
     );
     for (const fi of fileInfos) {
       module.addFileInfo(fi);
