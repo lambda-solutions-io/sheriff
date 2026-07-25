@@ -63,24 +63,18 @@ npx sheriff verify apps/client/src/main.ts > tests/actual/cli-verify-encapsulati
 diff tests/actual/cli-verify-encapsulation-internal.txt tests/expected/cli-verify-encapsulation-internal.txt
 mv apps/client/src/app/domains/checkin/checkin.routes.ts.original apps/client/src/app/domains/checkin/checkin.routes.ts
 
-# (f) ENCAPSULATION (NESTED, currently NOT caught): importing a file under a
-# NESTED `internal/` folder (data/foo/internal/nested-helper.ts — note:
-# "foo/internal", not a top-level "internal") from outside the owning
-# module. Per https://github.com/lambda-solutions-io/sheriff/issues/31
-# finding 2, `Module.exposes()` computes the imported file's path RELATIVE
-# TO THE MODULE and checks `relativePath.startsWith('internal')` — for this
-# file that relative path is `foo/internal/nested-helper.ts`, which does NOT
-# start with `internal`, so the file counts as PUBLIC. This golden file
-# pins down the CURRENT (silently-allowed) behavior on purpose.
-# *** THIS GOLDEN IS EXPECTED TO CHANGE (to a violation) IF/WHEN #31 finding
-# *** 2 IS FIXED. If this diff starts failing because sheriff now reports an
-# *** encapsulation violation here, that is the fix landing — update the
-# *** golden file, don't "fix" the test.
-echo 'checking CLI verify: NESTED internal/ import is currently silently allowed (issue #31 finding 2)'
+# (f) ENCAPSULATION (NESTED): importing a file under a NESTED `internal/`
+# folder (data/foo/internal/nested-helper.ts — note "foo/internal", not a
+# top-level "internal") from outside the owning module. A directory segment
+# equal to the encapsulation pattern encapsulates at any depth, so this is a
+# violation. Before the depth fix for
+# https://github.com/lambda-solutions-io/sheriff/issues/31 finding 2 this was
+# silently allowed, which is exactly the class of failure that issue reports.
+echo 'checking CLI verify failure: encapsulation, NESTED internal/ (issue #31 finding 2)'
 cp apps/client/src/app/domains/checkin/checkin.routes.ts apps/client/src/app/domains/checkin/checkin.routes.ts.original
 cp tests/checkin-routes.nested-internal-import.ts apps/client/src/app/domains/checkin/checkin.routes.ts
-npx sheriff verify apps/client/src/main.ts > tests/actual/cli-verify-nested-internal-allowed.txt
-diff tests/actual/cli-verify-nested-internal-allowed.txt tests/expected/cli-verify-nested-internal-allowed.txt
+npx sheriff verify apps/client/src/main.ts > tests/actual/cli-verify-nested-internal.txt || true
+diff tests/actual/cli-verify-nested-internal.txt tests/expected/cli-verify-nested-internal.txt
 mv apps/client/src/app/domains/checkin/checkin.routes.ts.original apps/client/src/app/domains/checkin/checkin.routes.ts
 
 # (g) STRAY BARREL: a module in this barrel-less workspace (checkin/ui/,
