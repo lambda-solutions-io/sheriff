@@ -1,0 +1,34 @@
+This project contains 23 modules:
+
+. (root)
+├── apps
+  └── client
+    └── src
+      └── app
+        └── domains
+          └── [1mcheckin[0m (domain:checkin, type:feature, entry)
+            ├── [1mapi[0m (domain:checkin, type:api, port)
+            ├── [1mdata[0m (domain:checkin, type:data)
+            ├── [1mfeat-checkin[0m (domain:checkin, feat:checkin, type:feature)
+              ├── [1mapi[0m (domain:checkin, feat:checkin, type:api, feat-port)
+              └── [1mdata[0m (domain:checkin, feat:checkin, type:data)
+            ├── [1mfeat-history[0m (domain:checkin, feat:history, type:feature)
+            ├── [1minfra[0m (domain:checkin, type:infra)
+            ├── [1mtypes[0m (domain:checkin, type:types)
+            ├── [1mui[0m (domain:checkin, type:ui)
+            └── [1mutils[0m (domain:checkin, type:utils)
+└── libs
+  └── domains
+    └── booking
+      └── [1msrc[0m (domain:booking, type:feature, entry)
+        ├── [1mdata[0m (domain:booking, type:data)
+        ├── [1mfeat-check-booking[0m (domain:booking, feat:check-booking, type:feature)
+          ├── [1mapi[0m (domain:booking, feat:check-booking, type:api, feat-port)
+          └── [1mdata[0m (domain:booking, feat:check-booking, type:data)
+        ├── [1mfeat-manage-booking[0m (domain:booking, feat:manage-booking, type:feature)
+        ├── [1minfra[0m (domain:booking, type:infra)
+        ├── [1mtypes[0m (domain:booking, type:types)
+        ├── [1mui[0m (domain:booking, type:ui)
+          └── [1mwidgets[0m (noTag)
+        ├── [1mutils[0m (domain:booking, type:utils)
+        └── [1mapi[0m (domain:booking, type:api, port)

@@ -1,0 +1,13 @@
+
+[1mVerification Report[0m
+
+Issues found:
+  Total Invalid Files: 1
+  Total Encapsulation Violations: 0
+  Total Dependency Rule Violations: 0
+  Total Barrel Policy Violations: 1
+----------------------------------
+
+|-- libs/domains/booking/src/ui/widgets/index.ts
+|   |-- Barrel Policy Violations
+|   |   |-- index.ts sits outside any module configured via `modules`. With moduleIdentity: 'config' it creates no module and has no effect on encapsulation. Remove it, add its directory to `modules`, or add it to `allowBarrelsIn`.
