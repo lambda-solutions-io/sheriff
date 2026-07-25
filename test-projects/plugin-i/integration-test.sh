@@ -2,6 +2,9 @@ set -e
 
 npm i
 yalc add @lambda-solutions/sheriff-core @lambda-solutions/eslint-plugin-sheriff
+# `yalc add` copies the packages in but does not install THEIR dependencies
+# (eslint-plugin needs synckit). Re-run the install so they are resolvable.
+npm i
 mkdir -p node_modules/.bin
 cd node_modules/.bin
 ln -sf ../@lambda-solutions/sheriff-core/src/bin/main.js ./sheriff
