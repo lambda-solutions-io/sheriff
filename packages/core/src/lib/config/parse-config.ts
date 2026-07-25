@@ -10,6 +10,7 @@ import {
   CollidingEntrySettings,
   InvalidConfigsDirectoryError,
   MissingModulesWithoutAutoTaggingError,
+  ModuleIdentityConfigWithoutBarrelLessError,
   NoEntryPointsFoundError,
   TaggingAndModulesError,
 } from '../error/user-error';
@@ -101,6 +102,13 @@ const computeParsedConfig = (
     barrelPolicy === 'allow'
   ) {
     throw new AllowBarrelsInWithoutBarrelPolicyError();
+  }
+
+  if (
+    userSheriffConfig.moduleIdentity === 'config' &&
+    userSheriffConfig.enableBarrelLess !== true
+  ) {
+    throw new ModuleIdentityConfigWithoutBarrelLessError();
   }
 
   if (fullOptions.validateConfigs) {
