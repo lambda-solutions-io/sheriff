@@ -109,6 +109,29 @@ describe('violatesBarrelPolicy', () => {
     expect(lint('/project/src/ui/index.ts')).toBe('');
   });
 
+  it("should report a barrel outside any configured module under moduleIdentity 'config'", () => {
+    // the barrel creates no module here, so the ESLint surface has to see it
+    // through the filesystem scan rather than through the module list
+    setupProject(
+      {
+        modules: { 'src/<domain>/<type>': ['domain:<domain>', 'type:<type>'] },
+        moduleIdentity: 'config',
+        barrelPolicy: 'forbid',
+      },
+      {
+        'main.ts': ['./customers/ui/customer.component'],
+        customers: {
+          'index.ts': [],
+          ui: { 'customer.component.ts': [] },
+        },
+      },
+    );
+
+    expect(lint('/project/src/customers/index.ts')).toBe(
+      "index.ts sits outside any module configured via `modules`. With moduleIdentity: 'config' it creates no module and has no effect on encapsulation. Remove it, add its directory to `modules`, or add it to `allowBarrelsIn`.",
+    );
+  });
+
   it('should not report without a sheriff.config.ts', () => {
     testInit('src/main.ts', {
       'tsconfig.json': tsConfig(),

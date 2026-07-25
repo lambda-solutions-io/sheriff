@@ -582,6 +582,38 @@ describe('verify', () => {
       expect(allLogs()).toContain('Total Barrel Policy Violations: 2');
     });
 
+    it("should still report a barrel outside any module under moduleIdentity 'config'", () => {
+      // the CI gate must not go blind on the case `moduleIdentity: 'config'`
+      // exists to defuse: the barrel creates no module any more.
+      const { allLogs, mockedCli } = mockCli();
+      createProject({
+        'tsconfig.json': tsConfig(),
+        'sheriff.config.ts': sheriffConfig({
+          modules: { 'src/<domain>/<type>': ['domain:<domain>', 'type:<type>'] },
+          depRules: { '*': '*' },
+          enableBarrelLess: true,
+          moduleIdentity: 'config',
+          barrelPolicy: 'forbid',
+        }),
+        src: {
+          'main.ts': ['./customers/ui/customer.component'],
+          customers: {
+            'index.ts': [],
+            ui: { 'customer.component.ts': [] },
+          },
+        },
+      });
+
+      main('verify', 'src/main.ts');
+
+      expect(mockedCli.endProcessError).toHaveBeenCalled();
+      expect(allLogs()).toContain('Total Barrel Policy Violations: 1');
+      expect(allLogs()).toContain('|-- src/customers/index.ts');
+      expect(allLogs()).toContain(
+        "index.ts sits outside any module configured via `modules`. With moduleIdentity: 'config' it creates no module and has no effect on encapsulation. Remove it, add its directory to `modules`, or add it to `allowBarrelsIn`.",
+      );
+    });
+
     it('should not report stray barrels with the default policy', () => {
       const { allLogs, mockedCli } = mockCli();
       createBarrelPolicyProject('allow');

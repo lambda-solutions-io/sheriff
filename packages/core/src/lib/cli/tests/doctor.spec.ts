@@ -360,6 +360,34 @@ describe('doctor', () => {
       expect(mockedCli.endProcessError).not.toHaveBeenCalled();
     });
 
+    it("should list a barrel outside any module under moduleIdentity 'config'", () => {
+      // the barrel creates no module here, so it is only visible through the
+      // filesystem scan - and the allowed-barrel arithmetic must still add up
+      const { allLogs, mockedCli } = runDoctor(
+        {
+          'tsconfig.json': tsConfig(),
+          'sheriff.config.ts': sheriffConfig({
+            modules: { 'src/customers/<type>': ['type:<type>'] },
+            depRules: { root: '*', 'type:*': '*' },
+            enableBarrelLess: true,
+            moduleIdentity: 'config',
+          }),
+          src: {
+            'main.ts': ['./customers/api/customers.port'],
+            customers: {
+              'index.ts': [],
+              api: { 'customers.port.ts': [] },
+            },
+          },
+        },
+        'src/main.ts',
+      );
+
+      expect(allLogs()).toContain('|-- src/customers/index.ts (hint):');
+      expect(allLogs()).not.toContain('allowed by allowBarrelsIn');
+      expect(mockedCli.endProcessOk).toHaveBeenCalled();
+    });
+
     it('should skip the check without barrel-less mode', () => {
       const { allLogs, mockedCli } = runDoctor(
         {

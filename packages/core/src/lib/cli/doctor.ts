@@ -1,4 +1,7 @@
-import { checkForBarrelPolicyViolation } from '../checks/check-for-barrel-policy-violation';
+import {
+  checkForBarrelPolicyViolation,
+  findBarrelCandidates,
+} from '../checks/check-for-barrel-policy-violation';
 import { checkForMissingTsConfig } from '../checks/check-for-missing-tsconfig';
 import {
   checkForUnenforcedEncapsulation,
@@ -245,12 +248,10 @@ function collectBarrelFiles(
         })
       : checkForBarrelPolicyViolation(projectInfo);
 
-  const barrelModuleCount = projectInfo.modules.filter(
-    // `kind` is the metadata view a diagnostic may read; `hasBarrel` is
-    // private so that runtime exposure decisions stay inside `Module`.
-    (module) => module.kind === 'barrel',
-  ).length;
-  const allowedCount = barrelModuleCount - violations.length;
+  // every barrel the policy could report — barrel modules, plus (with
+  // `moduleIdentity: 'config'`) barrels which create no module at all.
+  const barrelCount = findBarrelCandidates(projectInfo).length;
+  const allowedCount = barrelCount - violations.length;
   if (allowedCount > 0) {
     report.allowedBarrels.push({ project, count: allowedCount });
   }
