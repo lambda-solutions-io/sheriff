@@ -9,8 +9,10 @@ import { ParsedResult, parseProject } from './parse-project';
 import { initialized } from './internal/initialized';
 import { callbacks } from './internal/callback';
 import { defaultConfig } from '../config/default-config';
-import { resolveConfigEntryForFile } from '../config/resolve-config-for-file';
-import { SheriffConfigNotFoundError } from '../error/user-error';
+import {
+  resolveConfigEntryForFile,
+  resolveConfigFilePath,
+} from '../config/resolve-config-for-file';
 
 let config: Configuration | undefined;
 
@@ -126,7 +128,11 @@ function getConfig(entryFile: FsPath, rootPath: FsPath): ResolvedConfig {
       rootConfig.configs,
     );
     const selectedConfigFile = selectedConfig
-      ? resolveSelectedConfigFile(rootPath, selectedConfig)
+      ? resolveConfigFilePath(
+          rootPath,
+          selectedConfig.directory,
+          selectedConfig.configPath,
+        )
       : configFile;
 
     return {
@@ -143,23 +149,4 @@ function getConfig(entryFile: FsPath, rootPath: FsPath): ResolvedConfig {
     config: { ...defaultConfig, isConfigFileMissing: true },
     usesMultipleConfigs: false,
   };
-}
-
-function resolveSelectedConfigFile(
-  rootPath: FsPath,
-  selectedConfig: { directory: string; configPath: string },
-): FsPath {
-  const fs = getFs();
-  const selectedConfigFile = fs.isAbsolute(selectedConfig.configPath)
-    ? selectedConfig.configPath
-    : fs.join(rootPath, selectedConfig.configPath);
-
-  if (!fs.exists(selectedConfigFile)) {
-    throw new SheriffConfigNotFoundError(
-      selectedConfig.directory,
-      selectedConfig.configPath,
-    );
-  }
-
-  return toFsPath(selectedConfigFile);
 }

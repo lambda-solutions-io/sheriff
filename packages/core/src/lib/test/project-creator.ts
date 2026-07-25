@@ -3,7 +3,7 @@ import { EOL } from 'os';
 import * as crypto from 'crypto';
 import getFs, { useVirtualFs } from '../fs/getFs';
 import { toFsPath } from '../file-info/fs-path';
-import { Configuration } from '../config/configuration';
+
 import { defaultConfig } from '../config/default-config';
 import { Fs } from '../fs/fs';
 import { UserSheriffConfig } from '../config/user-sheriff-config';
@@ -121,29 +121,44 @@ function serializeExternalRules<T extends Record<string, unknown>>(
   ) as T;
 }
 
-function serializeDepRules(config: UserSheriffConfig): Configuration {
-  const mergedConfig = { ...defaultConfig, ...config };
+/**
+ * Serializes the config exactly as the test author wrote it — the defaults
+ * are deliberately NOT merged in.
+ *
+ * A generated `sheriff.config.ts` therefore contains only the options which
+ * were actually set, just like a hand-written one. That distinction is
+ * load-bearing: `sheriff doctor` reports options a sub-config silently
+ * inherits from the defaults, and it can only see them if an unset option is
+ * absent from the file rather than spelled out with its default value.
+ */
+function serializeDepRules(config: UserSheriffConfig): UserSheriffConfig {
   const ignoreFileExtensions =
-    typeof mergedConfig.ignoreFileExtensions === 'function'
-      ? mergedConfig.ignoreFileExtensions(defaultConfig.ignoreFileExtensions)
-      : mergedConfig.ignoreFileExtensions;
+    typeof config.ignoreFileExtensions === 'function'
+      ? config.ignoreFileExtensions(defaultConfig.ignoreFileExtensions)
+      : config.ignoreFileExtensions;
 
   return {
-    ...mergedConfig,
-    depRules: serializeRules(mergedConfig.depRules),
-    denyRules: serializeRules(mergedConfig.denyRules),
-    externalRules: serializeExternalRules(mergedConfig.externalRules),
-    ignoreFileExtensions,
+    ...config,
+    ...(config.depRules ? { depRules: serializeRules(config.depRules) } : {}),
+    ...(config.denyRules
+      ? { denyRules: serializeRules(config.denyRules) }
+      : {}),
+    ...(config.externalRules
+      ? { externalRules: serializeExternalRules(config.externalRules) }
+      : {}),
+    ...(ignoreFileExtensions ? { ignoreFileExtensions } : {}),
   };
 }
 
-function serializeEncapsulationPattern(config: Configuration): Configuration {
-  if (typeof config.encapsulationPattern === 'string') {
-    return config;
-  } else {
+function serializeEncapsulationPattern(
+  config: UserSheriffConfig,
+): UserSheriffConfig {
+  if (config.encapsulationPattern instanceof RegExp) {
+    // unwrapped back into a real RegExp literal after `JSON.stringify`
     return {
       ...config,
       encapsulationPattern: `Δ${config.encapsulationPattern.toString()}Δ`,
     };
   }
+  return config;
 }

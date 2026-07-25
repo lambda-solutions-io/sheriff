@@ -1,6 +1,11 @@
-import { describe, it, expect } from 'vitest';
-import { resolveConfigForFile } from '../resolve-config-for-file';
+import { beforeAll, beforeEach, describe, it, expect } from 'vitest';
+import {
+  resolveConfigFilePath,
+  resolveConfigForFile,
+} from '../resolve-config-for-file';
 import { FsPath } from '../../file-info/fs-path';
+import getFs, { useVirtualFs } from '../../fs/getFs';
+import { SheriffConfigNotFoundError } from '../../error/user-error';
 import '../../test/expect.extensions';
 
 /**
@@ -31,7 +36,11 @@ describe('config resolution', () => {
 
   it('should return undefined for a file outside every declared directory', () => {
     expect(
-      resolveConfigForFile('/project/libs/shared/src/util.ts' as FsPath, rootDir, configs),
+      resolveConfigForFile(
+        '/project/libs/shared/src/util.ts' as FsPath,
+        rootDir,
+        configs,
+      ),
     ).toBeUndefined();
   });
 
@@ -104,5 +113,49 @@ describe('config resolution', () => {
         { 'apps/demo': './apps/demo/sheriff.config.ts' },
       ),
     ).toBeUndefined();
+  });
+});
+
+/**
+ * `resolveConfigFilePath` turns a `configs` VALUE into the absolute path of
+ * the file it points at. Unlike the resolution above it touches the
+ * filesystem, because a `configs` entry pointing nowhere must be loud.
+ */
+describe('config file path resolution', () => {
+  beforeAll(() => {
+    useVirtualFs();
+  });
+
+  beforeEach(() => {
+    getFs().reset();
+    getFs().writeFile('/project/apps/demo/sheriff.config.ts', '');
+  });
+
+  it('should join a relative config path onto the root directory', () => {
+    expect(
+      resolveConfigFilePath(
+        rootDir,
+        'apps/demo',
+        './apps/demo/sheriff.config.ts',
+      ),
+    ).toBe('/project/apps/demo/sheriff.config.ts');
+  });
+
+  it('should keep an absolute config path as it is', () => {
+    expect(
+      resolveConfigFilePath(
+        rootDir,
+        'apps/demo',
+        '/project/apps/demo/sheriff.config.ts',
+      ),
+    ).toBe('/project/apps/demo/sheriff.config.ts');
+  });
+
+  it('should throw a UserError when the config file does not exist', () => {
+    expect(() =>
+      resolveConfigFilePath(rootDir, 'apps/demo', './apps/demo/nope.ts'),
+    ).toThrowUserError(
+      new SheriffConfigNotFoundError('apps/demo', './apps/demo/nope.ts'),
+    );
   });
 });

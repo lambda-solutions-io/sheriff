@@ -1,5 +1,6 @@
-import { FsPath } from '../file-info/fs-path';
+import { FsPath, toFsPath } from '../file-info/fs-path';
 import getFs from '../fs/getFs';
+import { SheriffConfigNotFoundError } from '../error/user-error';
 
 /**
  * Resolves which config file governs `filePath`, given the root config's
@@ -67,6 +68,34 @@ export const resolveConfigEntryForFile = (
         right.directorySegments.length - left.directorySegments.length,
     )
     .at(0);
+};
+
+/**
+ * Turns a `configs` entry into the absolute path of the config file it points
+ * to.
+ *
+ * An entry pointing at a non-existent file is a hard error: the directory
+ * would otherwise silently keep running on the root config.
+ *
+ * @param rootDir the workspace root
+ * @param directory the `configs` key, only used for the error message
+ * @param configPath the `configs` value, absolute or relative to `rootDir`
+ */
+export const resolveConfigFilePath = (
+  rootDir: FsPath,
+  directory: string,
+  configPath: string,
+): FsPath => {
+  const fs = getFs();
+  const configFile = fs.isAbsolute(configPath)
+    ? configPath
+    : fs.join(rootDir, configPath);
+
+  if (!fs.exists(configFile)) {
+    throw new SheriffConfigNotFoundError(directory, configPath);
+  }
+
+  return toFsPath(configFile);
 };
 
 function getRelativeSegments(

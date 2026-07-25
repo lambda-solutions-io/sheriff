@@ -7,6 +7,7 @@ exports[`doctor > --json > should match the report snapshot 1`] = `
     "unenforcedEncapsulations": 1,
     "barrelPolicyViolations": 2,
     "missingTsConfigs": 0,
+    "subConfigFallbacks": 0,
     "total": 4
   },
   "checks": {
@@ -40,7 +41,8 @@ exports[`doctor > --json > should match the report snapshot 1`] = `
       }
     ],
     "allowedBarrels": [],
-    "missingTsConfigs": []
+    "missingTsConfigs": [],
+    "subConfigFallbacks": []
   },
   "exitCode": 1
 }"
