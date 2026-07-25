@@ -61,6 +61,90 @@ Run `npx sheriff list main.ts` to print out all your modules along their tags.
 
 See [Entry Files and Entry Points](#entry-files-and-entry-points) for configuration options.
 
+## `doctor [main.ts]` {#doctor}
+
+Run `npx sheriff doctor main.ts` to diagnose silent enforcement gaps: cases
+where the configuration is correct, but what Sheriff enforces is not what the
+author thinks — and nothing turns red. The entry file argument works exactly
+like `verify` (see [Entry Files and Entry Points](#entry-files-and-entry-points)).
+
+`doctor` runs four checks and prints a grouped report:
+
+1. **Modules without tags** — modules whose tag calculation resolves to
+   `noTag` (or to no tag at all with `autoTagging: false`). Such modules are
+   usually a typo in `modules` or a missing mapping. Note that setups which
+   use `noTag` intentionally — e.g. the `sheriff init` default with
+   `depRules: { root: 'noTag', noTag: 'noTag' }` — will permanently flag
+   this check; `doctor` is meant for tag-driven architectures.
+2. **Unenforced encapsulation folders** — folders matching the string
+   [`encapsulationPattern`](./configuration.md#encapsulationpattern) (e.g.
+   `internal/`) whose encapsulation promise is not enforced: inside a module
+   with a barrel file (the barrel alone controls exposure), or anywhere when
+   `enableBarrelLess` is `false`. `RegExp` patterns are not scanned — they
+   match arbitrary paths and cannot be attributed to a single folder.
+   Nested pattern folders in barrel-less modules are not reported: string
+   patterns match at any depth, so those folders are enforced. This check
+   walks the import graph, so only folders containing at least one file
+   that is transitively imported from the entry point are scanned — an
+   `internal/` folder whose files are never imported is invisible to it
+   (unlike check 1, whose module list comes from the filesystem scan).
+3. **Barrel files in barrel-less module trees** — with
+   [`barrelPolicy: 'allow'`](./configuration.md#barrelpolicy) they are shown
+   as informational hints, with `'warn'` or `'forbid'` they are findings.
+   Barrels matched by `allowBarrelsIn` are never findings; only their count
+   is reported.
+4. **Entry points without `tsconfig.json`** — entry points whose file does
+   not exist or above which no `tsconfig.json` can be found; Sheriff cannot
+   analyze such an entry point at all.
+
+Without a `sheriff.config.ts`, the config-dependent checks 1–3 are skipped
+and only check 4 runs.
+
+### Exit code
+
+`doctor` exits with `1` — and is therefore CI-suitable next to
+`sheriff verify` — when
+
+- check 1, 2, or 4 has findings, or
+- check 3 has findings under `barrelPolicy: 'warn'` or `'forbid'`.
+
+Otherwise it exits with `0`. Check-3 hints under `barrelPolicy: 'allow'`
+never fail the run.
+
+Note the deliberate difference to `verify` at `barrelPolicy: 'warn'`:
+`verify` treats warnings as observational (warning lines, successful exit),
+while `doctor` — as a diagnostic — exits with `1` for the same barrels, so
+an observation phase can already gate on `doctor` in CI.
+
+### `--json`
+
+`npx sheriff doctor main.ts --json` emits a machine-readable report instead
+of the human-readable one, so CI pipelines do not have to parse text. The
+structure has a stable key order: a `findings` summary with per-check counts
+and a `total`, a `checks` object with per-check arrays, and the `exitCode`.
+All `module`, `folder`, and `barrelFile` paths are relative to the project
+root.
+
+```json
+{
+  "findings": {
+    "noTagModules": 1,
+    "unenforcedEncapsulations": 0,
+    "barrelPolicyViolations": 0,
+    "missingTsConfigs": 0,
+    "total": 1
+  },
+  "checks": {
+    "noTagModules": [{ "project": "default", "module": "src/holidays" }],
+    "unenforcedEncapsulations": [],
+    "barrelFiles": [],
+    "allowedBarrels": [],
+    "missingTsConfigs": []
+  },
+  "exitCode": 1
+}
+```
+
 ## `export [main.ts]`
 
 Run `npx sheriff export main.ts > export.json` to export the dependency graph in JSON format. The dependency graph includes all reachable files. For every file, it will include the assigned module as well as the tags.
