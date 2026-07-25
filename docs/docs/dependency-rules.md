@@ -490,6 +490,61 @@ export const sheriffConfig: SheriffConfig = {
 };
 ```
 
+### The Rule Context
+
+A `depRules` matcher function receives one object:
+
+| Property         | Type       | Meaning                                                    |
+| ---------------- | ---------- | ---------------------------------------------------------- |
+| `from`           | `string`   | The single source tag currently being evaluated             |
+| `to`             | `string`   | The single target tag currently being evaluated             |
+| `fromTags`       | `string[]` | **All** tags of the importing module                        |
+| `toTags`         | `string[]` | **All** tags of the imported module                         |
+| `fromModulePath` | `string`   | Path of the importing module                                |
+| `toModulePath`   | `string`   | Path of the imported module                                 |
+| `fromFilePath`   | `string`   | Path of the importing file                                  |
+| `toFilePath`     | `string`   | Path of the imported file                                   |
+
+`from` and `to` are a single tag each, because Sheriff evaluates every
+source/target tag combination separately (see
+[How Multiple `depRules` Match](#how-multiple-deprules-match)). `fromTags` and
+`toTags` give the full picture, which is what you need for marker tags — asking
+"does the target *also* carry `port`?" is impossible with `to` alone:
+
+```typescript
+depRules: {
+  // A feature may reach another feature only through its public port.
+  'feature:*': [sameTag, ({ toTags }) => toTags.includes('port')],
+
+  // `type:feature` is carried by both a slice root and every `feat-<x>/`
+  // folder. Only the slice root wires the implementation; `entry` tells them
+  // apart without re-deriving module identity from the file path.
+  'type:feature': ({ to, fromTags }) =>
+    to.startsWith('type:') && (to !== 'type:infra' || fromTags.includes('entry')),
+}
+```
+
+An `externalRules` matcher gets a smaller context: `from`, `fromTags`,
+`fromModulePath`, `fromFilePath` and `externalLibrary`.
+
+:::warning `fromTags` and `toTags` are fork-only
+These two properties do **not** exist in upstream
+[`@softarc/sheriff-core`](https://www.npmjs.com/package/@softarc/sheriff-core),
+whose rule context is limited to `fromModulePath`, `toModulePath`,
+`fromFilePath` and `toFilePath`.
+
+This matters because the degradation is silent rather than loud. On upstream the
+properties are `undefined`, so a guard like
+`to !== 'type:infra' || fromTags?.includes('entry')` does not throw — it
+collapses to permanently `true`, and the rule keeps reporting success while
+enforcing nothing. A rule can therefore pass its tests against this fork and
+allow everything upstream.
+
+If your config must run against both, avoid these two properties, or assert
+their presence explicitly at the top of the rule so a missing context fails
+loudly instead of silently.
+:::
+
 ### How Multiple `depRules` Match
 
 When Sheriff checks an import, every source tag of the importing module must
