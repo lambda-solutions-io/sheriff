@@ -335,6 +335,53 @@ With this configuration, `libs/domains/booking/src/api/index.ts` stays legal whi
 
 Setting a non-empty `allowBarrelsIn` while `barrelPolicy` is absent or `'allow'` is a configuration error, because the exceptions would be dead configuration. An explicitly set empty array (`allowBarrelsIn: []`) is legal — it simply keeps the defaults.
 
+#### `moduleIdentity` {#moduleidentity}
+
+- **Type**: `'auto' | 'config'`
+- **Default**: `'auto'`
+- **Description**: Decides what makes a directory a module.
+
+By default a directory becomes a module in two independent ways: it matches a [`modules`](#modules) pattern, **or** it simply contains a barrel file. The second way means module identity is derived from a file existing. Dropping a stray `index.ts` into a directory that no `modules` pattern covers creates a brand-new, untagged (`noTag`) module and re-routes which module — and therefore which tags — an import is attributed to. The layer matrix silently stops governing that code path.
+
+- `'auto'` (default): `modules` **and** barrel files both create modules.
+- `'config'`: only directories matching a `modules` pattern are modules. A barrel file never creates one. Files inside a barrel directory which is not a configured module belong to their nearest enclosing configured module.
+
+```typescript
+export const config: SheriffConfig = {
+  enableBarrelLess: true,
+  moduleIdentity: 'config',
+  modules: {
+    'libs/domains/<domain>/src/api': ['domain:<domain>', 'type:api'],
+    'libs/domains/<domain>/src/data': ['domain:<domain>', 'type:data'],
+    'libs/domains/<domain>/src/ui': ['domain:<domain>', 'type:ui'],
+  },
+  // ... other configuration
+};
+```
+
+With this configuration, a stray `libs/domains/booking/src/index.ts` no longer creates a module: `libs/domains/booking/src/booking.routes.ts` keeps the module — and the tags — it had before the file appeared.
+
+Setting `moduleIdentity: 'config'` without `enableBarrelLess: true` is a configuration error (`SH-021`), because without barrel-less mode modules are defined by barrel files by definition.
+
+##### Barrels still decide exposure
+
+`moduleIdentity` changes module **identity**, not module **exposure**. Inside a configured module a barrel file still means "only this file is importable from outside":
+
+- A configured module containing a barrel file keeps its path, its tags and its dependency rules, but exposes only the barrel file.
+- The barrel takes precedence over a module's [`exports`](#exports): where both are present, the barrel alone decides what is importable — exactly as in `'auto'` mode.
+
+This residual blast radius is what [`barrelPolicy`](#barrelpolicy) reports. Under `moduleIdentity: 'config'` the policy also reports barrel files which sit outside every configured module — otherwise the case this option exists to defuse would become invisible to `sheriff verify`. Those barrels obey `allowBarrelsIn` in the same way, matched against their directory.
+
+##### Migration
+
+`'auto'` is the default and unchanged, so existing projects are unaffected. Switching to `'config'` is behavior-changing:
+
+- **Modules disappear.** Every module that existed only because of a barrel file, without a matching `modules` entry, is gone. Its files move to the nearest enclosing configured module (or to the root module). Run `npx sheriff list` before and after to see the difference.
+- **Tags and dependency rules move with them.** Files that were governed by `noTag` rules are now governed by the enclosing module's tags. If you relied on `noTag: noDependencies` as a tripwire, the tripwire moves.
+- **Encapsulation relaxes for those directories.** A barrel that no longer creates a module no longer restricts imports into its directory; the enclosing module's rules apply instead.
+
+The recommended path is to run `npx sheriff doctor` first, add a `modules` entry for every barrel module you want to keep, and only then switch `moduleIdentity` to `'config'`.
+
 #### `encapsulationPattern` {#encapsulationpattern}
 
 - **Type**: `string | RegExp`
