@@ -149,7 +149,7 @@ export function getProjectData(
   for (const { fileInfo } of traverseFileInfo(projectInfo.fileInfo)) {
     const entry: ProjectDataEntry = {
       module: fileInfo.moduleInfo.path || '.',
-      moduleType: fileInfo.moduleInfo.hasBarrel ? 'barrel' : 'barrel-less',
+      moduleType: fileInfo.moduleInfo.kind,
       tags: calcOrGetTags(fileInfo.moduleInfo.path, projectInfo, tagsCache),
       imports: fileInfo.imports.map((fileInfo) => fileInfo.path),
       unresolvedImports: fileInfo.unresolvableImports,

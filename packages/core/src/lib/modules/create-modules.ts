@@ -1,4 +1,4 @@
-import { Module } from './module';
+import { Module, ModuleExposureConfig } from './module';
 import { UnassignedFileInfo } from '../file-info/unassigned-file-info';
 import traverseUnassignedFileInfo from '../file-info/traverse-unassigned-file-info';
 import throwIfNull from '../util/throw-if-null';
@@ -17,13 +17,14 @@ interface CreateModulesContext {
   entryFileInfo: UnassignedFileInfo;
   rootDir: FsPath;
   barrelFile: string;
+  exposureConfig: ModuleExposureConfig;
 }
 
 export function createModules(
   modulePathMap: ModulePathMap,
   fileInfoMap: Map<FsPath, FileInfo>,
   getFileInfo: (path: FsPath) => FileInfo,
-  { entryFileInfo, rootDir, barrelFile }: CreateModulesContext,
+  { entryFileInfo, rootDir, barrelFile, exposureConfig }: CreateModulesContext,
 ): Module[] {
   const moduleMap = fromEntries(
     entries(modulePathMap).map(([path, rawModulePathInfo]) => {
@@ -35,6 +36,7 @@ export function createModules(
         false,
         modulePathInfo.hasBarrel,
         barrelFile,
+        exposureConfig,
       );
       module.exportedFilePatterns = modulePathInfo.exports;
       return [path, module];
@@ -48,6 +50,7 @@ export function createModules(
     true,
     false,
     barrelFile,
+    exposureConfig,
   );
 
   const modulePaths = new Set(keys(moduleMap));
