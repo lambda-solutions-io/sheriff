@@ -261,4 +261,169 @@ describe('checkForBarrelPolicyViolation', () => {
       ).toEqual(['src/customers/index.ts']);
     });
   });
+
+  /**
+   * With `moduleIdentity: 'config'` a barrel file creates no module, so the
+   * module-driven scan alone would go blind to exactly the most dangerous
+   * case: a stray barrel in a directory no `modules` pattern covers.
+   */
+  describe("moduleIdentity: 'config'", () => {
+    // only the buckets are configured; `src/customers` itself is not
+    const configOnlyModules: Partial<UserSheriffConfig> = {
+      modules: { 'src/<domain>/<type>': ['domain:<domain>', 'type:<type>'] },
+    };
+
+    const strayLibBarrelTree: FileTree = {
+      'main.ts': ['./customers/ui/customer.component'],
+      customers: {
+        'index.ts': [],
+        ui: {
+          'customer.component.ts': [],
+        },
+      },
+    };
+
+    it('should report a barrel outside any configured module with forbid', () => {
+      expect(
+        violatedBarrelFiles(
+          {
+            ...configOnlyModules,
+            moduleIdentity: 'config',
+            barrelPolicy: 'forbid',
+          },
+          strayLibBarrelTree,
+        ),
+      ).toEqual(['src/customers/index.ts']);
+    });
+
+    it('should report a barrel outside any configured module with warn', () => {
+      expect(
+        violatedBarrelFiles(
+          {
+            ...configOnlyModules,
+            moduleIdentity: 'config',
+            barrelPolicy: 'warn',
+          },
+          strayLibBarrelTree,
+        ),
+      ).toEqual(['src/customers/index.ts']);
+    });
+
+    it('should stay silent with allow', () => {
+      expect(
+        violatedBarrelFiles(
+          {
+            ...configOnlyModules,
+            moduleIdentity: 'config',
+            barrelPolicy: 'allow',
+          },
+          strayLibBarrelTree,
+        ),
+      ).toEqual([]);
+    });
+
+    it('should suppress it via a matching allowBarrelsIn pattern', () => {
+      expect(
+        violatedBarrelFiles(
+          {
+            ...configOnlyModules,
+            moduleIdentity: 'config',
+            barrelPolicy: 'forbid',
+            allowBarrelsIn: ['src/*'],
+          },
+          strayLibBarrelTree,
+        ),
+      ).toEqual([]);
+    });
+
+    it('should keep reporting it for a non-matching allowBarrelsIn pattern', () => {
+      expect(
+        violatedBarrelFiles(
+          {
+            ...configOnlyModules,
+            moduleIdentity: 'config',
+            barrelPolicy: 'forbid',
+            allowBarrelsIn: ['**/api'],
+          },
+          strayLibBarrelTree,
+        ),
+      ).toEqual(['src/customers/index.ts']);
+    });
+
+    it('should use a message which fits a directory that is not a module', () => {
+      const projectInfo = initProject(
+        {
+          ...configOnlyModules,
+          moduleIdentity: 'config',
+          barrelPolicy: 'forbid',
+        },
+        strayLibBarrelTree,
+      );
+
+      expect(checkForBarrelPolicyViolation(projectInfo)).toEqual([
+        {
+          modulePath: '/project/src/customers',
+          barrelFilePath: '/project/src/customers/index.ts',
+          message:
+            "index.ts sits outside any module configured via `modules`. With moduleIdentity: 'config' it creates no module and has no effect on encapsulation. Remove it, add its directory to `modules`, or add it to `allowBarrelsIn`.",
+        },
+      ]);
+    });
+
+    it('should report a module barrel and an outside barrel exactly once each', () => {
+      const projectInfo = initProject(
+        {
+          ...configOnlyModules,
+          moduleIdentity: 'config',
+          barrelPolicy: 'forbid',
+        },
+        {
+          'main.ts': ['./customers/api'],
+          customers: {
+            'index.ts': [],
+            api: {
+              'index.ts': ['./customers.port'],
+              'customers.port.ts': [],
+            },
+          },
+        },
+      );
+
+      const violations = checkForBarrelPolicyViolation(projectInfo);
+      expect(
+        violations.map((violation) =>
+          violation.barrelFilePath.replace('/project/', ''),
+        ),
+      ).toEqual(['src/customers/api/index.ts', 'src/customers/index.ts']);
+      // the configured module keeps the module-flavoured message
+      expect(violations[0].message).toContain(
+        'turns a barrel-less module into a barrel module',
+      );
+      expect(violations[1].message).toContain(
+        'sits outside any module configured via',
+      );
+    });
+
+    it('should not change anything under moduleIdentity auto', () => {
+      // under 'auto' the very same stray barrel IS a module, so it is
+      // reported through the module scan with the module-flavoured message.
+      const projectInfo = initProject(
+        {
+          ...configOnlyModules,
+          moduleIdentity: 'auto',
+          barrelPolicy: 'forbid',
+        },
+        strayLibBarrelTree,
+      );
+
+      expect(checkForBarrelPolicyViolation(projectInfo)).toEqual([
+        {
+          modulePath: '/project/src/customers',
+          barrelFilePath: '/project/src/customers/index.ts',
+          message:
+            'index.ts turns a barrel-less module into a barrel module and changes its encapsulation semantics. Remove it or add the module to `allowBarrelsIn`.',
+        },
+      ]);
+    });
+  });
 });

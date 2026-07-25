@@ -15,6 +15,12 @@ export type ParsedResult = {
   modules: Module[];
   rootDir: FsPath;
   getFileInfo: (path: FsPath) => FileInfo;
+  /**
+   * The top-level directories below `rootDir` which contain project files.
+   * Kept on the result so checks can scan the same directories module
+   * creation walked, without re-deriving them from the file graph.
+   */
+  projectDirs: FsPath[];
 };
 
 export const parseProject = (
@@ -59,5 +65,6 @@ export const parseProject = (
     rootDir,
     getFileInfo,
     modules,
+    projectDirs,
   };
 };
