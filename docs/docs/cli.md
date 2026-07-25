@@ -68,7 +68,7 @@ where the configuration is correct, but what Sheriff enforces is not what the
 author thinks — and nothing turns red. The entry file argument works exactly
 like `verify` (see [Entry Files and Entry Points](#entry-files-and-entry-points)).
 
-`doctor` runs four checks and prints a grouped report:
+`doctor` runs five checks and prints a grouped report:
 
 1. **Modules without tags** — modules whose tag calculation resolves to
    `noTag` (or to no tag at all with `autoTagging: false`). Such modules are
@@ -100,16 +100,30 @@ like `verify` (see [Entry Files and Entry Points](#entry-files-and-entry-points)
 4. **Entry points without `tsconfig.json`** — entry points whose file does
    not exist or above which no `tsconfig.json` can be found; Sheriff cannot
    analyze such an entry point at all.
+5. **Sub-configs falling back to defaults** — every option where the root
+   config sets a non-default value and a sub-config referenced via
+   [`configs`](./configuration.md#configs) does not set the option at all. A
+   sub-config is merged with Sheriff's defaults, never with the root config,
+   so such an option silently reverts to its default for everything that
+   sub-config governs — see
+   [A sub-config is standalone](./configuration.md#configs). Checked are
+   `enableBarrelLess`, `moduleIdentity`, `barrelPolicy`, `allowBarrelsIn`,
+   `encapsulationPattern`, `barrelFileName`, `excludeRoot` and `autoTagging`.
+   A sub-config which sets the option explicitly — even to the very same
+   value as the default — has made a deliberate choice and is not reported.
+   The finding belongs to the root config rather than to an entry point, so
+   it is reported once for the workspace, after the per-project sections. The
+   section is printed only for workspaces which declare `configs`.
 
-Without a `sheriff.config.ts`, the config-dependent checks 1–3 are skipped
-and only check 4 runs.
+Without a `sheriff.config.ts`, the config-dependent checks 1–3 and 5 are
+skipped and only check 4 runs.
 
 ### Exit code
 
 `doctor` exits with `1` — and is therefore CI-suitable next to
 `sheriff verify` — when
 
-- check 1, 2, or 4 has findings, or
+- check 1, 2, 4, or 5 has findings, or
 - check 3 has findings under `barrelPolicy: 'warn'` or `'forbid'`.
 
 Otherwise it exits with `0`. Check-3 hints under `barrelPolicy: 'allow'`
@@ -136,6 +150,7 @@ root.
     "unenforcedEncapsulations": 0,
     "barrelPolicyViolations": 0,
     "missingTsConfigs": 0,
+    "subConfigFallbacks": 0,
     "total": 1
   },
   "checks": {
@@ -143,7 +158,8 @@ root.
     "unenforcedEncapsulations": [],
     "barrelFiles": [],
     "allowedBarrels": [],
-    "missingTsConfigs": []
+    "missingTsConfigs": [],
+    "subConfigFallbacks": []
   },
   "exitCode": 1
 }
