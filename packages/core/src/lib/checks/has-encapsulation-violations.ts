@@ -2,11 +2,6 @@ import { FsPath } from '../file-info/fs-path';
 import { Configuration } from '../config/configuration';
 import { ProjectInfo } from '../main/init';
 import { FileInfo } from '../modules/file.info';
-import getFs from '../fs/getFs';
-import {
-  matchesFilePathPattern,
-  normalizePathSeparators,
-} from '../modules/internal/segment-pattern';
 
 /**
  * verifies if an existing file has imports which break
@@ -27,12 +22,7 @@ export function hasEncapsulationViolations(
     if (
       isSameModule(importedFileInfo, assignedFileInfo) ||
       isExcludedRootModule(rootDir, config, importedFileInfo) ||
-      accessesBarrelFileForBarrelModules(importedFileInfo) ||
-      accessesExposedFileForBarrelLessModules(
-        importedFileInfo,
-        config.enableBarrelLess,
-        config.encapsulationPattern,
-      )
+      importedFileInfo.moduleInfo.exposes(importedFileInfo)
     ) {
       // 👍 all good
     } else {
@@ -44,46 +34,6 @@ export function hasEncapsulationViolations(
   }
 
   return encapsulationViolations;
-}
-
-function accessesExposedFileForBarrelLessModules(
-  fileInfo: FileInfo,
-  enableBarrelLess: boolean,
-  encapsulationPattern: string | RegExp,
-) {
-  const fs = getFs();
-  if (!enableBarrelLess) {
-    return false;
-  }
-
-  if (fileInfo.moduleInfo.hasBarrel) {
-    return false;
-  }
-
-  const relativePath = normalizePathSeparators(
-    fs.relativeTo(fileInfo.moduleInfo.path, fileInfo.path),
-  );
-
-  if (fileInfo.moduleInfo.exportedFilePatterns !== undefined) {
-    return fileInfo.moduleInfo.exportedFilePatterns.some((exportPattern) =>
-      matchesFilePathPattern(exportPattern, relativePath),
-    );
-  }
-
-  if (typeof encapsulationPattern === 'string') {
-    return !relativePath.startsWith(encapsulationPattern);
-  } else {
-    const matches = relativePath.match(encapsulationPattern);
-    return !matches;
-  }
-}
-
-function accessesBarrelFileForBarrelModules(fileInfo: FileInfo) {
-  if (!fileInfo.moduleInfo.hasBarrel) {
-    return false;
-  }
-
-  return fileInfo.moduleInfo.barrelPath === fileInfo.path;
 }
 
 function isExcludedRootModule(

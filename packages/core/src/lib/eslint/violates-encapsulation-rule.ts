@@ -38,7 +38,7 @@ export const violatesEncapsulationRule = (
   if (isLegacyDeepImport) {
     return "Deep import is not allowed. Use the module's index.ts or path.";
   } else {
-    return importFileInfo.moduleInfo.hasBarrel
+    return importFileInfo.moduleInfo.kind === 'barrel'
       ? `'${importCommand}' is a deep import from a barrel module. Use the module's barrel file (index.ts) instead.`
       : `'${importCommand}' cannot be imported. It is encapsulated.`;
   }

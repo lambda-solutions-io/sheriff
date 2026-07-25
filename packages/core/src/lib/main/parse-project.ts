@@ -45,6 +45,10 @@ export const parseProject = (
     entryFileInfo: unassignedFileInfo,
     rootDir,
     barrelFile: config.barrelFileName,
+    exposureConfig: {
+      enableBarrelLess: config.enableBarrelLess,
+      encapsulationPattern: config.encapsulationPattern,
+    },
   });
   fillFileInfoMap(fileInfoMap, modules);
 
