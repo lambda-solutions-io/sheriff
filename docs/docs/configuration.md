@@ -363,6 +363,66 @@ With this configuration, a stray `libs/domains/booking/src/index.ts` no longer c
 
 Setting `moduleIdentity: 'config'` without `enableBarrelLess: true` is a configuration error (`SH-021`), because without barrel-less mode modules are defined by barrel files by definition.
 
+##### What it looks like
+
+Take the configuration above and a `ui` bucket which has grown a sub-folder — an everyday refactoring, and legal: `widgets/` is simply part of the `ui` module.
+
+```
+libs/domains/booking/src/ui/booking-card.ts
+libs/domains/booking/src/ui/widgets/booking-badge.ts
+```
+
+`npx sheriff verify` reports `No issues found. Well done!`.
+
+Now a single file appears, from an IDE, a schematic, or habit:
+
+```typescript
+// libs/domains/booking/src/ui/widgets/index.ts
+export { BookingBadge } from './booking-badge';
+```
+
+With `moduleIdentity: 'auto'`, `npx sheriff list` shows a module nobody configured:
+
+```
+├── ui (domain:booking, type:ui)
+  └── widgets (noTag)
+```
+
+and `verify` reports four violations across three files:
+
+```
+|-- libs/domains/booking/src/ui/booking-card.ts
+|   |-- Encapsulation Violations
+|   |   |-- ./widgets/booking-badge
+|   |-- Dependency Rule Violations
+|   |   |-- from tag domain:booking to tags noTag
+|-- libs/domains/booking/src/ui/widgets/booking-badge.ts
+|   |-- Dependency Rule Violations
+|   |   |-- from tag noTag to tags domain:booking, type:types
+|-- libs/domains/booking/src/ui/widgets/index.ts
+|   |-- Barrel Policy Violations
+|   |   |-- index.ts turns a barrel-less module into a barrel module ...
+```
+
+Two of those files were never touched. They are reported because the layer matrix is now being evaluated against a module that does not exist in the architecture: `domain:booking` importing `noTag`, and `noTag` importing back.
+
+With `moduleIdentity: 'config'` and the very same file tree, `sheriff list` is unchanged — there is no `widgets` node — and `verify` reports one violation, on the file that actually causes it:
+
+```
+  Total Encapsulation Violations: 0
+  Total Dependency Rule Violations: 0
+  Total Barrel Policy Violations: 1
+
+|-- libs/domains/booking/src/ui/widgets/index.ts
+|   |-- Barrel Policy Violations
+|   |   |-- index.ts sits outside any module configured via `modules`.
+|   |   |   With moduleIdentity: 'config' it creates no module and has no
+|   |   |   effect on encapsulation. Remove it, add its directory to
+|   |   |   `modules`, or add it to `allowBarrelsIn`.
+```
+
+The rest of the code is judged by its configured identity again, and the remaining message names the cause and the ways out. This scenario is pinned end-to-end by the `nx-i` integration project.
+
 ##### Barrels still decide exposure
 
 `moduleIdentity` changes module **identity**, not module **exposure**. Inside a configured module a barrel file still means "only this file is importable from outside":
