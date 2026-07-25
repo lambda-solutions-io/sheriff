@@ -45,7 +45,9 @@ export function checkForBarrelPolicyViolation({
   const violations: BarrelPolicyViolation[] = [];
 
   for (const module of modules) {
-    if (!module.hasBarrel) {
+    // `kind` is the metadata view a diagnostic may read; `hasBarrel` is
+    // private so no consumer can branch on it for an access decision.
+    if (module.kind !== 'barrel') {
       continue;
     }
 
