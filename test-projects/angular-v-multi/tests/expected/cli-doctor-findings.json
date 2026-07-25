@@ -4,6 +4,7 @@
     "unenforcedEncapsulations": 1,
     "barrelPolicyViolations": 2,
     "missingTsConfigs": 0,
+    "subConfigFallbacks": 0,
     "total": 4
   },
   "checks": {
@@ -37,7 +38,8 @@
       }
     ],
     "allowedBarrels": [],
-    "missingTsConfigs": []
+    "missingTsConfigs": [],
+    "subConfigFallbacks": []
   },
   "exitCode": 1
 }

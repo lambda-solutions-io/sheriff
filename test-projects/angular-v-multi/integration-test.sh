@@ -46,3 +46,22 @@ diff tests/actual/cli-doctor-findings.json tests/expected/cli-doctor-findings.js
 rm projects/app-i/src/app/non-compliant/util/index.ts
 rm projects/app-i/src/app/non-compliant/ui/index.ts
 mv projects/app-i/sheriff.config.ts.original projects/app-i/sheriff.config.ts
+
+echo 'checking doctor report on sub-configs falling back to defaults'
+# A sub-config is merged with the DEFAULTS, not with the root config. Swap in
+# a root config which sets three more workspace-shaping options that neither
+# sub-config repeats: all three silently revert to their defaults for both
+# projects, while `sheriff verify` keeps reporting success.
+cp sheriff.config.ts sheriff.config.ts.original
+cp tests/doctor-root-sheriff.config.ts sheriff.config.ts
+
+echo 'verify still reports success while the root config does not apply'
+npx sheriff verify projects/app-i/src/main.ts > /dev/null
+
+if npx sheriff doctor projects/app-i/src/main.ts > tests/actual/cli-doctor-sub-config-fallbacks.txt; then
+  echo 'doctor was expected to exit with code 1'
+  exit 1
+fi
+diff tests/actual/cli-doctor-sub-config-fallbacks.txt tests/expected/cli-doctor-sub-config-fallbacks.txt
+
+mv sheriff.config.ts.original sheriff.config.ts

@@ -11,4 +11,7 @@ Barrel files in barrel-less modules (barrelPolicy: warn):
 Entry points without tsconfig.json:
   none
 
+Sub-configs falling back to defaults:
+  none
+
 Doctor found 4 issues.
