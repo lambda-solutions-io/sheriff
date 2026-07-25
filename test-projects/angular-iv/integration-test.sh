@@ -3,6 +3,9 @@ export NX_DAEMON=false
 export NX_ISOLATE_PLUGINS=false
 yarn
 yalc add @lambda-solutions/sheriff-core @lambda-solutions/eslint-plugin-sheriff
+# `yalc add` copies the packages in but does not install THEIR dependencies
+# (eslint-plugin needs synckit). Re-run the install so they are resolvable.
+yarn
 cd node_modules/.bin # yalc doesn't create symlink in node_modules/.bin
 ln -sf ../@lambda-solutions/sheriff-core/src/bin/main.js ./sheriff
 cd ../../
