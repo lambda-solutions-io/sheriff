@@ -92,7 +92,11 @@ like `verify` (see [Entry Files and Entry Points](#entry-files-and-entry-points)
    [`barrelPolicy: 'allow'`](./configuration.md#barrelpolicy) they are shown
    as informational hints, with `'warn'` or `'forbid'` they are findings.
    Barrels matched by `allowBarrelsIn` are never findings; only their count
-   is reported.
+   is reported. With
+   [`moduleIdentity: 'config'`](./configuration.md#moduleidentity) this check
+   also covers barrel files which sit outside every configured module — in
+   that mode they create no module and would otherwise be invisible to a
+   module-driven scan.
 4. **Entry points without `tsconfig.json`** — entry points whose file does
    not exist or above which no `tsconfig.json` can be found; Sheriff cannot
    analyze such an entry point at all.

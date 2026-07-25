@@ -120,6 +120,8 @@ flowchart LR
 
 Sheriff automatically detects modules and assigns the `noTag` tag to them.
 
+A directory is detected as a module when it matches a `modules` pattern or when it contains a barrel file. The second criterion means a stray `index.ts` can create a new `noTag` module and change which tags an import is checked against. Set [`moduleIdentity: 'config'`](./configuration.md#moduleidentity) to let the `modules` configuration alone define modules.
+
 It assigns all files that aren't part of a module to the `root` module. The root module gets the `root` tag.
 
 It's essential to set up the dependency rules. Specifically, the [`root` tag](#the-root-tag) (i.e., the root module) needs to access all modules tagged with `noTag`.
