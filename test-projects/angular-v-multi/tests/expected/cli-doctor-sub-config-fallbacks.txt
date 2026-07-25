@@ -1,0 +1,22 @@
+
+[1mDoctor Report[0m
+
+Modules without tags:
+  none
+Unenforced encapsulation folders:
+  none
+Barrel files in barrel-less modules (barrelPolicy: allow):
+  none
+Entry points without tsconfig.json:
+  none
+
+Sub-configs falling back to defaults:
+  A sub-config is merged with the defaults, not with the root config. Repeat each option below in the sub-config.
+  |-- projects/app-i/sheriff.config.ts (governs projects/app-i): moduleIdentity is not set - the root config sets "config", so the default "auto" applies here
+  |-- projects/app-i/sheriff.config.ts (governs projects/app-i): barrelPolicy is not set - the root config sets "forbid", so the default "allow" applies here
+  |-- projects/app-i/sheriff.config.ts (governs projects/app-i): encapsulationPattern is not set - the root config sets "hidden", so the default "internal" applies here
+  |-- projects/app-ii/sheriff.config.ts (governs projects/app-ii): moduleIdentity is not set - the root config sets "config", so the default "auto" applies here
+  |-- projects/app-ii/sheriff.config.ts (governs projects/app-ii): barrelPolicy is not set - the root config sets "forbid", so the default "allow" applies here
+  |-- projects/app-ii/sheriff.config.ts (governs projects/app-ii): encapsulationPattern is not set - the root config sets "hidden", so the default "internal" applies here
+
+Doctor found 6 issues.

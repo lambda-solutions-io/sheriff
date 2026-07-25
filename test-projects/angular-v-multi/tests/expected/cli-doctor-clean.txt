@@ -10,4 +10,7 @@ Barrel files in barrel-less modules (barrelPolicy: allow):
 Entry points without tsconfig.json:
   none
 
+Sub-configs falling back to defaults:
+  none
+
 [32mDoctor found no issues. Well done![0m
