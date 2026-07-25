@@ -161,6 +161,20 @@ export interface UserSheriffConfig {
    * `entryPoints` fields are ignored; only the root config selects configs and
    * entry points.
    *
+   * ## A sub-config is standalone
+   *
+   * A sub-config is **not** merged with the root config. It is merged with
+   * Sheriff's **defaults**, exactly like a root config would be. Every
+   * workspace-wide option — {@link enableBarrelLess}, {@link moduleIdentity},
+   * {@link barrelPolicy}, {@link allowBarrelsIn},
+   * {@link encapsulationPattern}, {@link barrelFileName},
+   * {@link excludeRoot} and {@link autoTagging} — must therefore be repeated
+   * in every sub-config. An option which is not repeated silently reverts to
+   * its default for everything that sub-config governs, while `sheriff
+   * verify` keeps reporting success.
+   *
+   * `sheriff doctor` reports every such option (check 5).
+   *
    * @example
    * ```typescript
    * configs: {
