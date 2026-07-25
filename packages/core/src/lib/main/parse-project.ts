@@ -44,8 +44,8 @@ export const parseProject = (
   const modules = createModules(modulePaths, fileInfoMap, getFileInfo, {
     entryFileInfo: unassignedFileInfo,
     rootDir,
-    barrelFile: config.barrelFileName,
     exposureConfig: {
+      barrelFile: config.barrelFileName,
       enableBarrelLess: config.enableBarrelLess,
       encapsulationPattern: config.encapsulationPattern,
     },
