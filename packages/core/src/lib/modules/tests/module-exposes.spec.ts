@@ -228,12 +228,11 @@ describe('Module.exposes / Module.kind', () => {
       );
     });
 
-    it('BEHAVIOR (issue #31, finding 2): a nested "internal" folder is currently NOT encapsulated, only a top-level one is', () => {
-      // `startsWith` only ever looks at the beginning of the relative path,
-      // so `foo/internal/x.ts` does not start with `internal` and is
-      // exposed. Locking this in on purpose: a future fix for #31 should be
-      // a deliberate, visible change to this assertion, not an accidental
-      // side effect of an unrelated refactor.
+    it('encapsulates a nested "internal" folder, not only a top-level one (issue #31, finding 2)', () => {
+      // Was the opposite before the depth fix: `startsWith` only looked at
+      // the beginning of the relative path, so `foo/internal/x.ts` did not
+      // start with `internal` and stayed exposed — silently. A directory
+      // segment equal to the pattern now encapsulates at any depth.
       const module = createModule({
         path: '/project/mod',
         hasBarrel: false,
@@ -244,7 +243,7 @@ describe('Module.exposes / Module.kind', () => {
       });
 
       expect(module.exposes(fileAt('/project/mod/foo/internal/x.ts'))).toBe(
-        true,
+        false,
       );
     });
 
