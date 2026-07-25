@@ -6,6 +6,7 @@ import { verify } from './verify';
 import { verifyWatch } from './verify-watch';
 import { daemonCommand } from './daemon-command';
 import { list } from './list';
+import { doctor } from './doctor';
 import { cli } from './cli';
 import { exportData } from './export-data';
 import { version } from './version';
@@ -40,6 +41,9 @@ function showHelp(plugins: SheriffPlugin[]): void {
   );
   cli.log(
     '  sheriff verify --watch [main.ts]: re-runs the verification on file changes.',
+  );
+  cli.log(
+    '  sheriff doctor [main.ts]: runs diagnostic checks and prints a grouped report (--json for machine-readable output).',
   );
   cli.log(
     '  sheriff daemon <start|stop|status>: manages the background daemon.',
@@ -111,6 +115,11 @@ export function main(...argv: string[]) {
       case 'list':
         handleError(() => list(args));
         break;
+      case 'doctor': {
+        const { args: doctorArgs, json } = parseJsonOption(args);
+        handleError(() => doctor(doctorArgs, { json }));
+        break;
+      }
       case 'export':
         handleError(() => exportData(...args));
         break;
@@ -131,6 +140,23 @@ export function main(...argv: string[]) {
   }
 
   return handleErrorAsync(() => handlePluginOrHelp(cmd, args));
+}
+
+/**
+ * Parses the `--json` flag for `doctor`.
+ *
+ * With `--json`, the doctor report is emitted as a machine-readable JSON
+ * structure instead of the human-readable one. The flag is positionally
+ * independent and removed from the remaining arguments.
+ */
+function parseJsonOption(args: string[]): {
+  args: string[];
+  json: boolean;
+} {
+  return {
+    args: args.filter((arg) => arg !== '--json'),
+    json: args.includes('--json'),
+  };
 }
 
 function splitFileValues(values: string[]): string[] {
