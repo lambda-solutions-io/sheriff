@@ -235,6 +235,76 @@ Only the root config's `configs`, `entryFile`, and `entryPoints` are used for
 selection. The same fields inside a sub-config are ignored after that sub-config
 has been selected.
 
+##### A sub-config is standalone
+
+:::warning
+A sub-config is **not** merged with the root config. It is merged with
+Sheriff's **defaults**, exactly like a root config would be. Every
+workspace-wide option must therefore be repeated in every sub-config —
+otherwise it silently reverts to its default for everything that sub-config
+governs, and `sheriff verify` still reports success.
+:::
+
+The trap, written out. The root config below turns on barrel-less mode and
+forbids barrels workspace-wide:
+
+```typescript
+// sheriff.config.ts
+export const config: SheriffConfig = {
+  configs: {
+    'apps/demo': './apps/demo/sheriff.config.ts',
+  },
+  enableBarrelLess: true,
+  barrelPolicy: 'forbid',
+  moduleIdentity: 'config',
+  depRules: { '*': '*' },
+};
+```
+
+❌ **Before** — the sub-config looks harmless, but `apps/demo` runs on
+`enableBarrelLess: false`, `barrelPolicy: 'allow'` and
+`moduleIdentity: 'auto'`. Barrel-less encapsulation is not enforced there, and
+a stray `index.ts` still creates modules:
+
+```typescript
+// apps/demo/sheriff.config.ts
+export const config: SheriffConfig = {
+  modules: {
+    'apps/demo/src/domain/<domain>': ['domain:<domain>'],
+  },
+  depRules: { '*': '*' },
+};
+```
+
+✅ **After** — the workspace-wide options are repeated, so `apps/demo` is
+governed by the same rules as the rest of the workspace:
+
+```typescript
+// apps/demo/sheriff.config.ts
+export const config: SheriffConfig = {
+  enableBarrelLess: true,
+  barrelPolicy: 'forbid',
+  moduleIdentity: 'config',
+  modules: {
+    'apps/demo/src/domain/<domain>': ['domain:<domain>'],
+  },
+  depRules: { '*': '*' },
+};
+```
+
+The options which need repeating are the ones that shape the whole workspace:
+[`enableBarrelLess`](#enablebarrelless), [`moduleIdentity`](#moduleidentity),
+[`barrelPolicy`](#barrelpolicy), [`allowBarrelsIn`](#allowbarrelsin),
+[`encapsulationPattern`](#encapsulationpattern),
+[`barrelFileName`](#barrelfilename), [`excludeRoot`](#excluderoot) and
+[`autoTagging`](#autotagging).
+
+Setting an option in a sub-config to the same value as the default is a
+deliberate choice and stays fine. To find the ones you forgot, run
+[`npx sheriff doctor`](./cli.md#doctor): it reports every option where the
+root config sets a non-default value and a sub-config does not set the option
+at all.
+
 An import graph initialized from one entry point currently keeps that entry
 point's config for the complete traversal. Use separate `entryPoints` for
 architectures with separate configs. Applying different configs inside one
@@ -438,7 +508,7 @@ This residual blast radius is what [`barrelPolicy`](#barrelpolicy) reports. Unde
 
 - **Modules disappear.** Every module that existed only because of a barrel file, without a matching `modules` entry, is gone. Its files move to the nearest enclosing configured module (or to the root module). Run `npx sheriff list` before and after to see the difference.
 - **Tags and dependency rules move with them.** Files that were governed by `noTag` rules are now governed by the enclosing module's tags. If you relied on `noTag: noDependencies` as a tripwire, the tripwire moves.
-- **Encapsulation relaxes for those directories.** A barrel that no longer creates a module no longer restricts imports into its directory; the enclosing module's rules apply instead.
+- **Encapsulation relaxes for those directories.** A barrel that no longer creates a module no longer restricts imports into its directory; the enclosing module's rules apply instead. Where that enclosing module is the **root module**, there are effectively no encapsulation restrictions on those files at all: `moduleIdentity: 'config'` requires `enableBarrelLess: true`, and a barrel-less root module exposes every file that does not match the [`encapsulationPattern`](#encapsulationpattern). Such files then become deep-importable from anywhere, and [`excludeRoot`](#excluderoot) makes no difference to that — it only relaxes access to the root module, which is already fully exposed. Add a `modules` entry for those directories if you want them to stay encapsulated.
 
 The recommended path is to run `npx sheriff doctor` first, add a `modules` entry for every barrel module you want to keep, and only then switch `moduleIdentity` to `'config'`.
 
