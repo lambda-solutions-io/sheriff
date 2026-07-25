@@ -40,17 +40,32 @@ export const parseConfig = (
   );
 };
 
-const computeParsedConfig = (
-  configFile: FsPath,
-  fullOptions: Required<ParseConfigOptions>,
-): Configuration => {
+/**
+ * Reads, transpiles and evaluates a Sheriff config file and returns the RAW
+ * user config — exactly the options its author wrote down, without the
+ * defaults merged in.
+ *
+ * {@link parseConfig} returns the merged {@link Configuration}, in which an
+ * option that was never set is indistinguishable from one set to its default
+ * value. `sheriff doctor` needs precisely that distinction to report options
+ * which a sub-config silently inherits from the defaults instead of from the
+ * root config.
+ */
+export const readUserConfig = (configFile: FsPath): UserSheriffConfig => {
   const tsCode = getFs().readFile(configFile);
 
   const { outputText } = ts.transpileModule(tsCode, {
     compilerOptions: { module: ts.ModuleKind.NodeNext },
   });
 
-  const userSheriffConfig = eval(outputText) as UserSheriffConfig;
+  return eval(outputText) as UserSheriffConfig;
+};
+
+const computeParsedConfig = (
+  configFile: FsPath,
+  fullOptions: Required<ParseConfigOptions>,
+): Configuration => {
+  const userSheriffConfig = readUserConfig(configFile);
 
   if (userSheriffConfig.tagging && userSheriffConfig.modules) {
     throw new TaggingAndModulesError();

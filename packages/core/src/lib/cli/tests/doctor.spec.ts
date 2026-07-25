@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vitest } from 'vitest';
+import { anyTag } from '../../checks/any-tag';
+import { UserSheriffConfig } from '../../config/user-sheriff-config';
 import { tsConfig } from '../../test/fixtures/ts-config';
 import { FileTree, sheriffConfig } from '../../test/project-configurator';
 import { createProject } from '../../test/project-creator';
@@ -463,6 +465,217 @@ describe('doctor', () => {
     });
   });
 
+  describe('check 5: sub-configs falling back to defaults', () => {
+    /**
+     * A workspace whose root config declares one sub-config for `apps/app-i`.
+     * Both configs are written exactly as given — the virtual-FS helper does
+     * not merge the defaults in — so "the sub-config never set this option" is
+     * distinguishable from "the sub-config set it to the default value".
+     */
+    const multiConfigProject = (
+      rootConfig: Partial<UserSheriffConfig>,
+      subConfig: Partial<UserSheriffConfig>,
+    ): FileTree => ({
+      'tsconfig.json': tsConfig(),
+      'sheriff.config.ts': sheriffConfig({
+        configs: { 'apps/app-i': './apps/app-i/sheriff.config.ts' },
+        depRules: { '*': anyTag },
+        ...rootConfig,
+      }),
+      apps: {
+        'app-i': {
+          'sheriff.config.ts': sheriffConfig({
+            depRules: { '*': anyTag },
+            ...subConfig,
+          }),
+          src: { 'main.ts': [] },
+        },
+      },
+      src: { 'main.ts': [] },
+    });
+
+    it('should report an option the sub-config does not set', () => {
+      const { allLogs, mockedCli } = runDoctor(
+        multiConfigProject({ enableBarrelLess: true }, {}),
+        'src/main.ts',
+      );
+
+      expect(allLogs()).toContain(
+        '|-- apps/app-i/sheriff.config.ts (governs apps/app-i): enableBarrelLess is not set - the root config sets true, so the default false applies here',
+      );
+      expect(allLogs()).toContain(
+        'A sub-config is merged with the defaults, not with the root config. Repeat each option below in the sub-config.',
+      );
+      expect(mockedCli.endProcessError).toHaveBeenCalled();
+    });
+
+    it('should stay silent when the sub-config sets the option explicitly', () => {
+      const { allLogs, mockedCli } = runDoctor(
+        multiConfigProject(
+          { enableBarrelLess: true },
+          { enableBarrelLess: true },
+        ),
+        'src/main.ts',
+      );
+
+      expect(allLogs()).toContain(
+        'Sub-configs falling back to defaults:\n  none',
+      );
+      expect(mockedCli.endProcessOk).toHaveBeenCalled();
+    });
+
+    it('should stay silent when the sub-config explicitly repeats the default', () => {
+      // an explicit `'allow'` is a deliberate choice, not a silent fallback
+      const { allLogs, mockedCli } = runDoctor(
+        multiConfigProject(
+          { enableBarrelLess: true, barrelPolicy: 'forbid' },
+          { enableBarrelLess: true, barrelPolicy: 'allow' },
+        ),
+        'src/main.ts',
+      );
+
+      expect(allLogs()).toContain(
+        'Sub-configs falling back to defaults:\n  none',
+      );
+      expect(mockedCli.endProcessOk).toHaveBeenCalled();
+    });
+
+    it('should stay silent when the root config leaves the default in place', () => {
+      const { allLogs, mockedCli } = runDoctor(
+        multiConfigProject({ excludeRoot: false }, {}),
+        'src/main.ts',
+      );
+
+      expect(allLogs()).toContain(
+        'Sub-configs falling back to defaults:\n  none',
+      );
+      expect(mockedCli.endProcessOk).toHaveBeenCalled();
+    });
+
+    it('should cover every workspace-shaping option', () => {
+      const { allLogs } = runDoctor(
+        multiConfigProject(
+          {
+            enableBarrelLess: true,
+            moduleIdentity: 'config',
+            barrelPolicy: 'forbid',
+            allowBarrelsIn: ['**/api'],
+            encapsulationPattern: 'hidden',
+            barrelFileName: 'public-api.ts',
+            excludeRoot: true,
+            autoTagging: false,
+            modules: { 'apps/app-i/src/app': ['app'] },
+          },
+          {},
+        ),
+        'src/main.ts',
+      );
+
+      for (const option of [
+        'enableBarrelLess is not set - the root config sets true, so the default false applies here',
+        'moduleIdentity is not set - the root config sets "config", so the default "auto" applies here',
+        'barrelPolicy is not set - the root config sets "forbid", so the default "allow" applies here',
+        'allowBarrelsIn is not set - the root config sets ["**/api"], so the default [] applies here',
+        'encapsulationPattern is not set - the root config sets "hidden", so the default "internal" applies here',
+        'barrelFileName is not set - the root config sets "public-api.ts", so the default "index.ts" applies here',
+        'excludeRoot is not set - the root config sets true, so the default false applies here',
+        'autoTagging is not set - the root config sets false, so the default true applies here',
+      ]) {
+        expect(allLogs()).toContain(option);
+      }
+      expect(allLogs()).toContain('Doctor found 8 issues.');
+    });
+
+    it('should render a regular expression encapsulationPattern', () => {
+      const { allLogs } = runDoctor(
+        multiConfigProject({ encapsulationPattern: /(^|\/)_/ }, {}),
+        'src/main.ts',
+      );
+
+      expect(allLogs()).toContain(
+        'encapsulationPattern is not set - the root config sets /(^|\\/)_/, so the default "internal" applies here',
+      );
+    });
+
+    it('should accept the deprecated encapsulation alias in the sub-config', () => {
+      const { allLogs, mockedCli } = runDoctor(
+        multiConfigProject(
+          { encapsulationPattern: 'hidden' },
+          { encapsulatedFolderNameForBarrelLess: 'secret' },
+        ),
+        'src/main.ts',
+      );
+
+      expect(allLogs()).toContain(
+        'Sub-configs falling back to defaults:\n  none',
+      );
+      expect(mockedCli.endProcessOk).toHaveBeenCalled();
+    });
+
+    it('should read the ROOT config even when a sub-config governs the entry file', () => {
+      // the regression this check exists for: `init` hands out the SELECTED
+      // config, which for this entry file is the sub-config itself
+      const { allLogs, mockedCli } = runDoctor(
+        multiConfigProject({ enableBarrelLess: true }, {}),
+        'apps/app-i/src/main.ts',
+      );
+
+      expect(allLogs()).toContain(
+        '|-- apps/app-i/sheriff.config.ts (governs apps/app-i): enableBarrelLess is not set',
+      );
+      expect(mockedCli.endProcessError).toHaveBeenCalled();
+    });
+
+    it('should report a fallback once for several entry points', () => {
+      const { allLogs } = runDoctor({
+        'tsconfig.json': tsConfig(),
+        'sheriff.config.ts': sheriffConfig({
+          configs: { 'apps/app-i': './apps/app-i/sheriff.config.ts' },
+          depRules: { '*': anyTag },
+          enableBarrelLess: true,
+          entryPoints: {
+            'app-i': 'apps/app-i/src/main.ts',
+            'app-ii': 'apps/app-ii/src/main.ts',
+          },
+        }),
+        apps: {
+          'app-i': {
+            'sheriff.config.ts': sheriffConfig({ depRules: { '*': anyTag } }),
+            src: { 'main.ts': [] },
+          },
+          'app-ii': { src: { 'main.ts': [] } },
+        },
+      });
+
+      expect(allLogs()).toContain('Doctor found 1 issue.');
+    });
+
+    it('should throw when a configs entry points at a missing file', () => {
+      const { allErrorLogs, mockedCli } = mockCli();
+      createProject({
+        'tsconfig.json': tsConfig(),
+        'sheriff.config.ts': sheriffConfig({
+          configs: { 'apps/app-i': './apps/app-i/sheriff.config.ts' },
+          depRules: { '*': anyTag },
+          enableBarrelLess: true,
+        }),
+        apps: { 'app-i': { src: { 'main.ts': [] } } },
+        src: { 'main.ts': [] },
+      });
+
+      main('doctor', 'src/main.ts');
+
+      expect(allErrorLogs()).toContain('./apps/app-i/sheriff.config.ts');
+      expect(mockedCli.endProcessError).toHaveBeenCalled();
+    });
+
+    it('should not print the section without declared configs', () => {
+      const { allLogs } = runDoctor(cleanProject, 'src/main.ts');
+
+      expect(allLogs()).not.toContain('Sub-configs falling back to defaults:');
+    });
+  });
+
   describe('projects without a sheriff.config.ts', () => {
     it('should skip the configuration checks and succeed', () => {
       const { allLogs, mockedCli } = runDoctor(
@@ -604,6 +817,7 @@ describe('doctor', () => {
         unenforcedEncapsulations: 1,
         barrelPolicyViolations: 2,
         missingTsConfigs: 0,
+        subConfigFallbacks: 0,
         total: 4,
       });
       expect(report.exitCode).toBe(1);
@@ -632,9 +846,49 @@ describe('doctor', () => {
         'barrelFiles',
         'allowedBarrels',
         'missingTsConfigs',
+        'subConfigFallbacks',
       ]);
       expect(mockedCli.endProcessOk).toHaveBeenCalled();
       expect(mockedCli.endProcessError).not.toHaveBeenCalled();
+    });
+
+    it('should emit the sub-config fallbacks', () => {
+      const { allLogs, mockedCli } = runDoctor(
+        {
+          'tsconfig.json': tsConfig(),
+          'sheriff.config.ts': sheriffConfig({
+            configs: { 'apps/app-i': './apps/app-i/sheriff.config.ts' },
+            depRules: { '*': anyTag },
+            enableBarrelLess: true,
+            barrelPolicy: 'forbid',
+          }),
+          apps: {
+            'app-i': {
+              'sheriff.config.ts': sheriffConfig({
+                depRules: { '*': anyTag },
+                enableBarrelLess: true,
+              }),
+              src: { 'main.ts': [] },
+            },
+          },
+          src: { 'main.ts': [] },
+        },
+        'src/main.ts',
+        '--json',
+      );
+
+      const report = JSON.parse(allLogs());
+      expect(report.findings.subConfigFallbacks).toBe(1);
+      expect(report.checks.subConfigFallbacks).toEqual([
+        {
+          subConfig: 'apps/app-i/sheriff.config.ts',
+          directory: 'apps/app-i',
+          option: 'barrelPolicy',
+          rootValue: '"forbid"',
+          effectiveValue: '"allow"',
+        },
+      ]);
+      expect(mockedCli.endProcessError).toHaveBeenCalled();
     });
   });
 });

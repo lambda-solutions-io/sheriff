@@ -7,8 +7,13 @@ import {
   checkForUnenforcedEncapsulation,
   UnenforcedEncapsulationReason,
 } from '../checks/check-for-unenforced-encapsulation';
+import { defaultConfig } from '../config/default-config';
+import { findConfig } from '../config/find-config';
+import { parseConfig, readUserConfig } from '../config/parse-config';
+import { resolveConfigFilePath } from '../config/resolve-config-for-file';
+import { UserSheriffConfig } from '../config/user-sheriff-config';
 import { NoAssignedTagError } from '../error/user-error';
-import { toFsPath } from '../file-info/fs-path';
+import { FsPath, toFsPath } from '../file-info/fs-path';
 import getFs from '../fs/getFs';
 import { init, ProjectInfo } from '../main/init';
 import { calcTagsForModule } from '../tags/calc-tags-for-module';
@@ -65,12 +70,32 @@ type MissingTsConfigFinding = {
   reason: string;
 };
 
+/**
+ * Check 5: a workspace-shaping option which a sub-config silently inherits
+ * from the defaults instead of from the root config.
+ */
+type SubConfigFallbackFinding = {
+  /** Sub-config path relative to the project root. */
+  subConfig: string;
+  /** Workspace-relative directory which that sub-config governs. */
+  directory: string;
+  /** Name of the option which is not set in the sub-config. */
+  option: string;
+  /** The value the root config sets for it. */
+  rootValue: string;
+  /** The value which is in effect for `directory` — always the default. */
+  effectiveValue: string;
+};
+
 type DoctorReport = {
   noTagModules: NoTagModuleFinding[];
   unenforcedEncapsulations: UnenforcedEncapsulationFinding[];
   barrelFiles: BarrelFileEntry[];
   allowedBarrels: AllowedBarrelEntry[];
   missingTsConfigs: MissingTsConfigFinding[];
+  subConfigFallbacks: SubConfigFallbackFinding[];
+  /** Root config files whose `configs` entries check 5 already visited. */
+  checkedRootConfigs: Set<FsPath>;
   projectInfos: Map<string, ProjectInfo>;
 };
 
@@ -82,12 +107,14 @@ type DoctorReport = {
  * 1. modules that resolve to no tags (`noTag`),
  * 2. folders matching the `encapsulationPattern` which are not enforced,
  * 3. barrel files inside barrel-less module trees,
- * 4. entry points whose `tsconfig.json` cannot be found.
+ * 4. entry points whose `tsconfig.json` cannot be found,
+ * 5. workspace-shaping options which a sub-config referenced via `configs`
+ *    silently inherits from the defaults instead of from the root config.
  *
- * Exits with code 1 on findings of checks 1, 2, and 4, and on check-3
+ * Exits with code 1 on findings of checks 1, 2, 4, and 5, and on check-3
  * findings under `barrelPolicy: 'warn'` or `'forbid'`.
  *
- * Without a `sheriff.config.ts`, the config-dependent checks 1–3 are
+ * Without a `sheriff.config.ts`, the config-dependent checks 1–3 and 5 are
  * skipped — there is no configuration whose enforcement could silently
  * diverge — and only check 4 runs.
  */
@@ -100,6 +127,8 @@ export function doctor(args: string[], options: DoctorOptions = {}) {
     barrelFiles: [],
     allowedBarrels: [],
     missingTsConfigs: [],
+    subConfigFallbacks: [],
+    checkedRootConfigs: new Set(),
     projectInfos: new Map(),
   };
 
@@ -151,7 +180,7 @@ function runChecksForEntry(
   report.projectInfos.set(project, projectInfo);
 
   if (projectInfo.config.isConfigFileMissing) {
-    // Checks 1–3 diagnose the configuration; without a config there is
+    // Checks 1–3 and 5 diagnose the configuration; without a config there is
     // nothing whose enforcement could silently diverge.
     return;
   }
@@ -159,6 +188,7 @@ function runChecksForEntry(
   collectNoTagModules(project, projectInfo, report);
   collectUnenforcedEncapsulations(project, projectInfo, report);
   collectBarrelFiles(project, projectInfo, report);
+  collectSubConfigFallbacks(projectInfo, report);
 }
 
 /**
@@ -267,6 +297,108 @@ function collectBarrelFiles(
   }
 }
 
+/**
+ * Options which shape the whole workspace rather than a single module, and
+ * which therefore have to be repeated in every sub-config.
+ */
+const WORKSPACE_SHAPING_OPTIONS = [
+  'enableBarrelLess',
+  'moduleIdentity',
+  'barrelPolicy',
+  'allowBarrelsIn',
+  'encapsulationPattern',
+  'barrelFileName',
+  'excludeRoot',
+  'autoTagging',
+] as const;
+
+type WorkspaceShapingOption = (typeof WORKSPACE_SHAPING_OPTIONS)[number];
+
+/**
+ * Deprecated aliases through which an option can also be set. A sub-config
+ * using the alias has made a deliberate choice and must stay silent.
+ */
+const OPTION_ALIASES: Partial<
+  Record<WorkspaceShapingOption, keyof UserSheriffConfig>
+> = {
+  encapsulationPattern: 'encapsulatedFolderNameForBarrelLess',
+};
+
+/**
+ * Check 5 — a sub-config referenced via `configs` is parsed standalone: it is
+ * merged with the DEFAULTS, never with the root config. Every workspace-wide
+ * option the root config sets therefore silently reverts to its default for
+ * everything that sub-config governs, and no other check reports it.
+ *
+ * Reported is every option where the root config sets a non-default value and
+ * the sub-config does not set the option at all. A sub-config which sets the
+ * option explicitly — even to the very same value as the default — has made a
+ * deliberate choice and stays silent.
+ *
+ * The finding is a property of the root config, not of an entry point, so it
+ * is collected once per root config file: attributing it to a project would
+ * multiply one configuration mistake by the number of entry points.
+ */
+function collectSubConfigFallbacks(
+  projectInfo: ProjectInfo,
+  report: DoctorReport,
+): void {
+  const fs = getFs();
+  // present for every project which got here (see runChecksForEntry)
+  const rootConfigFile = findConfig(projectInfo.rootDir)!;
+  if (report.checkedRootConfigs.has(rootConfigFile)) {
+    return;
+  }
+  report.checkedRootConfigs.add(rootConfigFile);
+
+  const rootConfig = parseConfig(rootConfigFile);
+
+  for (const [directory, configPath] of Object.entries(rootConfig.configs)) {
+    const subConfigFile = resolveConfigFilePath(
+      projectInfo.rootDir,
+      directory,
+      configPath,
+    );
+    const subUserConfig = readUserConfig(subConfigFile);
+
+    for (const option of WORKSPACE_SHAPING_OPTIONS) {
+      const rootValue = formatOptionValue(rootConfig[option]);
+      const defaultValue = formatOptionValue(defaultConfig[option]);
+
+      if (
+        rootValue === defaultValue ||
+        isExplicitlySet(subUserConfig, option)
+      ) {
+        continue;
+      }
+
+      report.subConfigFallbacks.push({
+        subConfig: fs.relativeTo(projectInfo.rootDir, subConfigFile),
+        directory,
+        option,
+        rootValue,
+        effectiveValue: defaultValue,
+      });
+    }
+  }
+}
+
+function isExplicitlySet(
+  userConfig: UserSheriffConfig,
+  option: WorkspaceShapingOption,
+): boolean {
+  const alias = OPTION_ALIASES[option];
+  return (
+    userConfig[option] !== undefined ||
+    (alias !== undefined && userConfig[alias] !== undefined)
+  );
+}
+
+/** Renders an option value so that it can be read back as written. */
+function formatOptionValue(value: unknown): string {
+  return value instanceof RegExp ? String(value) : JSON.stringify(value);
+}
+
 function countBarrelPolicyViolations(report: DoctorReport): number {
   return report.barrelFiles.filter((entry) => entry.severity === 'error')
     .length;
@@ -277,7 +409,8 @@ function countTotalFindings(report: DoctorReport): number {
     report.noTagModules.length +
     report.unenforcedEncapsulations.length +
     countBarrelPolicyViolations(report) +
-    report.missingTsConfigs.length
+    report.missingTsConfigs.length +
+    report.subConfigFallbacks.length
   );
 }
 
@@ -296,6 +429,7 @@ function toJsonReport(report: DoctorReport, exitCode: 0 | 1) {
       unenforcedEncapsulations: report.unenforcedEncapsulations.length,
       barrelPolicyViolations: countBarrelPolicyViolations(report),
       missingTsConfigs: report.missingTsConfigs.length,
+      subConfigFallbacks: report.subConfigFallbacks.length,
       total: countTotalFindings(report),
     },
     checks: {
@@ -304,6 +438,7 @@ function toJsonReport(report: DoctorReport, exitCode: 0 | 1) {
       barrelFiles: report.barrelFiles,
       allowedBarrels: report.allowedBarrels,
       missingTsConfigs: report.missingTsConfigs,
+      subConfigFallbacks: report.subConfigFallbacks,
     },
     exitCode,
   };
@@ -356,12 +491,46 @@ function logHumanReport(
     cli.log('  none');
   }
 
+  logSubConfigFallbacks(report);
+
   cli.log('');
   if (exitCode === 0) {
     cli.log('\u001b[32mDoctor found no issues. Well done!\u001b[0m');
   } else {
     const total = countTotalFindings(report);
     cli.log(`Doctor found ${total} issue${total === 1 ? '' : 's'}.`);
+  }
+}
+
+/**
+ * Check 5 is a property of the root config, not of a single entry point, so
+ * it is logged once for the whole workspace instead of per project — and only
+ * for workspaces which declare `configs` at all.
+ */
+function logSubConfigFallbacks(report: DoctorReport): void {
+  const usesMultipleConfigs = [...report.projectInfos.values()].some(
+    (projectInfo) => projectInfo.usesMultipleConfigs,
+  );
+  if (!usesMultipleConfigs) {
+    return;
+  }
+
+  cli.log('');
+  cli.log('Sub-configs falling back to defaults:');
+  if (report.subConfigFallbacks.length === 0) {
+    cli.log('  none');
+    return;
+  }
+
+  cli.log(
+    '  A sub-config is merged with the defaults, not with the root config. Repeat each option below in the sub-config.',
+  );
+  for (const finding of report.subConfigFallbacks) {
+    cli.log(
+      `  |-- ${finding.subConfig} (governs ${finding.directory}): ` +
+        `${finding.option} is not set - the root config sets ${finding.rootValue}, ` +
+        `so the default ${finding.effectiveValue} applies here`,
+    );
   }
 }
 
