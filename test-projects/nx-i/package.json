@@ -1,0 +1,12 @@
+{
+  "name": "nx-i",
+  "version": "1.0.0",
+  "description": "Nx-style monorepo layout (app + extracted lib) exercising Sheriff in barrel-less mode.",
+  "private": true,
+  "scripts": {
+    "test": "echo \"no test runner, see integration-test.sh\" && exit 1"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

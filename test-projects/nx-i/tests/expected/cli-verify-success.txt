@@ -1,0 +1,14 @@
+
+[1mVerification Report[0m
+
+[1mProject: client[0m
+
+
+[32mNo issues found for this project. Well done![0m
+
+[1mProject: domain-booking[0m
+
+
+[32mNo issues found for this project. Well done![0m
+
+[32mAll projects validated successfully![0m

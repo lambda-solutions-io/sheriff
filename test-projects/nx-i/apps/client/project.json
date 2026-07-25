@@ -1,0 +1,15 @@
+{
+  "name": "client",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "apps/client/src",
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "options": {
+        "main": "apps/client/src/main.ts",
+        "tsConfig": "tsconfig.json"
+      }
+    }
+  }
+}

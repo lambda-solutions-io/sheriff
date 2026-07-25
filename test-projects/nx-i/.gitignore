@@ -1,0 +1,6 @@
+/node_modules
+/.yalc
+/yalc.lock
+/package-lock.json
+/tests/actual/*
+!/tests/actual/.gitkeep
