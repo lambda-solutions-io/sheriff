@@ -18,7 +18,8 @@ export type UserErrorCode =
   | 'SH-017'
   | 'SH-018'
   | 'SH-019'
-  | 'SH-020';
+  | 'SH-020'
+  | 'SH-021';
 
 export class UserError extends Error {
   constructor(
@@ -198,6 +199,15 @@ export class AllowBarrelsInWithoutBarrelPolicyError extends UserError {
     super(
       'SH-020',
       `sheriff.config.ts sets allowBarrelsIn while barrelPolicy is absent or 'allow'. The exceptions would be dead configuration. Set barrelPolicy to 'warn' or 'forbid' or remove allowBarrelsIn.`,
+    );
+  }
+}
+
+export class ModuleIdentityConfigWithoutBarrelLessError extends UserError {
+  constructor() {
+    super(
+      'SH-021',
+      `sheriff.config.ts sets moduleIdentity: 'config' without enableBarrelLess: true. Without barrel-less mode modules are defined by barrel files by definition, so the setting is meaningless. Enable barrel-less mode or remove moduleIdentity.`,
     );
   }
 }

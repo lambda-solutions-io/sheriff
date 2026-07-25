@@ -13,6 +13,7 @@ export const defaultConfig: Configuration = {
   enableBarrelLess: false,
   barrelPolicy: 'allow',
   allowBarrelsIn: [],
+  moduleIdentity: 'auto',
   encapsulationPattern: 'internal',
   log: false,
   entryFile: '',

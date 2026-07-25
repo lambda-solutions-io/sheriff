@@ -210,3 +210,93 @@ describe('create module infos without barrel files', () => {
       .hasModulePaths(['src/app/customers']);
   });
 });
+
+/**
+ * `includeDirectoriesWithBarrel: true` is what `moduleIdentity: 'config'`
+ * passes: the `modules` configuration is the only source of module identity,
+ * so a barrel file must not remove a configured directory from the result.
+ */
+describe('create module infos from the config only (moduleIdentity: config)', () => {
+  beforeEach(() => useVirtualFs().reset());
+
+  function assertConfigOnlyProject(fileTree: FileTree) {
+    return {
+      withModuleConfig(moduleConfig: ModuleConfig) {
+        return {
+          hasModulePaths(modulePaths: string[]) {
+            createProject(fileTree);
+            const actualModulePaths = findModulePathsWithoutBarrel(
+              moduleConfig,
+              toFsPath('/project'),
+              'index.ts',
+              true,
+            );
+            expect(Array.from(actualModulePaths)).toEqual(
+              modulePaths.map((path) => `/project/${path}`),
+            );
+          },
+        };
+      },
+    };
+  }
+
+  it('should keep a configured directory which contains a barrel file', () => {
+    assertConfigOnlyProject({
+      src: {
+        app: {
+          customers: {
+            'index.ts': [],
+            feature: {},
+            ui: {
+              'index.ts': [],
+            },
+            data: {},
+            model: {},
+          },
+        },
+      },
+    })
+      .withModuleConfig({
+        'src/app/<domain>': 'lib',
+        'src/app/<domain>/<type>': ['domain:<domain>', 'type:<type>'],
+      })
+      .hasModulePaths([
+        'src/app/customers',
+        'src/app/customers/feature',
+        'src/app/customers/ui',
+        'src/app/customers/data',
+        'src/app/customers/model',
+      ]);
+  });
+
+  it('should not add an unconfigured directory which contains a barrel file', () => {
+    assertConfigOnlyProject({
+      src: {
+        app: {
+          customers: {
+            feature: {
+              helpers: {
+                'index.ts': [],
+              },
+            },
+          },
+          'index.ts': [],
+        },
+      },
+    })
+      .withModuleConfig({ 'src/app/<domain>/<type>': 'type:<type>' })
+      .hasModulePaths(['src/app/customers/feature']);
+  });
+
+  it('should keep a configured directory which has no barrel file', () => {
+    assertConfigOnlyProject({
+      src: {
+        app: {
+          customers: {},
+        },
+      },
+    })
+      .withModuleConfig({ 'src/app/<domain>': 'domain:<domain>' })
+      .hasModulePaths(['src/app/customers']);
+  });
+});

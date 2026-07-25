@@ -9,6 +9,7 @@ import {
   CollidingEncapsulationSettings,
   CollidingEntrySettings,
   MissingModulesWithoutAutoTaggingError,
+  ModuleIdentityConfigWithoutBarrelLessError,
   NoEntryPointsFoundError,
   TaggingAndModulesError,
 } from '../../error/user-error';
@@ -42,6 +43,7 @@ describe('parse Config', () => {
       'enableBarrelLess',
       'barrelPolicy',
       'allowBarrelsIn',
+      'moduleIdentity',
       'encapsulationPattern',
       'log',
       'entryFile',
@@ -89,6 +91,7 @@ export const config: SheriffConfig = {
         enableBarrelLess: false,
         barrelPolicy: 'allow',
         allowBarrelsIn: [],
+        moduleIdentity: 'auto',
         encapsulationPattern: 'internal',
         excludeRoot: false,
         log: false,
@@ -481,6 +484,103 @@ export const config: SheriffConfig = {
 
       expect(config.barrelPolicy).toBe('allow');
       expect(config.allowBarrelsIn).toEqual([]);
+    });
+  });
+
+  describe('moduleIdentity', () => {
+    it('should throw if moduleIdentity is config without enableBarrelLess', () => {
+      getFs().writeFile(
+        'sheriff.config.ts',
+        `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  depRules: { root: 'noTag', noTag: 'noTag' },
+  moduleIdentity: 'config',
+};
+      `,
+      );
+
+      expect(() =>
+        parseConfig(toFsPath(getFs().cwd() + '/sheriff.config.ts')),
+      ).toThrowUserError(new ModuleIdentityConfigWithoutBarrelLessError());
+    });
+
+    it('should throw if moduleIdentity is config with enableBarrelLess false', () => {
+      getFs().writeFile(
+        'sheriff.config.ts',
+        `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  depRules: { root: 'noTag', noTag: 'noTag' },
+  enableBarrelLess: false,
+  moduleIdentity: 'config',
+};
+      `,
+      );
+
+      expect(() =>
+        parseConfig(toFsPath(getFs().cwd() + '/sheriff.config.ts')),
+      ).toThrowUserError(new ModuleIdentityConfigWithoutBarrelLessError());
+    });
+
+    it('should not throw if moduleIdentity is auto without enableBarrelLess', () => {
+      getFs().writeFile(
+        'sheriff.config.ts',
+        `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  depRules: { root: 'noTag', noTag: 'noTag' },
+  moduleIdentity: 'auto',
+};
+      `,
+      );
+
+      expect(() =>
+        parseConfig(toFsPath(getFs().cwd() + '/sheriff.config.ts')),
+      ).not.toThrow();
+    });
+
+    it('should pass a valid moduleIdentity configuration through', () => {
+      getFs().writeFile(
+        'sheriff.config.ts',
+        `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  depRules: { root: 'noTag', noTag: 'noTag' },
+  enableBarrelLess: true,
+  moduleIdentity: 'config',
+};
+      `,
+      );
+
+      const config = parseConfig(
+        toFsPath(getFs().cwd() + '/sheriff.config.ts'),
+      );
+
+      expect(config.moduleIdentity).toBe('config');
+    });
+
+    it('should default moduleIdentity to auto', () => {
+      getFs().writeFile(
+        'sheriff.config.ts',
+        `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  depRules: { root: 'noTag', noTag: 'noTag' },
+};
+      `,
+      );
+
+      const config = parseConfig(
+        toFsPath(getFs().cwd() + '/sheriff.config.ts'),
+      );
+
+      expect(config.moduleIdentity).toBe('auto');
     });
   });
 

@@ -272,6 +272,49 @@ export interface UserSheriffConfig {
   barrelPolicy?: 'allow' | 'warn' | 'forbid';
 
   /**
+   * Decides what makes a directory a module.
+   *
+   * By default a directory becomes a module in two independent ways: it
+   * matches a {@link modules} pattern, or it simply contains a barrel file.
+   * The second way means module identity is derived from a file existing —
+   * dropping one stray `index.ts` into a directory that no `modules` pattern
+   * covers creates a brand-new, untagged (`noTag`) module and re-routes which
+   * module (and therefore which tags) an import is attributed to. The layer
+   * matrix silently stops governing that code path.
+   *
+   * - `'auto'` (default): keeps that behaviour — `modules` **and** barrel
+   *   files both create modules.
+   * - `'config'`: only directories matching a {@link modules} pattern are
+   *   modules. A barrel file never creates one. Files inside a barrel
+   *   directory which is not a configured module belong to their nearest
+   *   enclosing configured module.
+   *
+   * With `'config'` a barrel file still decides EXPOSURE *inside* a
+   * configured module: a configured module containing a barrel file exposes
+   * only that barrel file. The barrel therefore takes precedence over
+   * configured `exports` for the same module — exposure is decided by the
+   * barrel alone, exactly as in `'auto'` mode. Only identity and tagging
+   * change.
+   *
+   * Because `'config'` is only meaningful when modules are not defined by
+   * barrels in the first place, it requires {@link enableBarrelLess} to be
+   * `true` and is otherwise rejected (SH-021).
+   *
+   * @example
+   * ```typescript
+   * export const config: SheriffConfig = {
+   *   enableBarrelLess: true,
+   *   moduleIdentity: 'config',
+   *   modules: {
+   *     'libs/domains/<domain>/src/<type>': ['domain:<domain>', 'type:<type>'],
+   *   },
+   *   // ... other configuration
+   * };
+   * ```
+   */
+  moduleIdentity?: 'auto' | 'config';
+
+  /**
    * Glob patterns, relative to the project root and matched against the
    * module path, for barrel modules that stay legal despite a restrictive
    * {@link barrelPolicy}. `**` matches any number of path segments;

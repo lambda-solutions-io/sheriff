@@ -33,38 +33,60 @@ export type ModulePathMap = Record<FsPath, boolean | ModulePathInfo>;
  * configuration's property `modules`.
  *
  * If a module has a barrel file and an internal, it is of type barrel file.
+ *
+ * With `moduleIdentity: 'config'` a barrel file never creates a module:
+ * only the `modules` configuration does. A configured module which happens
+ * to contain the barrel file keeps its identity (and its configured tags),
+ * but is a barrel module for exposure purposes. Its configured `exports`
+ * are preserved on the entry, even though `Module.exposes` lets the barrel
+ * win over them — the barrel alone decides exposure, exactly like in
+ * `'auto'` mode.
  */
 export function findModulePaths(
   projectDirs: FsPath[],
   rootDir: FsPath,
   sheriffConfig: Configuration,
 ): ModulePathMap {
-  const { modules, enableBarrelLess, barrelFileName } = sheriffConfig;
+  const { modules, enableBarrelLess, barrelFileName, moduleIdentity } =
+    sheriffConfig;
+  const identityFromConfigOnly = moduleIdentity === 'config';
 
   // both finders walk the filesystem for every `init()`. Their results
   // depend on directory structure, which mtime stamps cannot validate,
   // so they are cached with a staleness window (see project-cache).
-  const modulesWithoutBarrel = enableBarrelLess
+  const modulesFromConfig = enableBarrelLess
     ? getOrCompute(
-        `module-paths-without-barrel\0${rootDir}\0${barrelFileName}\0${JSON.stringify(modules)}`,
+        `module-paths-without-barrel\0${rootDir}\0${barrelFileName}\0${identityFromConfigOnly}\0${JSON.stringify(modules)}`,
         () => ({
-          value: findModulePathsWithoutBarrel(modules, rootDir, barrelFileName),
+          value: findModulePathsWithoutBarrel(
+            modules,
+            rootDir,
+            barrelFileName,
+            identityFromConfigOnly,
+          ),
           dependencies: [],
         }),
         { ttlMs: DEFAULT_STRUCTURE_CACHE_TTL_MS },
       )
     : [];
-  const modulesWithBarrel = getOrCompute(
-    `module-paths-with-barrel\0${barrelFileName}\0${[...projectDirs].sort().join(',')}`,
-    () => ({
-      value: findModulePathsWithBarrel(projectDirs, barrelFileName),
-      dependencies: [],
-    }),
-    { ttlMs: DEFAULT_STRUCTURE_CACHE_TTL_MS },
-  );
+
   const modulePaths: ModulePathMap = {};
 
-  for (const path of modulesWithoutBarrel) {
+  if (identityFromConfigOnly) {
+    const fs = getFs();
+    for (const path of modulesFromConfig) {
+      modulePaths[path] = {
+        hasBarrel: fs.exists(fs.join(path, barrelFileName)),
+        exports: findExportsForModulePath(path, rootDir, modules),
+      };
+    }
+
+    return modulePaths;
+  }
+
+  const modulesWithBarrel = findBarrelDirectories(projectDirs, barrelFileName);
+
+  for (const path of modulesFromConfig) {
     modulePaths[path] = {
       hasBarrel: false,
       exports: findExportsForModulePath(path, rootDir, modules),
@@ -76,6 +98,28 @@ export function findModulePaths(
   }
 
   return modulePaths;
+}
+
+/**
+ * All directories below `projectDirs` which contain the barrel file,
+ * independent of module identity.
+ *
+ * Cached like the other structure walks, so callers outside module creation
+ * (the barrel policy check under `moduleIdentity: 'config'`) reuse the same
+ * filesystem scan instead of doing a second one.
+ */
+export function findBarrelDirectories(
+  projectDirs: FsPath[],
+  barrelFileName: string,
+): FsPath[] {
+  return getOrCompute(
+    `module-paths-with-barrel\0${barrelFileName}\0${[...projectDirs].sort().join(',')}`,
+    () => ({
+      value: findModulePathsWithBarrel(projectDirs, barrelFileName),
+      dependencies: [],
+    }),
+    { ttlMs: DEFAULT_STRUCTURE_CACHE_TTL_MS },
+  );
 }
 
 function findExportsForModulePath(
