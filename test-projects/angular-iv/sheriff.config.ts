@@ -1,6 +1,10 @@
-import { noDependencies, sameTag, SheriffConfig } from '@lambda-solutions/sheriff-core';
+import {
+  defineConfig,
+  noDependencies,
+  sameTag,
+} from '@lambda-solutions/sheriff-core';
 
-export const config: SheriffConfig = {
+export const config = defineConfig({
   version: 1,
   tagging: {
     'src/app': {
@@ -36,4 +40,4 @@ export const config: SheriffConfig = {
     'shared:http': ['shared:config', 'shared:ui-messaging'],
     'shared:ngrx-utils': ['shared:util'],
   },
-};
+});

@@ -1,6 +1,6 @@
-import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+import { defineConfig } from '@lambda-solutions/sheriff-core';
 
-export const config: SheriffConfig = {
+export const config = defineConfig({
   entryPoints: {
     'app-i': 'projects/app-i/src/main.ts',
     'app-ii': 'projects/app-ii/src/main.ts',
@@ -36,4 +36,4 @@ export const config: SheriffConfig = {
     'type:types': ['type:types'],
     'type:data-access': ['type:types', 'type:util', 'type:data-access'],
   },
-};
+});
