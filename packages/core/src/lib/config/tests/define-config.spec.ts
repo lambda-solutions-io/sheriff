@@ -39,7 +39,8 @@ describe('defineConfig', () => {
       const configFile = '/project/sheriff.config.ts';
       getFs().writeFile(
         configFile,
-        `const defineConfig = (config) => config;
+        `import { defineConfig } from '@lambda-solutions/sheriff-core';
+
          export const config = defineConfig({
            modules: { 'src/app': 'app' },
            depRules: { app: () => true },
@@ -50,6 +51,25 @@ describe('defineConfig', () => {
 
       expect(parsedConfig.modules).toEqual({ 'src/app': 'app' });
       expect(parsedConfig.autoTagging).toBe(true);
+    });
+
+    // a value import survives transpilation and becomes a real `require`,
+    // which `eval` resolves relative to parse-config, not to the config file
+    it('should resolve other value imports from Sheriff too', () => {
+      const configFile = '/project/sheriff.config.ts';
+      getFs().writeFile(
+        configFile,
+        `import { anyTag, defineConfig } from '@lambda-solutions/sheriff-core';
+
+         export const config = defineConfig({
+           modules: { 'src/app': 'app' },
+           depRules: { app: anyTag },
+         });`,
+      );
+
+      const parsedConfig = parseConfig(toFsPath(configFile));
+
+      expect(parsedConfig.depRules['app']).toBe(anyTag);
     });
   });
 });
