@@ -6,6 +6,7 @@ export { anyTag } from './lib/checks/any-tag';
 export { sameTag } from './lib/checks/same-tag';
 export { noDependencies } from './lib/checks/no-dependencies';
 export { UserSheriffConfig as SheriffConfig } from './lib/config/user-sheriff-config';
+export { defineConfig } from './lib/config/define-config';
 export {
   UserError,
   PluginNotFoundError,
