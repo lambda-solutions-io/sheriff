@@ -13,6 +13,14 @@ describe('defineConfig', () => {
     expect(defineConfig(config)).toBe(config);
   });
 
+  // a generic `<T extends UserSheriffConfig>` would infer the literal type
+  // and silently drop excess-property checking, so a typo'd option would
+  // compile and quietly disable the rule it was meant to configure
+  it('should reject an unknown property', () => {
+    // @ts-expect-error 'modulez' is not a Sheriff option
+    expect(defineConfig({ depRules: {}, modulez: {} })).toBeDefined();
+  });
+
   it('should keep every property untouched', () => {
     const config = defineConfig({
       modules: { 'src/app': 'app' },
