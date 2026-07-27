@@ -18,6 +18,20 @@ export const config: SheriffConfig = {
 };
 ```
 
+Alternatively, use `defineConfig` to get the same autocompletion and type
+checking without the type annotation:
+
+```typescript
+import { defineConfig } from '@lambda-solutions/sheriff-core';
+
+export const config = defineConfig({
+  // Your configuration options here
+});
+```
+
+`defineConfig` returns its argument unchanged, so both styles are equivalent.
+The export must still be named `config`.
+
 ## Mandatory Options
 
 These options are required for Sheriff to function properly. You need to understand and configure these for Sheriff to work effectively.
