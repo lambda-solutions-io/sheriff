@@ -15,6 +15,10 @@ import {
   TaggingAndModulesError,
 } from '../error/user-error';
 import { defaultConfig } from './default-config';
+import { anyTag } from '../checks/any-tag';
+import { sameTag } from '../checks/same-tag';
+import { noDependencies } from '../checks/no-dependencies';
+import { defineConfig } from './define-config';
 import { isEmptyRecord } from '../util/is-empty-record';
 import { getOrCompute } from '../cache/project-cache';
 
@@ -58,7 +62,48 @@ export const readUserConfig = (configFile: FsPath): UserSheriffConfig => {
     compilerOptions: { module: ts.ModuleKind.NodeNext },
   });
 
+  // `eval` resolves a bare `require` relative to THIS module, not to the
+  // config file. A config importing values from Sheriff itself — `anyTag`,
+  // `defineConfig`, ... — would therefore fail whenever the running core is
+  // not resolvable from here (CLI invoked by absolute path, in-process
+  // tests). Sheriff's own exports are already loaded, so serve them from
+  // memory and delegate everything else. Read by the `eval`ed code below,
+  // which the linter cannot see.
+  // eslint-disable-next-line unused-imports/no-unused-vars
+  const require = createConfigRequire();
+
   return eval(outputText) as UserSheriffConfig;
+};
+
+const sheriffPackageNames = [
+  '@lambda-solutions/sheriff-core',
+  '@softarc/sheriff-core',
+];
+
+/**
+ * The values a config file may import from Sheriff. Imported from their own
+ * modules instead of the package barrel, which would import this file back.
+ */
+const sheriffConfigExports = {
+  anyTag,
+  sameTag,
+  noDependencies,
+  defineConfig,
+};
+
+/**
+ * `require` for an eval'd config file: Sheriff's own package resolves to the
+ * running instance, any other module keeps the default behaviour.
+ */
+const createConfigRequire = (): NodeJS.Require => {
+  const configRequire = ((moduleName: string) =>
+    sheriffPackageNames.includes(moduleName)
+      ? sheriffConfigExports
+      : // the config file is CommonJS, so delegation must be `require`
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        require(moduleName)) as NodeJS.Require;
+
+  return Object.assign(configRequire, require);
 };
 
 const computeParsedConfig = (
