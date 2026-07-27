@@ -30,5 +30,5 @@ import { UserSheriffConfig } from './user-sheriff-config';
  * @param config the Sheriff configuration
  * @returns the same configuration object
  */
-export const defineConfig = <T extends UserSheriffConfig>(config: T): T =>
+export const defineConfig = (config: UserSheriffConfig): UserSheriffConfig =>
   config;
