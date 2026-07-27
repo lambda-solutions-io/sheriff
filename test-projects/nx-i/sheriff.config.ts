@@ -1,5 +1,6 @@
 import {
   anyTag,
+  defineConfig,
   noDependencies,
   sameTag,
   SheriffConfig,
@@ -54,7 +55,7 @@ const slice = (path: string, scope: string): Modules => ({
 /** `feat-<name>/` is load-bearing: it drives the path-based feat isolation. */
 const inAnyFeat = (path: string): boolean => /\/feat-[^/]+(\/|$)/.test(path);
 
-export const config: SheriffConfig = {
+export const config = defineConfig({
   enableBarrelLess: true,
   // encapsulationPattern: 'internal' is the default — every module gets a
   // private top-level `internal/` folder for free, module-private, no tag
@@ -112,4 +113,4 @@ export const config: SheriffConfig = {
       ({ to }) => to === 'feat-port', // sibling feats only via their api
     ],
   },
-};
+});

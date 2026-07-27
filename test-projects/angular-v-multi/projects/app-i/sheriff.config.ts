@@ -1,6 +1,6 @@
-import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+import { defineConfig } from '@lambda-solutions/sheriff-core';
 
-export const config: SheriffConfig = {
+export const config = defineConfig({
   enableBarrelLess: true,
   modules: {
     'projects/app-i/src/app/compliant/feat': [
@@ -12,4 +12,4 @@ export const config: SheriffConfig = {
     '*': '*',
     root: '*',
   },
-};
+});

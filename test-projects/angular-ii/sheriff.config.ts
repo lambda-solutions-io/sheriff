@@ -1,6 +1,10 @@
-import { noDependencies, sameTag, SheriffConfig } from '@lambda-solutions/sheriff-core';
+import {
+  defineConfig,
+  noDependencies,
+  sameTag,
+} from '@lambda-solutions/sheriff-core';
 
-export const sheriffConfig: SheriffConfig = {
+export const sheriffConfig = defineConfig({
   version: 1,
   tagging: {
     'src/app': {
@@ -23,4 +27,4 @@ export const sheriffConfig: SheriffConfig = {
     'type:ui': ['type:data'],
     'type:data': noDependencies,
   },
-};
+});
