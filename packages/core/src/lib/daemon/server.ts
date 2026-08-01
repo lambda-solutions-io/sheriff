@@ -18,6 +18,9 @@ import { startWatcher } from './watcher';
 
 export const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1_000;
 
+// generous on purpose: a slow daemon is still a live daemon
+const SOCKET_PROBE_TIMEOUT_MS = 500;
+
 export type DaemonServerOptions = {
   /** Project root; defaults to the current working directory. */
   rootDir?: string;
@@ -40,7 +43,7 @@ export type DaemonServer = {
  * version mismatches, config changes, and idle timeouts all end it, and
  * clients respawn it on demand.
  */
-export function startDaemonServer(
+export async function startDaemonServer(
   options: DaemonServerOptions = {},
 ): Promise<DaemonServer> {
   const rootDir = options.rootDir ?? process.cwd();
@@ -48,6 +51,10 @@ export function startDaemonServer(
   const log = options.log ?? (() => void 0);
   const exit = options.exit ?? (() => process.exit(0));
   const socketPath = getDaemonSocketPath(rootDir);
+
+  // never unlink a live daemon's socket: racing starts must fail here
+  // (or in `listen` via EADDRINUSE) instead of hijacking the path
+  await removeStaleSocket(socketPath);
 
   let shutdown: (reason: string) => void = () => void 0;
 
@@ -73,17 +80,37 @@ export function startDaemonServer(
   });
 
   return new Promise((resolve, reject) => {
-    server.once('error', (error) => reject(error));
-    removeStaleSocket(socketPath);
+    server.once('error', (error) => {
+      // e.g. EADDRINUSE when another daemon won the startup race
+      watcher.close();
+      clearTimeout(idleTimer);
+      reject(error);
+    });
     server.listen(socketPath, () => {
       log(`sheriff daemon listening on ${socketPath} (pid ${process.pid})`);
+
+      // identity of the socket file this daemon created; shutdown must
+      // only ever unlink this exact file, never a successor daemon's
+      const ownedSocketInode = getSocketInode(socketPath);
+
+      const releaseSocket = () => {
+        if (ownsSocketPath(socketPath, ownedSocketInode)) {
+          // closing the handle also unlinks the socket file (libuv)
+          server.close();
+          removeOwnedSocket(socketPath, ownedSocketInode);
+        } else {
+          // the path belongs to a successor daemon now; closing the
+          // handle would make libuv unlink the successor's socket, so
+          // keep the nameless handle and let process exit reclaim it
+          server.unref();
+        }
+      };
 
       shutdown = (reason: string) => {
         log(`sheriff daemon shutting down: ${reason}`);
         watcher.close();
         clearTimeout(idleTimer);
-        server.close();
-        removeStaleSocket(socketPath);
+        releaseSocket();
         // exit asynchronously so a pending response can flush first
         setTimeout(exit, 50).unref();
       };
@@ -93,8 +120,7 @@ export function startDaemonServer(
         close: () => {
           watcher.close();
           clearTimeout(idleTimer);
-          server.close();
-          removeStaleSocket(socketPath);
+          releaseSocket();
         },
       });
     });
@@ -230,13 +256,95 @@ function lintFile(filename: string, fileContent?: string) {
   };
 }
 
-function removeStaleSocket(socketPath: string): void {
-  if (process.platform !== 'win32' && fs.existsSync(socketPath)) {
-    try {
-      fs.unlinkSync(socketPath);
-    } catch {
-      // another process may have removed it already
+/**
+ * Removes a leftover socket file, but only after probing that no daemon
+ * answers on it. Unlinking a live socket would orphan the daemon behind
+ * it: still running and watching, yet unreachable and unkillable.
+ */
+async function removeStaleSocket(socketPath: string): Promise<void> {
+  if (process.platform === 'win32' || !fs.existsSync(socketPath)) {
+    return;
+  }
+  if (await hasLiveListener(socketPath)) {
+    throw new Error(`sheriff daemon already listening on ${socketPath}`);
+  }
+  try {
+    fs.unlinkSync(socketPath);
+  } catch {
+    // another process may have removed it already
+  }
+}
+
+/** Connect-probe: only a provably dead socket counts as stale. */
+function hasLiveListener(socketPath: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = net.createConnection(socketPath);
+    const timer = setTimeout(() => {
+      // no answer is not proof of death; err on the side of the daemon
+      probe.destroy();
+      resolve(true);
+    }, SOCKET_PROBE_TIMEOUT_MS);
+    probe.once('connect', () => {
+      clearTimeout(timer);
+      probe.destroy();
+      resolve(true);
+    });
+    probe.once('error', (error) => {
+      clearTimeout(timer);
+      const code = (error as NodeJS.ErrnoException).code;
+      resolve(code !== 'ECONNREFUSED' && code !== 'ENOENT');
+    });
+  });
+}
+
+function getSocketInode(socketPath: string): number | undefined {
+  if (process.platform === 'win32') {
+    return undefined;
+  }
+  try {
+    return fs.statSync(socketPath).ino;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * True while the file at the path is still the one this daemon created.
+ * Windows named pipes vanish with their server and cannot be hijacked,
+ * so ownership always holds there.
+ */
+function ownsSocketPath(
+  socketPath: string,
+  ownedSocketInode: number | undefined,
+): boolean {
+  if (process.platform === 'win32') {
+    return true;
+  }
+  try {
+    return fs.statSync(socketPath).ino === ownedSocketInode;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Unlinks the socket only while it is still the file this daemon
+ * created; a successor daemon's socket at the same path is left alone.
+ */
+function removeOwnedSocket(
+  socketPath: string,
+  ownedSocketInode: number | undefined,
+): void {
+  if (process.platform === 'win32' || ownedSocketInode === undefined) {
+    return;
+  }
+  try {
+    if (fs.statSync(socketPath).ino !== ownedSocketInode) {
+      return;
     }
+    fs.unlinkSync(socketPath);
+  } catch {
+    // another process may have removed it already
   }
 }
 
