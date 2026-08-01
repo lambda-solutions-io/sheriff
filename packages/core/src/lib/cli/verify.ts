@@ -38,8 +38,6 @@ type ProjectValidation = {
   filesCount: number;
   hasError: boolean;
   validationsMap: ValidationsMap;
-  encapsulations: string[];
-  dependencyRuleViolations: DependencyRuleViolation[];
   barrelPolicyWarnings: string[];
 };
 
@@ -64,8 +62,6 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
       filesCount: 0,
       hasError: false,
       validationsMap: {},
-      encapsulations: [],
-      dependencyRuleViolations: [],
       barrelPolicyWarnings: [],
     };
 
@@ -88,7 +84,11 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
     // a symlinked workspace, or case-insensitive-FS casing) would miss the
     // graph and be silently skipped -> false pass in a pre-commit gate.
     const requestedFilePaths = Array.from(
-      new Set(options.files.map((file) => canonicalize(resolveFilePath(file, fs), fs))),
+      new Set(
+        options.files.map((file) =>
+          canonicalize(resolveFilePath(file, fs), fs),
+        ),
+      ),
     );
     const projectFilePaths = new Map<string, Map<string, FsPath>>();
     const allKnownFilePaths = new Set<string>();
@@ -125,9 +125,7 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
           hasAnyProjectError = true;
         } else {
           // The file does not exist (deleted/renamed). Skipping is benign.
-          cli.log(
-            `Warning: ${relativePath} does not exist; skipping.`,
-          );
+          cli.log(`Warning: ${relativePath} does not exist; skipping.`);
         }
         return false;
       },
@@ -182,9 +180,7 @@ export function verify(args: string[], options: { files?: string[] } = {}) {
   // runs once per project in both full and `--files` mode.
   for (const projectEntry of projectEntries) {
     const validation = projectValidations.get(projectEntry.projectName)!;
-    if (
-      runBarrelPolicyCheck(projectEntry.projectInfo, validation, fs)
-    ) {
+    if (runBarrelPolicyCheck(projectEntry.projectInfo, validation, fs)) {
       hasAnyProjectError = true;
     }
   }
@@ -328,9 +324,6 @@ function runChecksForFile(
     fileInfoPath,
     projectInfo,
   );
-  projectValidation.encapsulations = encapsulations;
-  projectValidation.dependencyRuleViolations = dependencyRuleViolations;
-
   if (
     encapsulations.length === 0 &&
     dependencyRuleViolations.length === 0 &&
@@ -348,9 +341,7 @@ function runChecksForFile(
   const dependencyRules = dependencyRuleViolations.map(
     formatDependencyRuleViolation,
   );
-  const externalRules = externalRuleViolations.map(
-    formatExternalRuleViolation,
-  );
+  const externalRules = externalRuleViolations.map(formatExternalRuleViolation);
   const relativePath = fs.relativeTo(fs.cwd(), fileInfoPath);
   projectValidation.validationsMap[relativePath] = {
     encapsulations,

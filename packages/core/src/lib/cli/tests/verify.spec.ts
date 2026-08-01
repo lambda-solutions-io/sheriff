@@ -409,21 +409,17 @@ describe('verify', () => {
       });
     });
 
-    it('keeps watch mode precedence and ignores the files option', () => {
+    it('passes files through to watch mode', () => {
       const verifySpy = vitest.spyOn(verifyFile, 'verify');
       const verifyWatchSpy = vitest
         .spyOn(verifyWatchFile, 'verifyWatch')
         .mockImplementation(() => undefined);
 
-      main(
-        'verify',
-        'src/main.ts',
-        '--files',
-        'a.ts,b.ts',
-        '--watch',
-      );
+      main('verify', 'src/main.ts', '--files', 'a.ts,b.ts', '--watch');
 
-      expect(verifyWatchSpy).toHaveBeenCalledWith(['src/main.ts']);
+      expect(verifyWatchSpy).toHaveBeenCalledWith(['src/main.ts'], {
+        files: ['a.ts', 'b.ts'],
+      });
       expect(verifySpy).not.toHaveBeenCalled();
     });
   });
@@ -589,7 +585,9 @@ describe('verify', () => {
       createProject({
         'tsconfig.json': tsConfig(),
         'sheriff.config.ts': sheriffConfig({
-          modules: { 'src/<domain>/<type>': ['domain:<domain>', 'type:<type>'] },
+          modules: {
+            'src/<domain>/<type>': ['domain:<domain>', 'type:<type>'],
+          },
           depRules: { '*': '*' },
           enableBarrelLess: true,
           moduleIdentity: 'config',

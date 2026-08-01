@@ -10,7 +10,7 @@ import { doctor } from './doctor';
 import { cli } from './cli';
 import { exportData } from './export-data';
 import { version } from './version';
-import {version as packageVersion} from '../../../package.json';
+import { version as packageVersion } from '../../../package.json';
 import { getPlugins } from './internal/get-plugins';
 import { executePlugin } from './plugin-command';
 import { SheriffPlugin } from '../plugin/plugin';
@@ -23,7 +23,9 @@ function isBuiltinCommand(cmd: string | undefined): boolean {
 
 function showHelp(plugins: SheriffPlugin[]): void {
   cli.log(
-    cli.bold(`Sheriff (${packageVersion}) - Modularity for TypeScript Projects`),
+    cli.bold(
+      `Sheriff (${packageVersion}) - Modularity for TypeScript Projects`,
+    ),
   );
   cli.log('');
   cli.log('Commands:');
@@ -106,7 +108,12 @@ export function main(...argv: string[]) {
         const { args: verifyArgs, files } = parseVerifyFilesOption(args);
         if (verifyArgs.includes('--watch')) {
           // watch mode keeps the process alive; no endProcess handling
-          verifyWatch(verifyArgs.filter((arg) => arg !== '--watch'));
+          verifyWatch(
+            verifyArgs.filter((arg) => arg !== '--watch'),
+            {
+              files,
+            },
+          );
           break;
         }
         handleError(() => verify(verifyArgs, { files }));

@@ -221,6 +221,11 @@ function isCachingDisabled(): boolean {
 }
 
 function resolveTtlMs(ttlMs: number): number {
-  const override = Number(process.env['SHERIFF_CACHE_TTL']);
+  const ttlOverride = process.env['SHERIFF_CACHE_TTL']?.trim();
+  if (!ttlOverride) {
+    return ttlMs;
+  }
+
+  const override = Number(ttlOverride);
   return Number.isFinite(override) && override >= 0 ? override : ttlMs;
 }

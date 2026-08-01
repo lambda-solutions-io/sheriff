@@ -5,6 +5,7 @@ import {
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { createSheriffDiagnostics, Diagnostic } from './diagnostics';
+import { isDiagnosticsSupersededError } from './worker-diagnostics';
 
 export interface SheriffLspServerOptions {
   /** Connection that owns the JSON-RPC/LSP transport and lifecycle. */
@@ -130,7 +131,13 @@ export function createSheriffLspServer(
         void diagnostics.then(
           (resolvedDiagnostics) =>
             finishDiagnosticsRun(run, resolvedDiagnostics),
-          () => finishDiagnosticsRun(run, []),
+          (error) => {
+            if (isDiagnosticsSupersededError(error)) {
+              inFlightDiagnostics.delete(run);
+              return;
+            }
+            finishDiagnosticsRun(run, []);
+          },
         );
       } else {
         finishDiagnosticsRun(run, diagnostics);

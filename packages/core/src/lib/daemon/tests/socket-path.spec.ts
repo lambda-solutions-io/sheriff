@@ -18,6 +18,12 @@ describe('daemon socket path', () => {
     expect(getDaemonSocketPath('.')).toBe(getDaemonSocketPath(process.cwd()));
   });
 
+  it('should differ between users for the same root dir', () => {
+    expect(getDaemonSocketPath('/some/project', 'uid:1')).not.toBe(
+      getDaemonSocketPath('/some/project', 'uid:2'),
+    );
+  });
+
   it('should use a named pipe on windows and a socket file elsewhere', () => {
     const socketPath = getDaemonSocketPath('/some/project');
     if (process.platform === 'win32') {

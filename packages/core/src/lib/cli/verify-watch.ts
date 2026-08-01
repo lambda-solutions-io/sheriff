@@ -11,7 +11,10 @@ const RERUN_DEBOUNCE_MS = 100;
  * every relevant filesystem change, and reuses the project cache so
  * only changed files are re-analyzed.
  */
-export function verifyWatch(args: string[]): void {
+export function verifyWatch(
+  args: string[],
+  options: { files?: string[] } = {},
+): void {
   const rootDir = process.cwd();
 
   // verify() ends the process after a single run; watch runs must survive
@@ -22,12 +25,16 @@ export function verifyWatch(args: string[]): void {
 
   const runVerification = () => {
     try {
-      verify(args);
+      // `--files` keeps the same meaning as one-shot verify: every
+      // relevant change triggers a rerun, but the verified set stays the
+      // static file list supplied by the caller. Non-listed changes still
+      // rerun because imports or module structure may affect listed files.
+      verify(args, options);
     } catch (error) {
       handleErrorOutput(error);
     }
     cli.log('');
-    cli.log('watching for changes... (ctrl+c to quit)');
+    cli.log(getWatchingMessage(options.files));
   };
 
   const scheduleRun = () => {
@@ -66,4 +73,14 @@ export function verifyWatch(args: string[]): void {
   });
 
   runVerification();
+}
+
+function getWatchingMessage(files: string[] | undefined): string {
+  if (files && files.length > 0) {
+    return `watching for changes... verifying only ${files.join(
+      ', ',
+    )} (ctrl+c to quit)`;
+  }
+
+  return 'watching for changes... (ctrl+c to quit)';
 }

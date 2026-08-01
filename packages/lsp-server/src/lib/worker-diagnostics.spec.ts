@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { DiagnosticSeverity } from './diagnostics';
 import {
   createWorkerDiagnostics,
+  DiagnosticsSupersededError,
   DiagnosticsWorker,
 } from './worker-diagnostics';
 
@@ -20,7 +21,7 @@ describe('worker diagnostics', () => {
     expect(worker.requests).toEqual([
       { id: 1, uri: 'file:///app.ts', text: 'first' },
     ]);
-    await expect(superseded).resolves.toEqual([]);
+    await expect(superseded).rejects.toBeInstanceOf(DiagnosticsSupersededError);
 
     worker.respond(1, [testDiagnostic]);
     await expect(first).resolves.toEqual([testDiagnostic]);
@@ -73,7 +74,7 @@ class FakeWorker extends EventEmitter implements DiagnosticsWorker {
     this.requests.push(request);
   }
 
-  respond(id: number, diagnostics: typeof testDiagnostic[]): void {
+  respond(id: number, diagnostics: (typeof testDiagnostic)[]): void {
     this.emit('message', { id, diagnostics });
   }
 }

@@ -1,5 +1,16 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import getFs, { useVirtualFs } from '../fs/getFs';
+import * as nodeFs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+import getFs, { useDefaultFs, useVirtualFs } from '../fs/getFs';
 import { VirtualFs } from '../fs/virtual-fs';
 import { toFsPath } from '../file-info/fs-path';
 import {
@@ -22,7 +33,10 @@ describe('project cache', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllEnvs();
+    clearProjectCache();
+    useVirtualFs();
   });
 
   const writeMain = (contents = 'export const a = 1;') => {
@@ -106,6 +120,39 @@ describe('project cache', () => {
 
     expect(compute).toHaveBeenCalledTimes(2);
   });
+
+  it.each(['', '   '])(
+    'should treat blank SHERIFF_CACHE_TTL as unset',
+    (ttlOverride) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      vi.stubEnv('SHERIFF_CACHE_TTL', ttlOverride);
+      useDefaultFs();
+      clearProjectCache();
+      const temporaryDirectory = nodeFs.mkdtempSync(
+        path.join(os.tmpdir(), 'sheriff-cache-'),
+      );
+      const mainTsPath = path.join(temporaryDirectory, 'main.ts');
+
+      try {
+        nodeFs.writeFileSync(mainTsPath, 'export const a = 1;');
+        const mainTs = toFsPath(mainTsPath);
+        const compute = vi.fn(() => ({ value: 42, dependencies: [mainTs] }));
+
+        getOrCompute(`ttl-${JSON.stringify(ttlOverride)}`, compute, {
+          ttlMs: 1_000,
+        });
+        vi.setSystemTime(1);
+        getOrCompute(`ttl-${JSON.stringify(ttlOverride)}`, compute, {
+          ttlMs: 1_000,
+        });
+
+        expect(compute).toHaveBeenCalledTimes(1);
+      } finally {
+        nodeFs.rmSync(temporaryDirectory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('should recompute after invalidatePath for a dependency', () => {
     const mainTs = writeMain();

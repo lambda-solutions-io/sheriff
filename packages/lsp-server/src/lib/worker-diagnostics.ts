@@ -14,10 +14,7 @@ interface DiagnosticsResponse {
 
 export interface DiagnosticsWorker {
   postMessage(request: DiagnosticsRequest): void;
-  on(
-    event: 'message',
-    listener: (response: DiagnosticsResponse) => void,
-  ): this;
+  on(event: 'message', listener: (response: DiagnosticsResponse) => void): this;
   on(event: 'error', listener: (error: Error) => void): this;
   on(event: 'exit', listener: (code: number) => void): this;
   unref(): void;
@@ -37,6 +34,19 @@ interface DiagnosticsJob {
   request: DiagnosticsRequest;
   resolve: (diagnostics: Diagnostic[]) => void;
   reject: (error: Error) => void;
+}
+
+export class DiagnosticsSupersededError extends Error {
+  constructor(uri: string) {
+    super(`diagnostics request superseded for ${uri}`);
+    this.name = 'DiagnosticsSupersededError';
+  }
+}
+
+export function isDiagnosticsSupersededError(
+  error: unknown,
+): error is DiagnosticsSupersededError {
+  return error instanceof DiagnosticsSupersededError;
 }
 
 /**
@@ -62,10 +72,7 @@ export function createWorkerDiagnostics(
     }
   });
 
-  function createDiagnostics(
-    uri: string,
-    text: string,
-  ): Promise<Diagnostic[]> {
+  function createDiagnostics(uri: string, text: string): Promise<Diagnostic[]> {
     if (terminalError) {
       return Promise.reject(terminalError);
     }
@@ -84,7 +91,7 @@ export function createWorkerDiagnostics(
 
       const superseded = pendingByUri.get(uri);
       if (superseded) {
-        superseded.resolve([]);
+        superseded.reject(new DiagnosticsSupersededError(uri));
         pendingByUri.delete(uri);
       }
       pendingByUri.set(uri, job);

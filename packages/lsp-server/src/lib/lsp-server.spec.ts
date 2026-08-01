@@ -19,6 +19,7 @@ import { useDefaultFs } from '../../../core/src/lib/fs/getFs';
 import { Diagnostic, DiagnosticSeverity } from './diagnostics';
 import { createSheriffLspServer } from './lsp-server';
 import { filePathToUri } from './uri';
+import { DiagnosticsSupersededError } from './worker-diagnostics';
 
 describe('Sheriff LSP server', () => {
   let harnesses: ServerHarness[] = [];
@@ -191,6 +192,26 @@ describe('Sheriff LSP server', () => {
     ).rejects.toMatchObject({ code: -32601 });
   });
 
+  it('does not publish diagnostics for superseded analysis', async () => {
+    const createDiagnostics = vi.fn((uri: string) =>
+      Promise.reject(new DiagnosticsSupersededError(uri)),
+    );
+    const harness = await createServer({ createDiagnostics });
+
+    await harness.client.sendNotification('textDocument/didOpen', {
+      textDocument: {
+        uri: 'file:///superseded.ts',
+        languageId: 'typescript',
+        version: 1,
+        text: 'superseded',
+      },
+    });
+    await vi.waitFor(() => expect(createDiagnostics).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(harness.diagnostics).toEqual([]);
+  });
+
   it('clears diagnostics on close and cancels pending analysis', async () => {
     const createDiagnostics = vi.fn(() => [testDiagnostic]);
     const harness = await createServer({
@@ -354,10 +375,7 @@ describe('Sheriff LSP server', () => {
     const originalDelete = Map.prototype.delete;
     const deleteSpy = vi
       .spyOn(Map.prototype, 'delete')
-      .mockImplementation(function (
-        this: Map<unknown, unknown>,
-        key: unknown,
-      ) {
+      .mockImplementation(function (this: Map<unknown, unknown>, key: unknown) {
         if (
           typeof key === 'string' &&
           uris.includes(key) &&
