@@ -12,6 +12,7 @@ import {
 const CONNECT_TIMEOUT_MS = 200;
 const SPAWN_RETRY_DELAY_MS = 100;
 const SPAWN_RETRIES = 30;
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 
 export type DaemonClientOptions = {
   /** Spawn a daemon when none is reachable. */
@@ -37,9 +38,16 @@ export type DaemonClientOptions = {
 export class DaemonClient {
   #socket: net.Socket;
   #nextRequestId = 1;
+  // Insertion order doubles as request order: the server processes one
+  // line at a time per connection, so the oldest entry is the one an
+  // unparseable-request response (id -1, see #handleResponseLine) belongs to.
   #pending = new Map<
     number,
-    { resolve: (value: unknown) => void; reject: (error: Error) => void }
+    {
+      resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
+      timer: NodeJS.Timeout;
+    }
   >();
 
   /** Use `DaemonClient.connect` instead of constructing directly. */
@@ -110,7 +118,27 @@ export class DaemonClient {
   ): Promise<unknown> {
     const id = this.#nextRequestId++;
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.#pending.delete(id);
+        reject(
+          new Error(
+            `daemon request '${method}' timed out after ${resolveRequestTimeout()}ms`,
+          ),
+        );
+      }, resolveRequestTimeout());
+      timer.unref();
+
+      this.#pending.set(id, {
+        resolve: (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+        timer,
+      });
       this.#socket.write(encodeMessage({ id, method, params }));
     });
   }
@@ -124,6 +152,23 @@ export class DaemonClient {
     try {
       response = JSON.parse(line) as DaemonResponse;
     } catch {
+      return;
+    }
+
+    // The server could not parse the request line and has no id to
+    // correlate (daemon/server.ts handleRequestLine). Requests on one
+    // connection are handled strictly in order, so the oldest pending
+    // entry is the one that failed; without this it would otherwise
+    // hang until its timeout.
+    if (response.id === -1) {
+      const oldestId = this.#pending.keys().next().value;
+      if (oldestId !== undefined) {
+        const pending = this.#pending.get(oldestId)!;
+        this.#pending.delete(oldestId);
+        pending.reject(
+          new Error(response.error?.message ?? 'invalid request'),
+        );
+      }
       return;
     }
 
@@ -265,13 +310,26 @@ async function waitForDaemon(
 }
 
 function spawnDaemon(rootDir: string, cliBinPath: string): void {
-  spawn(process.execPath, [cliBinPath, 'daemon', 'run'], {
+  const child = spawn(process.execPath, [cliBinPath, 'daemon', 'run'], {
     cwd: rootDir,
     detached: true,
     stdio: 'ignore',
-  }).unref();
+  });
+  // Without this, a spawn failure (e.g. EMFILE, EAGAIN) is an uncaught
+  // exception instead of a connect failure the caller can react to;
+  // `waitForDaemon` simply keeps polling and times out on its own.
+  child.on('error', () => void 0);
+  child.unref();
 }
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function resolveRequestTimeout(): number {
+  const override = Number(process.env['SHERIFF_DAEMON_REQUEST_TIMEOUT_MS']);
+  if (Number.isFinite(override) && override > 0) {
+    return override;
+  }
+  return DEFAULT_REQUEST_TIMEOUT_MS;
 }
