@@ -55,24 +55,37 @@ const DEFAULT_CALL_TIMEOUT_MS = 5000;
  */
 const MAX_CONSECUTIVE_CALL_FAILURES = 3;
 
+/**
+ * Every recreation replaces a poisoned channel but leaks the old worker
+ * (synckit keeps it alive internally and exposes no teardown API) and grows
+ * the cache-busting workerPath by two characters. Cap recreations so a long
+ * run alternating success/timeout cannot accumulate workers without bound; a
+ * setup that keeps poisoning itself falls back permanently instead.
+ */
+const MAX_CHANNEL_RECREATIONS = 5;
+
 let daemonDisabled = false;
 let syncLintFile: SyncLintFile | undefined;
 let consecutiveCallFailures = 0;
 let channelGeneration = 0;
 
 /**
- * synckit 0.8.8 does not drain the worker MessagePort after an `Atomics.wait`
+ * synckit 0.8.x does not drain the worker MessagePort after an `Atomics.wait`
  * timeout: the timed-out call's late response stays queued, the NEXT call
- * FIFO-dequeues it and fails with "Expected id N but got id N-1" — and so
- * does every call after that. These errors mean the CHANNEL is poisoned, not
- * that the daemon is broken; without recovery a single slow file would burn
- * through the failure streak and permanently disable the bridge.
+ * FIFO-dequeues it and fails with "Internal error: Expected id N but got id
+ * N-1" — and so does every call after that. That id mismatch means the
+ * CHANNEL is poisoned, not that the daemon is broken.
+ *
+ * Only the id mismatch proves poisoning. A plain `Atomics.wait` timeout is
+ * just a slow call on every synckit version, and newer synckit (verified on
+ * 0.11.13, allowed by the ">=0.8.8 <1" range) drains stale responses by
+ * itself, so recreating on a mere timeout would discard a perfectly healthy
+ * channel — and leak its worker — on every slow file.
  */
 function isPoisonedChannelError(error: unknown): boolean {
   return (
     error instanceof Error &&
-    (error.message.includes('Atomics.wait() failed') ||
-      /Expected id \d+ but got id \d+/.test(error.message))
+    /^Internal error: Expected id \d+ but got id \d+$/.test(error.message)
   );
 }
 
@@ -165,6 +178,11 @@ export function lintFileViaDaemon(
       // failure on every later call.
       syncLintFile = undefined;
       channelGeneration += 1;
+      if (channelGeneration > MAX_CHANNEL_RECREATIONS) {
+        // Recreations leak the replaced worker; past the cap the leak (and
+        // the ever-poisoning setup behind it) outweighs the daemon speedup.
+        disableDaemonBridge();
+      }
     }
     // A single slow/errored call (e.g. a per-call timeout on a cold init or a
     // large file) falls back in-process for THIS call only. The bridge stays
