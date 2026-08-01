@@ -1,3 +1,4 @@
+import { normalize } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   isDaemonBridgeEnabled,
@@ -91,6 +92,56 @@ describe('daemon bridge', () => {
     expect(isDaemonBridgeEnabled()).toBe(true);
   });
 
+  it('recreates the channel after a synckit timeout so one slow call cannot poison later calls', () => {
+    process.env['SHERIFF_DAEMON'] = '1';
+    // Faithful model of synckit 0.8.8's undrained MessagePort: a timed-out
+    // call leaves its late response queued on the channel; every subsequent
+    // call on the SAME channel FIFO-dequeues a stale response and throws an
+    // id mismatch. Only a fresh channel (a new createSyncFn) works again.
+    const makePoisonableChannel = (timesOutFirstCall: boolean) => {
+      let nextId = 0;
+      let staleId: number | undefined;
+      return vi.fn(() => {
+        const id = nextId++;
+        if (staleId !== undefined) {
+          const got = staleId;
+          // This call's own late response becomes the next stale message.
+          staleId = id;
+          throw new Error(
+            `Internal error: Expected id ${id} but got id ${got}`,
+          );
+        }
+        if (timesOutFirstCall && id === 0) {
+          staleId = id;
+          throw new Error('Internal error: Atomics.wait() failed: timed-out');
+        }
+        return emptyLintResult;
+      });
+    };
+    const channels = [
+      makePoisonableChannel(true),
+      makePoisonableChannel(false),
+    ];
+    synckitMocks.createSyncFn.mockImplementation(() => channels.shift());
+
+    // The slow call falls back in-process for THAT call only.
+    expect(lintFileViaDaemon('/project/slow.ts', '')).toBeUndefined();
+    // Later calls must not dequeue the stale response: the bridge recreates
+    // the channel and keeps serving daemon results.
+    expect(lintFileViaDaemon('/project/a.ts', '')).toBe(emptyLintResult);
+    expect(lintFileViaDaemon('/project/b.ts', '')).toBe(emptyLintResult);
+    expect(isDaemonBridgeEnabled()).toBe(true);
+
+    // Recreation must bust synckit's per-path channel cache: a DIFFERENT
+    // workerPath string that still normalizes to the same file.
+    expect(synckitMocks.createSyncFn).toHaveBeenCalledTimes(2);
+    const [firstPath, secondPath] = synckitMocks.createSyncFn.mock.calls.map(
+      (call) => call[0] as string,
+    );
+    expect(secondPath).not.toBe(firstPath);
+    expect(normalize(secondPath)).toBe(normalize(firstPath));
+  });
+
   it('permanently disables the bridge after repeated consecutive failures', () => {
     process.env['SHERIFF_DAEMON'] = '1';
     const syncLintFile = vi.fn(() => {
@@ -115,20 +166,18 @@ describe('daemon bridge', () => {
     synckitMocks.createSyncFn.mockReturnValue(vi.fn(() => emptyLintResult));
 
     lintFileViaDaemon('/project/file.ts', '');
-    expect(synckitMocks.createSyncFn).toHaveBeenCalledWith(
-      expect.any(String),
-      { timeout: 5000 },
-    );
+    expect(synckitMocks.createSyncFn).toHaveBeenCalledWith(expect.any(String), {
+      timeout: 5000,
+    });
 
     resetDaemonBridgeForTests();
     synckitMocks.createSyncFn.mockReset();
     synckitMocks.createSyncFn.mockReturnValue(vi.fn(() => emptyLintResult));
     process.env['SHERIFF_DAEMON_TIMEOUT_MS'] = '12000';
     lintFileViaDaemon('/project/file.ts', '');
-    expect(synckitMocks.createSyncFn).toHaveBeenCalledWith(
-      expect.any(String),
-      { timeout: 12000 },
-    );
+    expect(synckitMocks.createSyncFn).toHaveBeenCalledWith(expect.any(String), {
+      timeout: 12000,
+    });
     delete process.env['SHERIFF_DAEMON_TIMEOUT_MS'];
   });
 
@@ -234,13 +283,7 @@ describe('daemon bridge', () => {
     const syncLintFile = vi.fn(() => emptyLintResult);
     synckitMocks.createSyncFn.mockReturnValue(syncLintFile);
 
-    daemonDependencyMessage(
-      '/project/file.ts',
-      '@app/a',
-      true,
-      'source',
-      {},
-    );
+    daemonDependencyMessage('/project/file.ts', '@app/a', true, 'source', {});
     daemonEncapsulationMessage(
       '/project/file.ts',
       '@app/a',

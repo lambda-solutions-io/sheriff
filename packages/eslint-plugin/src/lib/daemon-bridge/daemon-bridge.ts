@@ -1,3 +1,4 @@
+import { basename, dirname, sep } from 'path';
 import { createSyncFn } from 'synckit';
 
 export interface DependencyRuleViolationInfo {
@@ -57,6 +58,23 @@ const MAX_CONSECUTIVE_CALL_FAILURES = 3;
 let daemonDisabled = false;
 let syncLintFile: SyncLintFile | undefined;
 let consecutiveCallFailures = 0;
+let channelGeneration = 0;
+
+/**
+ * synckit 0.8.8 does not drain the worker MessagePort after an `Atomics.wait`
+ * timeout: the timed-out call's late response stays queued, the NEXT call
+ * FIFO-dequeues it and fails with "Expected id N but got id N-1" — and so
+ * does every call after that. These errors mean the CHANNEL is poisoned, not
+ * that the daemon is broken; without recovery a single slow file would burn
+ * through the failure streak and permanently disable the bridge.
+ */
+function isPoisonedChannelError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message.includes('Atomics.wait() failed') ||
+      /Expected id \d+ but got id \d+/.test(error.message))
+  );
+}
 
 export function isDaemonBridgeEnabled(): boolean {
   return process.env['SHERIFF_DAEMON'] === '1' && !daemonDisabled;
@@ -70,6 +88,7 @@ export function resetDaemonBridgeForTests(): void {
   daemonDisabled = false;
   syncLintFile = undefined;
   consecutiveCallFailures = 0;
+  channelGeneration = 0;
 }
 
 function resolveCallTimeoutMs(): number {
@@ -100,13 +119,24 @@ function getSyncLintFile(): SyncLintFile | undefined {
 }
 
 function resolveLintFileWorker(): string {
+  let workerPath: string;
   try {
-    return require.resolve('./lint-file.worker');
+    workerPath = require.resolve('./lint-file.worker');
   } catch {
     // Source-based test runners resolve the TypeScript worker directly. The
     // published CommonJS build takes the extensionless compiled-JS path above.
-    return require.resolve('./lint-file.worker.ts');
+    workerPath = require.resolve('./lint-file.worker.ts');
   }
+  if (channelGeneration === 0) {
+    return workerPath;
+  }
+  // synckit caches one worker/channel per exact workerPath STRING and offers
+  // no teardown API. Redundant "./" segments produce a distinct cache key
+  // that still resolves to the same file, so a channel poisoned by a
+  // timed-out call is replaced by a genuinely fresh worker/channel.
+  return `${dirname(workerPath)}${sep}${`.${sep}`.repeat(
+    channelGeneration,
+  )}${basename(workerPath)}`;
 }
 
 export function lintFileViaDaemon(
@@ -126,7 +156,16 @@ export function lintFileViaDaemon(
     // A successful call clears the streak; only sustained failures disable.
     consecutiveCallFailures = 0;
     return result;
-  } catch {
+  } catch (error) {
+    if (isPoisonedChannelError(error)) {
+      // Tear down the poisoned channel: the next call creates a fresh worker
+      // so the timed-out call's stale response can never be dequeued again.
+      // This preserves the documented "falls back for THAT call only"
+      // semantics instead of letting one timeout cascade into an id-mismatch
+      // failure on every later call.
+      syncLintFile = undefined;
+      channelGeneration += 1;
+    }
     // A single slow/errored call (e.g. a per-call timeout on a cold init or a
     // large file) falls back in-process for THIS call only. The bridge stays
     // on so later files can still use the daemon. It is disabled permanently
