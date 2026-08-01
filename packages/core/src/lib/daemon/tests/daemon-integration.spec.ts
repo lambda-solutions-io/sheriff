@@ -14,7 +14,7 @@ import {
 import { version as packageVersion } from '../../../../package.json';
 import { DaemonClient, getDaemonStatus, stopDaemon } from '../client';
 import { DaemonServer, startDaemonServer } from '../server';
-import { HandshakeResult } from '../protocol';
+import { createLineDecoder, HandshakeResult, encodeMessage } from '../protocol';
 import { getDaemonSocketPath } from '../socket-path';
 
 /**
@@ -65,12 +65,14 @@ describe('daemon integration', () => {
   it('should report the status', async () => {
     const status = await getDaemonStatus(rootDir);
     expect(status?.pid).toBe(process.pid);
+    expect(status?.coreVersion).toBe(packageVersion);
+    expect(status?.compatible).toBe(true);
   });
 
   it('should report skewed status without shutting down the daemon', async () => {
     const client = await connectWithoutHandshake(rootDir);
 
-    const status = (await client.request('handshake', {
+    const status = (await client.request('status', {
       coreVersion: '0.0.0-other',
     })) as HandshakeResult;
 
@@ -81,6 +83,59 @@ describe('daemon integration', () => {
 
     expect(exit).not.toHaveBeenCalled();
     expect((await getDaemonStatus(rootDir))?.pid).toBe(process.pid);
+  });
+
+  it('should fall back to the old handshake probe when status is unknown', async () => {
+    const fallbackRootDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'sheriff-daemon-status-fallback-'),
+    );
+    const socketPath = getDaemonSocketPath(fallbackRootDir);
+    const fallbackServer = net.createServer((socket) => {
+      socket.setEncoding('utf-8');
+      const decode = createLineDecoder((line) => {
+        const request = JSON.parse(line) as {
+          id: number;
+          method: string;
+        };
+        if (request.method === 'status') {
+          socket.write(
+            encodeMessage({
+              id: request.id,
+              error: { message: 'unknown method status' },
+            }),
+          );
+          return;
+        }
+        socket.write(
+          encodeMessage({
+            id: request.id,
+            result: {
+              coreVersion: '0.0.0-old',
+              rootDir: fallbackRootDir,
+              pid: 123,
+            },
+          }),
+        );
+      });
+      socket.on('data', decode);
+    });
+
+    try {
+      await new Promise<void>((resolve) =>
+        fallbackServer.listen(socketPath, resolve),
+      );
+
+      expect(await getDaemonStatus(fallbackRootDir)).toEqual({
+        coreVersion: '0.0.0-old',
+        rootDir: fallbackRootDir,
+        pid: 123,
+        compatible: false,
+      });
+      expect(await DaemonClient.connect(fallbackRootDir)).toBeUndefined();
+    } finally {
+      await new Promise<void>((resolve) => fallbackServer.close(() => resolve()));
+      fs.rmSync(fallbackRootDir, { recursive: true, force: true });
+    }
   });
 
   it('should verify the project over the socket', async () => {
@@ -160,6 +215,18 @@ describe('daemon integration', () => {
     client!.close();
   });
 
+  it('should reject unhandshaked work without shutting down the daemon', async () => {
+    const client = await connectWithoutHandshake(rootDir);
+
+    await expect(client.request('clearCache')).rejects.toThrow(
+      'version mismatch',
+    );
+    client.close();
+
+    expect(exit).not.toHaveBeenCalled();
+    expect((await getDaemonStatus(rootDir))?.pid).toBe(process.pid);
+  });
+
   it('should reject skewed work without shutting down the daemon', async () => {
     const client = await connectWithoutHandshake(rootDir);
 
@@ -171,26 +238,64 @@ describe('daemon integration', () => {
     expect((await getDaemonStatus(rootDir))?.pid).toBe(process.pid);
   });
 
-  it('should reject skewed shutdown without shutting down the daemon', async () => {
+  it('should keep unknown method errors visible after a skewed handshake', async () => {
     const client = await connectWithoutHandshake(rootDir);
 
-    await expect(
-      client.request('shutdown', { coreVersion: '0.0.0-other' }),
-    ).rejects.toThrow('version mismatch');
+    await client.request('handshake', { coreVersion: '0.0.0-other' });
+    await expect(client.request('nope')).rejects.toThrow(
+      'unknown method nope',
+    );
     client.close();
 
     expect(exit).not.toHaveBeenCalled();
     expect((await getDaemonStatus(rootDir))?.pid).toBe(process.pid);
   });
 
+  it('should accept shutdown despite a skewed or missing client version', async () => {
+    const skewedClient = await connectWithoutHandshake(rootDir);
+
+    await expect(
+      skewedClient.request('shutdown', { coreVersion: '0.0.0-other' }),
+    ).resolves.toBe(true);
+    skewedClient.close();
+
+    await waitForStoppedDaemon(rootDir);
+    await waitForExitCalls(exit, 1);
+
+    server = await startDaemonServer({ rootDir, exit });
+    exit.mockClear();
+
+    const oldClient = await connectWithoutHandshake(rootDir);
+
+    await expect(oldClient.request('shutdown')).resolves.toBe(true);
+    oldClient.close();
+
+    await waitForStoppedDaemon(rootDir);
+    await waitForExitCalls(exit, 1);
+  });
+
   it('should report no daemon after requested shutdown', async () => {
+    server = await startDaemonServer({ rootDir, exit });
+    exit.mockClear();
+
     expect(await stopDaemon(rootDir)).toBe(true);
-    await vi.waitFor(() =>
-      expect(getDaemonStatus(rootDir)).resolves.toBeUndefined(),
-    );
+    await waitForStoppedDaemon(rootDir);
     expect(await getDaemonStatus(rootDir)).toBeUndefined();
   });
 });
+
+async function waitForStoppedDaemon(rootDir: string): Promise<void> {
+  await vi.waitFor(() =>
+    expect(getDaemonStatus(rootDir)).resolves.toBeUndefined(),
+  );
+}
+
+async function waitForExitCalls(
+  exit: ReturnType<typeof vi.fn>,
+  calls: number,
+): Promise<void> {
+  await vi.waitFor(() => expect(exit).toHaveBeenCalledTimes(calls));
+}
 
 function connectWithoutHandshake(rootDir: string): Promise<DaemonClient> {
   return new Promise((resolve, reject) => {

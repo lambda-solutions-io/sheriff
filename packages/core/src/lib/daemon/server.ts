@@ -211,19 +211,12 @@ function executeMethod(
 ): unknown {
   const params = request.params ?? {};
 
-  if (
-    connectionState.versionMismatch &&
-    !isVersionSkewReadOnlyMethod(request.method)
-  ) {
-    throwVersionMismatchError(connectionState.versionMismatch);
-  }
-
   switch (request.method) {
     case 'handshake': {
       const clientVersion = params['coreVersion'];
       if (clientVersion !== packageVersion) {
-        const version = String(clientVersion);
-        connectionState.versionMismatch = version;
+        connectionState.clientVersion = asClientVersion(clientVersion);
+        connectionState.handshakeCompatible = false;
         /*
          * Older `daemon status` clients only know the handshake request.
          * Keep that read-only probe from killing a healthy daemon, but
@@ -232,49 +225,51 @@ function executeMethod(
          */
         return createHandshakeResult(rootDir, false);
       }
-      connectionState.versionMismatch = undefined;
+      connectionState.clientVersion = packageVersion;
+      connectionState.handshakeCompatible = true;
       return createHandshakeResult(rootDir, true);
     }
     case 'status':
-      return createHandshakeResult(rootDir);
+      return createHandshakeResult(
+        rootDir,
+        params['coreVersion'] === packageVersion,
+      );
+    case 'shutdown': {
+      shutdown('requested by client');
+      return true;
+    }
     case 'verify':
+      ensureCompatibleWorkRequest(connectionState);
       return getPluginAPI().verify(asOptionalString(params['entryFile']));
     case 'getProjectData':
+      ensureCompatibleWorkRequest(connectionState);
       return getPluginAPI().getProjectData(
         asOptionalString(params['entryFile']),
         params['options'] as ProjectDataOptions | undefined,
       );
     case 'getConfig':
+      ensureCompatibleWorkRequest(connectionState);
       // functions (depRules etc.) cannot cross the wire; strip them
       return JSON.parse(JSON.stringify(getPluginAPI().getConfig()));
     case 'lintFile':
+      ensureCompatibleWorkRequest(connectionState);
       return lintFile(
         String(params['filename']),
         asOptionalString(params['fileContent']),
       );
     case 'clearCache':
+      ensureCompatibleWorkRequest(connectionState);
       clearProjectCache();
       return true;
-    case 'shutdown': {
-      const clientVersion = params['coreVersion'];
-      if (clientVersion !== packageVersion) {
-        throwVersionMismatchError(String(clientVersion));
-      }
-      shutdown('requested by client');
-      return true;
-    }
     default:
       throw new Error(`unknown method ${request.method}`);
   }
 }
 
 type DaemonConnectionState = {
-  versionMismatch?: string;
+  clientVersion?: string;
+  handshakeCompatible?: boolean;
 };
-
-function isVersionSkewReadOnlyMethod(method: string): boolean {
-  return method === 'handshake' || method === 'status';
-}
 
 function createHandshakeResult(
   rootDir: string,
@@ -286,6 +281,16 @@ function createHandshakeResult(
     pid: process.pid,
     ...(compatible === undefined ? {} : { compatible }),
   };
+}
+
+function ensureCompatibleWorkRequest(state: DaemonConnectionState): void {
+  if (state.handshakeCompatible !== true) {
+    throwVersionMismatchError(state.clientVersion ?? 'unknown');
+  }
+}
+
+function asClientVersion(value: unknown): string {
+  return typeof value === 'string' ? value : 'unknown';
 }
 
 function throwVersionMismatchError(clientVersion: string): never {

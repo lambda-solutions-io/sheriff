@@ -210,6 +210,28 @@ describe('daemon bridge', () => {
     expect(syncLintFile).toHaveBeenCalledTimes(3);
   });
 
+  it('warns once and disables the bridge on daemon version skew', () => {
+    process.env['SHERIFF_DAEMON'] = '1';
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => void 0);
+    const syncLintFile = vi.fn(() => {
+      throw new Error(
+        'sheriff daemon version mismatch: daemon 1.0.0, client 2.0.0',
+      );
+    });
+    synckitMocks.createSyncFn.mockReturnValue(syncLintFile);
+
+    expect(lintFileViaDaemon('/project/a.ts', '')).toBeUndefined();
+    expect(isDaemonBridgeEnabled()).toBe(false);
+    expect(lintFileViaDaemon('/project/b.ts', '')).toBeUndefined();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain(
+      'sheriff daemon version mismatch: daemon 1.0.0, client 2.0.0',
+    );
+    expect(syncLintFile).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
   it('reads a larger per-call timeout, configurable via SHERIFF_DAEMON_TIMEOUT_MS', () => {
     process.env['SHERIFF_DAEMON'] = '1';
     synckitMocks.createSyncFn.mockReturnValue(vi.fn(() => emptyLintResult));

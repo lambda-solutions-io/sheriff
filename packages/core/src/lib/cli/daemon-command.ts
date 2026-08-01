@@ -44,7 +44,7 @@ export async function daemonCommand(args: string[]): Promise<void> {
       const status = await getDaemonStatus(rootDir);
       cli.log(
         status
-          ? `sheriff daemon running (pid ${status.pid}, version ${status.coreVersion})`
+          ? `sheriff daemon running (pid ${status.pid}, version ${status.coreVersion}, compatible ${status.compatible ? 'yes' : 'no'})`
           : 'no sheriff daemon running',
       );
       return;

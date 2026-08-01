@@ -17,6 +17,11 @@ export type DaemonClientOptions = {
   /** Spawn a daemon when none is reachable. */
   spawnIfMissing?: boolean;
   /**
+   * Throw instead of returning undefined when a daemon has a different core
+   * version.
+   */
+  throwOnVersionMismatch?: boolean;
+  /**
    * Script the daemon is spawned from, i.e. the sheriff CLI entry.
    * Required with `spawnIfMissing`.
    */
@@ -70,6 +75,9 @@ export class DaemonClient {
     } catch (error) {
       client.close();
       if (error instanceof DaemonVersionMismatchError) {
+        if (options.throwOnVersionMismatch) {
+          throw error;
+        }
         return undefined;
       }
       if (options.spawnIfMissing && options.cliBinPath) {
@@ -85,6 +93,9 @@ export class DaemonClient {
         } catch (error) {
           freshClient.close();
           if (error instanceof DaemonVersionMismatchError) {
+            if (options.throwOnVersionMismatch) {
+              throw error;
+            }
             return undefined;
           }
         }
@@ -146,11 +157,22 @@ export async function getDaemonStatus(
     return undefined;
   }
   try {
-    return (await client.request('status', {
+    const status = (await client.request('status', {
       coreVersion: packageVersion,
     })) as HandshakeResult;
-  } catch {
-    return undefined;
+    return normalizeDaemonStatus(status);
+  } catch (error) {
+    if (!isUnknownMethodError(error, 'status')) {
+      return undefined;
+    }
+    try {
+      const status = (await client.request('handshake', {
+        coreVersion: packageVersion,
+      })) as HandshakeResult;
+      return normalizeDaemonStatus(status);
+    } catch {
+      return undefined;
+    }
   } finally {
     client.close();
   }
@@ -161,7 +183,10 @@ async function requestCompatibleHandshake(client: DaemonClient): Promise<void> {
     coreVersion: packageVersion,
   })) as HandshakeResult;
 
-  if (handshake.compatible === false) {
+  if (
+    handshake.compatible === false ||
+    handshake.coreVersion !== packageVersion
+  ) {
     throw new DaemonVersionMismatchError(
       `sheriff daemon version mismatch: daemon ${handshake.coreVersion}, client ${packageVersion}`,
     );
@@ -173,6 +198,19 @@ class DaemonVersionMismatchError extends Error {
     super(message);
     this.name = 'DaemonVersionMismatchError';
   }
+}
+
+function normalizeDaemonStatus(status: HandshakeResult): HandshakeResult {
+  return {
+    ...status,
+    compatible: status.compatible ?? status.coreVersion === packageVersion,
+  };
+}
+
+function isUnknownMethodError(error: unknown, method: string): boolean {
+  return (
+    error instanceof Error && error.message === `unknown method ${method}`
+  );
 }
 
 /** Returns true when a daemon was running and accepted the shutdown. */

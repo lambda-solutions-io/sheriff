@@ -8,7 +8,9 @@ runAsWorker(
     filename: string,
     fileContent: string,
   ): Promise<DaemonLintResult> => {
-    const client = await DaemonClient.connect(rootDir);
+    const client = await DaemonClient.connect(rootDir, {
+      throwOnVersionMismatch: true,
+    });
     if (!client) {
       throw new Error('sheriff daemon unreachable');
     }

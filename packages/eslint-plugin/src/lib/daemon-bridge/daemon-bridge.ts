@@ -68,6 +68,7 @@ let daemonDisabled = false;
 let syncLintFile: SyncLintFile | undefined;
 let consecutiveCallFailures = 0;
 let channelGeneration = 0;
+let versionMismatchWarningEmitted = false;
 
 /**
  * synckit 0.8.x does not drain the worker MessagePort after an `Atomics.wait`
@@ -102,6 +103,7 @@ export function resetDaemonBridgeForTests(): void {
   syncLintFile = undefined;
   consecutiveCallFailures = 0;
   channelGeneration = 0;
+  versionMismatchWarningEmitted = false;
 }
 
 function resolveCallTimeoutMs(): number {
@@ -183,6 +185,10 @@ export function lintFileViaDaemon(
         // the ever-poisoning setup behind it) outweighs the daemon speedup.
         disableDaemonBridge();
       }
+    } else if (isDaemonVersionMismatchError(error)) {
+      warnVersionMismatchOnce(error);
+      disableDaemonBridge();
+      return undefined;
     }
     // A single slow/errored call (e.g. a per-call timeout on a cold init or a
     // large file) falls back in-process for THIS call only. The bridge stays
@@ -195,4 +201,21 @@ export function lintFileViaDaemon(
     }
     return undefined;
   }
+}
+
+function isDaemonVersionMismatchError(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    error.message.includes('sheriff daemon version mismatch')
+  );
+}
+
+function warnVersionMismatchOnce(error: Error): void {
+  if (versionMismatchWarningEmitted) {
+    return;
+  }
+  versionMismatchWarningEmitted = true;
+  console.warn(
+    `${error.message}. Falling back to in-process linting for this ESLint run.`,
+  );
 }
