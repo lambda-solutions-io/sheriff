@@ -94,6 +94,9 @@ export async function startDaemonServer(
       const ownedSocketInode = getSocketInode(socketPath);
 
       const releaseSocket = () => {
+        // stat-then-close is a TOCTOU window: a successor could claim
+        // the path in between. Unavoidable without an atomic
+        // inode-checked unlink, and the window is a few microseconds.
         if (ownsSocketPath(socketPath, ownedSocketInode)) {
           // closing the handle also unlinks the socket file (libuv)
           server.close();
@@ -265,34 +268,67 @@ async function removeStaleSocket(socketPath: string): Promise<void> {
   if (process.platform === 'win32' || !fs.existsSync(socketPath)) {
     return;
   }
-  if (await hasLiveListener(socketPath)) {
-    throw new Error(`sheriff daemon already listening on ${socketPath}`);
+  switch (await probeSocket(socketPath)) {
+    case 'live':
+      throw new Error(`sheriff daemon already listening on ${socketPath}`);
+    case 'unreadable':
+      throw new Error(
+        `cannot probe the sheriff daemon socket at ${socketPath} ` +
+          `(permission denied); remove it manually`,
+      );
+    case 'stale':
+      break;
   }
   try {
     fs.unlinkSync(socketPath);
   } catch {
-    // another process may have removed it already
+    try {
+      // an empty directory can squat on the path too
+      fs.rmdirSync(socketPath);
+    } catch {
+      // already removed by another process, or non-removable: the
+      // latter surfaces as EADDRINUSE from `listen`
+    }
   }
 }
 
-/** Connect-probe: only a provably dead socket counts as stale. */
-function hasLiveListener(socketPath: string): Promise<boolean> {
+type SocketProbeResult = 'live' | 'stale' | 'unreadable';
+
+/** Connect-probe: only a provably dead path counts as stale. */
+function probeSocket(socketPath: string): Promise<SocketProbeResult> {
   return new Promise((resolve) => {
     const probe = net.createConnection(socketPath);
     const timer = setTimeout(() => {
       // no answer is not proof of death; err on the side of the daemon
       probe.destroy();
-      resolve(true);
+      resolve('live');
     }, SOCKET_PROBE_TIMEOUT_MS);
     probe.once('connect', () => {
       clearTimeout(timer);
       probe.destroy();
-      resolve(true);
+      resolve('live');
     });
     probe.once('error', (error) => {
       clearTimeout(timer);
-      const code = (error as NodeJS.ErrnoException).code;
-      resolve(code !== 'ECONNREFUSED' && code !== 'ENOENT');
+      switch ((error as NodeJS.ErrnoException).code) {
+        // dead socket, vanished path, or a non-socket squatting on the
+        // path: nothing can be listening, so removal is safe
+        case 'ECONNREFUSED':
+        case 'ENOENT':
+        case 'ENOTSOCK':
+        case 'EISDIR':
+          resolve('stale');
+          return;
+        // unreadable: could hide a live daemon, but self-healing by
+        // unlink is impossible either way; report instead of wedging
+        // startup with a misleading "already listening"
+        case 'EACCES':
+        case 'EPERM':
+          resolve('unreadable');
+          return;
+        default:
+          resolve('live');
+      }
     });
   });
 }

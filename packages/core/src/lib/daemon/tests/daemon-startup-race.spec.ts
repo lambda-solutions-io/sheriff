@@ -59,6 +59,43 @@ describe.skipIf(process.platform === 'win32')('daemon startup race', () => {
     expect(status?.pid).toBe(process.pid);
   });
 
+  it('should remove a regular file squatting on the socket path', async () => {
+    const socketPath = getDaemonSocketPath(rootDir);
+    fs.writeFileSync(socketPath, 'not a socket');
+
+    const server = await start();
+
+    expect(server.socketPath).toBe(socketPath);
+    const status = await getDaemonStatus(rootDir);
+    expect(status?.pid).toBe(process.pid);
+  });
+
+  it('should remove an empty directory squatting on the socket path', async () => {
+    const socketPath = getDaemonSocketPath(rootDir);
+    fs.mkdirSync(socketPath);
+
+    const server = await start();
+
+    expect(server.socketPath).toBe(socketPath);
+    const status = await getDaemonStatus(rootDir);
+    expect(status?.pid).toBe(process.pid);
+  });
+
+  it('should report an unprobeable socket instead of claiming a live daemon', async () => {
+    // root can probe anything; the EACCES branch is unreachable then
+    if (process.getuid?.() === 0) {
+      return;
+    }
+    const socketPath = getDaemonSocketPath(rootDir);
+    await createStaleSocket(socketPath);
+    fs.chmodSync(socketPath, 0o000);
+
+    await expect(start()).rejects.toThrow(/permission denied.*manually/);
+
+    fs.chmodSync(socketPath, 0o755);
+    fs.unlinkSync(socketPath);
+  });
+
   it('should remove a stale socket left behind by a crashed daemon', async () => {
     const socketPath = getDaemonSocketPath(rootDir);
     await createStaleSocket(socketPath);
