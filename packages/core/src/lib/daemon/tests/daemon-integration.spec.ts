@@ -1,11 +1,21 @@
 import * as fs from 'fs';
+import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import { version as packageVersion } from '../../../../package.json';
 import { DaemonClient, getDaemonStatus, stopDaemon } from '../client';
 import { DaemonServer, startDaemonServer } from '../server';
 import { HandshakeResult } from '../protocol';
+import { getDaemonSocketPath } from '../socket-path';
 
 /**
  * End-to-end over a real socket against a minimal on-disk project:
@@ -26,6 +36,10 @@ describe('daemon integration', () => {
     process.chdir(rootDir);
 
     server = await startDaemonServer({ rootDir, exit });
+  });
+
+  beforeEach(() => {
+    exit.mockClear();
   });
 
   afterAll(() => {
@@ -51,6 +65,22 @@ describe('daemon integration', () => {
   it('should report the status', async () => {
     const status = await getDaemonStatus(rootDir);
     expect(status?.pid).toBe(process.pid);
+  });
+
+  it('should report skewed status without shutting down the daemon', async () => {
+    const client = await connectWithoutHandshake(rootDir);
+
+    const status = (await client.request('handshake', {
+      coreVersion: '0.0.0-other',
+    })) as HandshakeResult;
+
+    expect(status.coreVersion).toBe(packageVersion);
+    expect(status.pid).toBe(process.pid);
+    expect(status.compatible).toBe(false);
+    client.close();
+
+    expect(exit).not.toHaveBeenCalled();
+    expect((await getDaemonStatus(rootDir))?.pid).toBe(process.pid);
   });
 
   it('should verify the project over the socket', async () => {
@@ -130,22 +160,45 @@ describe('daemon integration', () => {
     client!.close();
   });
 
-  it('should shut down on version mismatch', async () => {
-    const client = await DaemonClient.connect(rootDir);
+  it('should reject skewed work without shutting down the daemon', async () => {
+    const client = await connectWithoutHandshake(rootDir);
 
-    await expect(
-      client!.request('handshake', { coreVersion: '0.0.0-other' }),
-    ).rejects.toThrow('version mismatch');
-    client!.close();
+    await client.request('handshake', { coreVersion: '0.0.0-other' });
+    await expect(client.request('verify')).rejects.toThrow('version mismatch');
+    client.close();
 
-    await vi.waitFor(() => expect(exit).toHaveBeenCalled());
+    expect(exit).not.toHaveBeenCalled();
+    expect((await getDaemonStatus(rootDir))?.pid).toBe(process.pid);
   });
 
-  it('should report no daemon after shutdown', async () => {
-    expect(await stopDaemon(rootDir)).toBe(false);
+  it('should reject skewed shutdown without shutting down the daemon', async () => {
+    const client = await connectWithoutHandshake(rootDir);
+
+    await expect(
+      client.request('shutdown', { coreVersion: '0.0.0-other' }),
+    ).rejects.toThrow('version mismatch');
+    client.close();
+
+    expect(exit).not.toHaveBeenCalled();
+    expect((await getDaemonStatus(rootDir))?.pid).toBe(process.pid);
+  });
+
+  it('should report no daemon after requested shutdown', async () => {
+    expect(await stopDaemon(rootDir)).toBe(true);
+    await vi.waitFor(() =>
+      expect(getDaemonStatus(rootDir)).resolves.toBeUndefined(),
+    );
     expect(await getDaemonStatus(rootDir)).toBeUndefined();
   });
 });
+
+function connectWithoutHandshake(rootDir: string): Promise<DaemonClient> {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection(getDaemonSocketPath(rootDir));
+    socket.once('connect', () => resolve(new DaemonClient(socket)));
+    socket.once('error', reject);
+  });
+}
 
 function writeFixtureProject(rootDir: string) {
   const write = (relativePath: string, contents: string) => {

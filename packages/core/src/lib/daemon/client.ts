@@ -25,9 +25,9 @@ export type DaemonClientOptions = {
 
 /**
  * Connection to a running sheriff daemon. `connect` verifies via
- * handshake that daemon and client run the same sheriff version; a
- * mismatched daemon shuts itself down and `connect` retries once so a
- * fresh daemon of the right version takes over.
+ * handshake that daemon and client run the same sheriff version. A
+ * mismatched daemon stays alive for its own clients, so `connect`
+ * refuses the socket instead of spawning over it.
  */
 export class DaemonClient {
   #socket: net.Socket;
@@ -65,11 +65,13 @@ export class DaemonClient {
     }
 
     try {
-      await client.request('handshake', { coreVersion: packageVersion });
+      await requestCompatibleHandshake(client);
       return client;
-    } catch {
-      // version mismatch: the daemon exits itself; spawn a fresh one
+    } catch (error) {
       client.close();
+      if (error instanceof DaemonVersionMismatchError) {
+        return undefined;
+      }
       if (options.spawnIfMissing && options.cliBinPath) {
         await delay(SPAWN_RETRY_DELAY_MS);
         spawnDaemon(rootDir, options.cliBinPath);
@@ -78,12 +80,13 @@ export class DaemonClient {
           return undefined;
         }
         try {
-          await freshClient.request('handshake', {
-            coreVersion: packageVersion,
-          });
+          await requestCompatibleHandshake(freshClient);
           return freshClient;
-        } catch {
+        } catch (error) {
           freshClient.close();
+          if (error instanceof DaemonVersionMismatchError) {
+            return undefined;
+          }
         }
       }
       return undefined;
@@ -138,18 +141,37 @@ export class DaemonClient {
 export async function getDaemonStatus(
   rootDir: string,
 ): Promise<HandshakeResult | undefined> {
-  const client = await DaemonClient.connect(rootDir);
+  const client = await connectToSocket(getDaemonSocketPath(rootDir));
   if (!client) {
     return undefined;
   }
   try {
-    return (await client.request('handshake', {
+    return (await client.request('status', {
       coreVersion: packageVersion,
     })) as HandshakeResult;
   } catch {
     return undefined;
   } finally {
     client.close();
+  }
+}
+
+async function requestCompatibleHandshake(client: DaemonClient): Promise<void> {
+  const handshake = (await client.request('handshake', {
+    coreVersion: packageVersion,
+  })) as HandshakeResult;
+
+  if (handshake.compatible === false) {
+    throw new DaemonVersionMismatchError(
+      `sheriff daemon version mismatch: daemon ${handshake.coreVersion}, client ${packageVersion}`,
+    );
+  }
+}
+
+class DaemonVersionMismatchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DaemonVersionMismatchError';
   }
 }
 
@@ -161,7 +183,7 @@ export async function stopDaemon(rootDir: string): Promise<boolean> {
     return false;
   }
   try {
-    await client.request('shutdown');
+    await client.request('shutdown', { coreVersion: packageVersion });
     return true;
   } catch {
     return false;

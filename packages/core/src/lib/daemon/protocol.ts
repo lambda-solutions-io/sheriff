@@ -19,6 +19,7 @@ export type HandshakeResult = {
   coreVersion: string;
   rootDir: string;
   pid: number;
+  compatible?: boolean;
 };
 
 export function encodeMessage(message: DaemonRequest | DaemonResponse): string {

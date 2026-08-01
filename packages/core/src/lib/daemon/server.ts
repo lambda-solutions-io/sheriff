@@ -40,8 +40,8 @@ export type DaemonServer = {
  * Long-running sheriff process. Serves verify/getProjectData/getConfig/
  * lintFile over a local socket while a filesystem watcher keeps the
  * project cache warm and exact. The process is disposable by design:
- * version mismatches, config changes, and idle timeouts all end it, and
- * clients respawn it on demand.
+ * config changes and idle timeouts end it, and clients respawn it on
+ * demand.
  */
 export async function startDaemonServer(
   options: DaemonServerOptions = {},
@@ -106,9 +106,15 @@ export async function startDaemonServer(
 
   const server = net.createServer((socket) => {
     socket.setEncoding('utf-8');
+    const connectionState: DaemonConnectionState = {};
     const decode = createLineDecoder((line) => {
       idleTimer.refresh();
-      const response = handleRequestLine(line, rootDir, shutdown);
+      const response = handleRequestLine(
+        line,
+        rootDir,
+        shutdown,
+        connectionState,
+      );
       socket.write(encodeMessage(response));
     });
     socket.on('data', decode);
@@ -173,6 +179,7 @@ function handleRequestLine(
   line: string,
   rootDir: string,
   shutdown: (reason: string) => void,
+  connectionState: DaemonConnectionState,
 ): DaemonResponse {
   let request: DaemonRequest;
   try {
@@ -184,7 +191,7 @@ function handleRequestLine(
   try {
     return {
       id: request.id,
-      result: executeMethod(request, rootDir, shutdown),
+      result: executeMethod(request, rootDir, shutdown, connectionState),
     };
   } catch (error) {
     return {
@@ -200,27 +207,36 @@ function executeMethod(
   request: DaemonRequest,
   rootDir: string,
   shutdown: (reason: string) => void,
+  connectionState: DaemonConnectionState,
 ): unknown {
   const params = request.params ?? {};
+
+  if (
+    connectionState.versionMismatch &&
+    !isVersionSkewReadOnlyMethod(request.method)
+  ) {
+    throwVersionMismatchError(connectionState.versionMismatch);
+  }
 
   switch (request.method) {
     case 'handshake': {
       const clientVersion = params['coreVersion'];
       if (clientVersion !== packageVersion) {
-        // a stale daemon must never serve a newer client
-        shutdown(
-          `version mismatch (daemon ${packageVersion}, client ${String(clientVersion)})`,
-        );
-        throw new Error(
-          `sheriff daemon version mismatch: daemon ${packageVersion}, client ${String(clientVersion)}`,
-        );
+        const version = String(clientVersion);
+        connectionState.versionMismatch = version;
+        /*
+         * Older `daemon status` clients only know the handshake request.
+         * Keep that read-only probe from killing a healthy daemon, but
+         * remember the skew on this socket so any follow-up work request is
+         * rejected instead of serving data across incompatible core versions.
+         */
+        return createHandshakeResult(rootDir, false);
       }
-      return {
-        coreVersion: packageVersion,
-        rootDir,
-        pid: process.pid,
-      } satisfies HandshakeResult;
+      connectionState.versionMismatch = undefined;
+      return createHandshakeResult(rootDir, true);
     }
+    case 'status':
+      return createHandshakeResult(rootDir);
     case 'verify':
       return getPluginAPI().verify(asOptionalString(params['entryFile']));
     case 'getProjectData':
@@ -239,12 +255,43 @@ function executeMethod(
     case 'clearCache':
       clearProjectCache();
       return true;
-    case 'shutdown':
+    case 'shutdown': {
+      const clientVersion = params['coreVersion'];
+      if (clientVersion !== packageVersion) {
+        throwVersionMismatchError(String(clientVersion));
+      }
       shutdown('requested by client');
       return true;
+    }
     default:
       throw new Error(`unknown method ${request.method}`);
   }
+}
+
+type DaemonConnectionState = {
+  versionMismatch?: string;
+};
+
+function isVersionSkewReadOnlyMethod(method: string): boolean {
+  return method === 'handshake' || method === 'status';
+}
+
+function createHandshakeResult(
+  rootDir: string,
+  compatible?: boolean,
+): HandshakeResult {
+  return {
+    coreVersion: packageVersion,
+    rootDir,
+    pid: process.pid,
+    ...(compatible === undefined ? {} : { compatible }),
+  };
+}
+
+function throwVersionMismatchError(clientVersion: string): never {
+  throw new Error(
+    `sheriff daemon version mismatch: daemon ${packageVersion}, client ${clientVersion}`,
+  );
 }
 
 function asOptionalString(value: unknown): string | undefined {
