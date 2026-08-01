@@ -90,16 +90,9 @@ function getDaemonLintMessages(
   }
 
   if (isFirstRun) {
-    const cached = messagesByFilename.get(filename);
-    if (
-      cached?.sourceCode === sourceCode &&
-      cached.lintRun === lintRun &&
-      !cached.firstRunConsumers.has(consumer)
-    ) {
+    const cached = takeValidCachedMessages(filename, sourceCode, lintRun);
+    if (cached && !cached.firstRunConsumers.has(consumer)) {
       cached.firstRunConsumers.add(consumer);
-      // Touch the entry so the file cache is a true LRU rather than FIFO.
-      messagesByFilename.delete(filename);
-      messagesByFilename.set(filename, cached);
       return cached;
     }
 
@@ -132,7 +125,33 @@ function getDaemonLintMessages(
     return messages;
   }
 
-  return messagesByFilename.get(filename);
+  // A later node of a file the daemon already linted. The entry must be
+  // validated exactly like on the first run: an evicted entry is absent and a
+  // stale one belongs to a different source text or lint run, and returning
+  // either would check this node against a result that is not this file's.
+  // `undefined` makes the rule fall back in-process, which primes itself.
+  return takeValidCachedMessages(filename, sourceCode, lintRun);
+}
+
+/**
+ * Return the cached messages for `filename` only when they belong to this exact
+ * source text and lint run, touching the entry so the file cache is a true LRU
+ * rather than FIFO. Touching on every hit — not just on the first run — keeps a
+ * file that is still being linted from being evicted by its own lint pass.
+ */
+function takeValidCachedMessages(
+  filename: string,
+  sourceCode: string,
+  lintRun: object | undefined,
+): DaemonLintMessages | undefined {
+  const cached = messagesByFilename.get(filename);
+  if (cached?.sourceCode !== sourceCode || cached.lintRun !== lintRun) {
+    return undefined;
+  }
+
+  messagesByFilename.delete(filename);
+  messagesByFilename.set(filename, cached);
+  return cached;
 }
 
 function evictOldestWhenOverCapacity(): void {

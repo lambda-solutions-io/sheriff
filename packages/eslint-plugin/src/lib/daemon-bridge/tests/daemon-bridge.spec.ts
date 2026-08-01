@@ -181,6 +181,7 @@ describe('daemon bridge', () => {
         'restricted-library',
         false,
         'source code',
+        lintRun,
       ),
     ).toBe(
       'module cannot import external library restricted-library. Tag feature has no clearance in externalRules',
@@ -191,6 +192,7 @@ describe('daemon bridge', () => {
         '@app/clean',
         false,
         'source code',
+        lintRun,
       ),
     ).toBe('');
     expect(
@@ -208,6 +210,7 @@ describe('daemon bridge', () => {
         '@app/clean',
         false,
         'source code',
+        lintRun,
       ),
     ).toBe('');
     expect(syncLintFile).toHaveBeenCalledTimes(1);
@@ -247,6 +250,69 @@ describe('daemon bridge', () => {
     );
 
     expect(syncLintFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back instead of reusing an entry evicted by later files', () => {
+    process.env['SHERIFF_DAEMON'] = '1';
+    synckitMocks.createSyncFn.mockReturnValue(vi.fn(() => emptyLintResult));
+    const lintRun = {};
+
+    // Prime the file, then lint enough other files to evict it (cap is 512).
+    daemonDependencyMessage('/project/file.ts', '@app/a', true, 'src', lintRun);
+    for (let index = 0; index < 512; index++) {
+      daemonDependencyMessage(`/project/f${index}.ts`, '@app/a', true, 'src', {});
+    }
+
+    // A later node of the evicted file must not report "no violation" from a
+    // cache entry that no longer exists; it falls back in-process.
+    expect(
+      daemonDependencyMessage('/project/file.ts', '@app/a', false, 'src', lintRun),
+    ).toBeUndefined();
+
+    // Re-priming the same file on a fresh first run must go back to the daemon
+    // rather than answer from a surviving entry of a different lint run.
+    const syncLintFile = vi.fn(() => emptyLintResult);
+    synckitMocks.createSyncFn.mockReturnValue(syncLintFile);
+    resetDaemonBridgeForTests();
+    expect(
+      daemonDependencyMessage('/project/file.ts', '@app/a', true, 'src', lintRun),
+    ).toBe('');
+    expect(syncLintFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a file being linted alive by touching the cache on later nodes', () => {
+    process.env['SHERIFF_DAEMON'] = '1';
+    synckitMocks.createSyncFn.mockReturnValue(vi.fn(() => emptyLintResult));
+    const lintRun = {};
+
+    daemonDependencyMessage('/project/file.ts', '@app/a', true, 'src', lintRun);
+    // 511 other files leave the cache exactly full, with our file the oldest.
+    for (let index = 0; index < 511; index++) {
+      daemonDependencyMessage(`/project/f${index}.ts`, '@app/a', true, 'src', {});
+    }
+    // A later node of the file refreshes its recency ...
+    expect(
+      daemonDependencyMessage('/project/file.ts', '@app/a', false, 'src', lintRun),
+    ).toBe('');
+    // ... so the next file evicts a different entry, not the one in use.
+    daemonDependencyMessage('/project/last.ts', '@app/a', true, 'src', {});
+
+    expect(
+      daemonDependencyMessage('/project/file.ts', '@app/a', false, 'src', lintRun),
+    ).toBe('');
+  });
+
+  it('falls back instead of reusing a stale entry from a previous lint run', () => {
+    process.env['SHERIFF_DAEMON'] = '1';
+    synckitMocks.createSyncFn.mockReturnValue(vi.fn(() => emptyLintResult));
+
+    daemonDependencyMessage('/project/file.ts', '@app/a', true, 'old src', {});
+
+    // Same file, new lint run and edited source: the previous run's entry must
+    // not answer for it.
+    expect(
+      daemonDependencyMessage('/project/file.ts', '@app/a', false, 'new src', {}),
+    ).toBeUndefined();
   });
 
   it('reports unresolvable relative imports with the in-process wording', () => {
