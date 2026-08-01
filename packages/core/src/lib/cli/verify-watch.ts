@@ -43,6 +43,15 @@ export function verifyWatch(args: string[]): void {
       clearProjectCache();
       scheduleRun();
     },
+    // an unwatchable root (ENOSPC, EPERM, renamed/deleted root) means
+    // further changes can no longer be tracked; report and exit rather
+    // than crash uncaught or keep running with a stale cache
+    onError: (error) => {
+      clearTimeout(rerunTimer);
+      watcher.close();
+      handleErrorOutput(error);
+      process.exitCode = 1;
+    },
   });
 
   process.on('SIGINT', () => {

@@ -26,6 +26,15 @@ export type WatcherOptions = {
    * long-lived process would keep its previous ambient state alive.
    */
   onConfigChange?: (configFile: string) => void;
+  /**
+   * Fires when the underlying `fs.watch` emits an `'error'` (e.g.
+   * `ENOSPC` from the inotify limit, `EPERM`, or the watched root being
+   * renamed/deleted). Without a listener here, Node rethrows watcher
+   * errors as uncaught exceptions and kills the process. Callers must
+   * treat this as a fatal end for the watcher — the underlying
+   * `FSWatcher` is no longer usable once it errors.
+   */
+  onError?: (error: Error) => void;
 };
 
 /**
@@ -38,7 +47,7 @@ export type WatcherOptions = {
  * Linux with Node >= 20) to avoid a native watcher dependency.
  */
 export function startWatcher(options: WatcherOptions): { close: () => void } {
-  const { rootDir, onInvalidate, onConfigChange } = options;
+  const { rootDir, onInvalidate, onConfigChange, onError } = options;
 
   const watcher = fs.watch(
     rootDir,
@@ -69,6 +78,13 @@ export function startWatcher(options: WatcherOptions): { close: () => void } {
       onInvalidate?.(absolutePath);
     },
   );
+
+  // Without this, an `ENOSPC`/`EPERM`/deleted-root error on the watcher
+  // has no listener and Node rethrows it as an uncaught exception,
+  // crashing the whole process instead of letting the caller degrade.
+  watcher.on('error', (error) => {
+    onError?.(error instanceof Error ? error : new Error(String(error)));
+  });
 
   return { close: () => watcher.close() };
 }

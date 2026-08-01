@@ -91,6 +91,10 @@ export async function startDaemonServer(
     // the config is evaluated code; a fresh process is the only clean re-eval
     onConfigChange: () => shutdown('sheriff.config.ts changed'),
     onInvalidate: (file) => log(`invalidated ${file}`),
+    // an unwatchable root (ENOSPC, EPERM, renamed/deleted root) leaves the
+    // cache unable to stay exact; shut down cleanly instead of serving
+    // stale results or crashing uncaught
+    onError: (error) => shutdown(`filesystem watcher error: ${error.message}`),
   });
 
   const server = net.createServer((socket) => {
