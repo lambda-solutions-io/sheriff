@@ -240,17 +240,19 @@ function executeMethod(
     }
     case 'verify':
       ensureCompatibleWorkRequest(connectionState);
-      return getPluginAPI().verify(asOptionalString(params['entryFile']));
+      return getPluginAPI(rootDir).verify(
+        asOptionalString(params['entryFile']),
+      );
     case 'getProjectData':
       ensureCompatibleWorkRequest(connectionState);
-      return getPluginAPI().getProjectData(
+      return getPluginAPI(rootDir).getProjectData(
         asOptionalString(params['entryFile']),
         params['options'] as ProjectDataOptions | undefined,
       );
     case 'getConfig':
       ensureCompatibleWorkRequest(connectionState);
       // functions (depRules etc.) cannot cross the wire; strip them
-      return JSON.parse(JSON.stringify(getPluginAPI().getConfig()));
+      return JSON.parse(JSON.stringify(getPluginAPI(rootDir).getConfig()));
     case 'lintFile':
       ensureCompatibleWorkRequest(connectionState);
       return lintFile(
@@ -303,12 +305,12 @@ function asOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-function getPluginAPI() {
-  const { config } = getPlugins();
+function getPluginAPI(rootDir: string) {
+  const { config } = getPlugins(rootDir);
   if (!config) {
     throw new Error('sheriff.config.ts not found');
   }
-  return createPluginAPI(config);
+  return createPluginAPI(config, rootDir);
 }
 
 /**

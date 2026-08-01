@@ -19,23 +19,27 @@ import {
 function getEntries(
   config: Configuration,
   entryFile?: string,
+  rootDir?: string,
 ): EntryWithProjectInfo[] {
-  return getEntriesFromCliOrConfig(entryFile, true, config);
+  return getEntriesFromCliOrConfig(entryFile, true, config, rootDir);
 }
 
 function getEntriesWithoutInit(
   config: Configuration,
   entryFile?: string,
+  rootDir?: string,
 ): Entry[] {
-  return getEntriesFromCliOrConfig(entryFile, false, config);
+  return getEntriesFromCliOrConfig(entryFile, false, config, rootDir);
 }
 
 function verifyForPlugin(
   config: Configuration,
   entryFile?: string,
+  rootDir?: string,
 ): VerificationResult {
   const fs = getFs();
-  const projectEntries = getEntries(config, entryFile);
+  const root = rootDir ?? fs.cwd();
+  const projectEntries = getEntries(config, entryFile, rootDir);
   let encapsulationViolationCount = 0;
   let dependencyRuleViolationCount = 0;
   let externalRuleViolationCount = 0;
@@ -71,7 +75,7 @@ function verifyForPlugin(
       dependencyRuleViolationCount += dependencyRuleViolations.length;
       externalRuleViolationCount += externalRuleViolations.length;
 
-      const relativePath = fs.relativeTo(fs.cwd(), fileInfo.path);
+      const relativePath = fs.relativeTo(root, fileInfo.path);
       const dependencyViolations: DependencyViolationInfo[] =
         dependencyRuleViolations.map((violation) => ({
           fromTag: violation.fromTag,
@@ -107,11 +111,12 @@ function getProjectDataForPlugin(
   config: Configuration,
   entryFile?: string,
   options?: ProjectDataOptions,
+  rootDir?: string,
 ): ProjectData {
   const fs = getFs();
-  const projectEntries = getEntriesWithoutInit(config, entryFile);
+  const projectEntries = getEntriesWithoutInit(config, entryFile, rootDir);
   const entry = projectEntries[0];
-  const absoluteEntryFile = fs.join(fs.cwd(), entry.entryFile);
+  const absoluteEntryFile = fs.join(rootDir ?? fs.cwd(), entry.entryFile);
 
   return getProjectDataFn(absoluteEntryFile, {
     projectName: entry.projectName,
@@ -119,11 +124,15 @@ function getProjectDataForPlugin(
   });
 }
 
-export function createPluginAPI(config: Configuration): SheriffPluginAPI {
+/** @param rootDir project root; defaults to the current working directory. */
+export function createPluginAPI(
+  config: Configuration,
+  rootDir?: string,
+): SheriffPluginAPI {
   return {
-    verify: (entryFile?: string) => verifyForPlugin(config, entryFile),
+    verify: (entryFile?: string) => verifyForPlugin(config, entryFile, rootDir),
     getProjectData: (entryFile?: string, options?: ProjectDataOptions) =>
-      getProjectDataForPlugin(config, entryFile, options),
+      getProjectDataForPlugin(config, entryFile, options, rootDir),
     // shallow copy so plugins cannot replace config fields seen by verify()
     getConfig: () => ({ ...config }),
     log: (message: string) => cli.log(message),

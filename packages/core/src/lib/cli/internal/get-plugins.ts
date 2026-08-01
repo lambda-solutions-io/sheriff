@@ -10,9 +10,10 @@ export type LoadedPlugins = {
   plugins: SheriffPlugin[];
 };
 
-export function getPlugins(): LoadedPlugins {
+/** @param rootDir project root; defaults to the current working directory. */
+export function getPlugins(rootDir?: string): LoadedPlugins {
   const fs = getFs();
-  const configPath = fs.join(fs.cwd(), 'sheriff.config.ts');
+  const configPath = fs.join(rootDir ?? fs.cwd(), 'sheriff.config.ts');
 
   if (!fs.exists(configPath)) {
     return { plugins: [] };

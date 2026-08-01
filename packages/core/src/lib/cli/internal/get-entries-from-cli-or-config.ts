@@ -16,11 +16,13 @@ export function getEntriesFromCliOrConfig(
   entryFileOrEntryPoints?: string,
   runInit?: true,
   config?: Configuration,
+  rootDir?: string,
 ): Array<EntryWithProjectInfo>;
 export function getEntriesFromCliOrConfig(
   entryFileOrEntryPoints?: string,
   runInit?: false,
   config?: Configuration,
+  rootDir?: string,
 ): Array<Entry>;
 export function getEntriesFromCliOrConfig(
   /**
@@ -30,9 +32,12 @@ export function getEntriesFromCliOrConfig(
   entryFileOrEntryPoints = '',
   runInit = true,
   providedConfig?: Configuration,
+  /** project root; defaults to the current working directory */
+  rootDir?: string,
 ): Array<Entry> | Array<EntryWithProjectInfo> {
   const fs = getFs();
-  const potentialConfigFile = fs.join(fs.cwd(), 'sheriff.config.ts');
+  const root = rootDir ?? fs.cwd();
+  const potentialConfigFile = fs.join(root, 'sheriff.config.ts');
 
   /**
    * CLI argument given
@@ -40,7 +45,7 @@ export function getEntriesFromCliOrConfig(
   if (entryFileOrEntryPoints) {
     // CLI argument given and no config file is present -> only entry file can work
     if (!fs.exists(potentialConfigFile)) {
-      return processEntryFile(entryFileOrEntryPoints, runInit, fs);
+      return processEntryFile(entryFileOrEntryPoints, runInit, fs, root);
     }
 
     if (fs.exists(potentialConfigFile)) {
@@ -54,22 +59,22 @@ export function getEntriesFromCliOrConfig(
 
       if (potentialEntryPoints) {
         // if entry points are given, return them
-        return processEntryFile(potentialEntryPoints, runInit, fs);
+        return processEntryFile(potentialEntryPoints, runInit, fs, root);
       } else {
         // otherwise it is an entry file
-        return processEntryFile(entryFileOrEntryPoints, runInit, fs);
+        return processEntryFile(entryFileOrEntryPoints, runInit, fs, root);
       }
     }
   }
 
   if (providedConfig) {
     if (providedConfig.entryFile) {
-      return processEntryFile(providedConfig.entryFile, runInit, fs);
+      return processEntryFile(providedConfig.entryFile, runInit, fs, root);
     } else if (
       providedConfig.entryPoints &&
       !isEmptyRecord(providedConfig.entryPoints)
     ) {
-      return processEntryFile(providedConfig.entryPoints, runInit, fs);
+      return processEntryFile(providedConfig.entryPoints, runInit, fs, root);
     } else {
       throw new Error(
         'No entry file or entry points found in sheriff.config.ts. Please provide the option via the CLI.',
@@ -81,12 +86,12 @@ export function getEntriesFromCliOrConfig(
     const sheriffConfig = parseConfig(potentialConfigFile);
 
     if (sheriffConfig.entryFile) {
-      return processEntryFile(sheriffConfig.entryFile, runInit, fs);
+      return processEntryFile(sheriffConfig.entryFile, runInit, fs, root);
     } else if (
       sheriffConfig.entryPoints &&
       !isEmptyRecord(sheriffConfig.entryPoints)
     ) {
-      return processEntryFile(sheriffConfig.entryPoints, runInit, fs);
+      return processEntryFile(sheriffConfig.entryPoints, runInit, fs, root);
     } else {
       throw new Error(
         'No entry file or entry points found in sheriff.config.ts. Please provide the option via the CLI.',
@@ -104,6 +109,7 @@ function processEntryFile(
   entryFileValue: string | Record<string, string>,
   runInit: boolean,
   fs: ReturnType<typeof getFs>,
+  root: string,
 ): Array<EntryWithProjectInfo> | Array<Entry> {
   if (typeof entryFileValue === 'string') {
     return runInit
@@ -111,7 +117,7 @@ function processEntryFile(
           {
             projectName: DEFAULT_PROJECT_NAME,
             entryFile: entryFileValue,
-            projectInfo: init(toFsPath(fs.join(fs.cwd(), entryFileValue))),
+            projectInfo: init(toFsPath(fs.join(root, entryFileValue))),
           },
         ]
       : [{ projectName: DEFAULT_PROJECT_NAME, entryFile: entryFileValue }];
@@ -122,7 +128,7 @@ function processEntryFile(
       ? entries.map(([projectName, entry]) => ({
           projectName,
           entryFile: entry,
-          projectInfo: init(toFsPath(fs.join(fs.cwd(), entry))),
+          projectInfo: init(toFsPath(fs.join(root, entry))),
         }))
       : entries.map(([projectName, entry]) => ({
           projectName,
