@@ -92,11 +92,12 @@ describe('daemon bridge', () => {
     expect(isDaemonBridgeEnabled()).toBe(true);
   });
 
-  // Faithful model of synckit 0.8.x's undrained MessagePort: a timed-out
-  // call leaves its late response queued on the channel; every subsequent
-  // call on the SAME channel FIFO-dequeues a stale response and throws an id
-  // mismatch. Only a fresh channel (a new createSyncFn) works again.
-  const makePoisonableChannel = (timesOutFirstCall: boolean) => {
+  // Faithful model of synckit 0.8.x's undrained MessagePort: the call with
+  // id `timesOutOnCallId` times out and leaves its late response queued on
+  // the channel; every subsequent call on the SAME channel FIFO-dequeues a
+  // stale response and throws an id mismatch. Only a fresh channel (a new
+  // createSyncFn) works again.
+  const makePoisonableChannel = (timesOutOnCallId?: number) => {
     let nextId = 0;
     let staleId: number | undefined;
     return vi.fn(() => {
@@ -107,7 +108,7 @@ describe('daemon bridge', () => {
         staleId = id;
         throw new Error(`Internal error: Expected id ${id} but got id ${got}`);
       }
-      if (timesOutFirstCall && id === 0) {
+      if (id === timesOutOnCallId) {
         staleId = id;
         throw new Error('Internal error: Atomics.wait() failed: timed-out');
       }
@@ -117,10 +118,7 @@ describe('daemon bridge', () => {
 
   it('recreates the channel on the poisoned id mismatch so one slow call cannot poison all later calls', () => {
     process.env['SHERIFF_DAEMON'] = '1';
-    const channels = [
-      makePoisonableChannel(true),
-      makePoisonableChannel(false),
-    ];
+    const channels = [makePoisonableChannel(0), makePoisonableChannel()];
     synckitMocks.createSyncFn.mockImplementation(() => channels.shift());
 
     // The slow call falls back in-process for THAT call only.
@@ -168,26 +166,29 @@ describe('daemon bridge', () => {
 
   it('caps channel recreations so success/timeout alternation cannot leak workers unboundedly', () => {
     process.env['SHERIFF_DAEMON'] = '1';
-    // Every generation is poisonable again: timeout -> id mismatch
-    // (recreate) -> success (streak reset), forever.
+    // Every generation succeeds first, THEN gets poisoned: success (streak
+    // reset) -> timeout -> id mismatch (recreate), forever. The consecutive-
+    // failure streak never reaches 3, so only the recreation cap can stop
+    // the leak.
     synckitMocks.createSyncFn.mockImplementation(() =>
-      makePoisonableChannel(true),
+      makePoisonableChannel(1),
     );
 
     let cycles = 0;
     while (isDaemonBridgeEnabled() && cycles < 50) {
+      lintFileViaDaemon('/project/ok.ts', ''); // success resets the streak
       lintFileViaDaemon('/project/slow.ts', ''); // timeout
       lintFileViaDaemon('/project/stale.ts', ''); // id mismatch -> recreate
-      lintFileViaDaemon('/project/ok.ts', ''); // success resets the streak
       cycles += 1;
     }
 
-    // The recreation cap trips long before the failure streak would (the
-    // successes keep resetting it): each recreation leaks the replaced
-    // worker, so the bridge gives up instead of accumulating them.
+    // Each recreation leaks the replaced worker, so past the cap the bridge
+    // gives up instead of accumulating them: the 6th poisoning (one past
+    // MAX_CHANNEL_RECREATIONS = 5) disables the bridge, after exactly the
+    // initial channel plus 5 replacements.
     expect(isDaemonBridgeEnabled()).toBe(false);
-    expect(cycles).toBeLessThanOrEqual(10);
-    expect(synckitMocks.createSyncFn.mock.calls.length).toBeLessThanOrEqual(10);
+    expect(cycles).toBe(6);
+    expect(synckitMocks.createSyncFn).toHaveBeenCalledTimes(6);
   });
 
   it('permanently disables the bridge after repeated consecutive failures', () => {
