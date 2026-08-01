@@ -56,7 +56,32 @@ export async function startDaemonServer(
   // (or in `listen` via EADDRINUSE) instead of hijacking the path
   await removeStaleSocket(socketPath);
 
-  let shutdown: (reason: string) => void = () => void 0;
+  // shutdown may be requested before `listen` succeeds (config change, idle
+  // timeout); the reason is remembered so the event is honoured rather than
+  // lost once the server is up.
+  let pendingShutdownReason: string | undefined;
+  // assigned once listening, when the owned socket inode is known
+  let releaseSocket: (() => void) | undefined;
+
+  const releaseResources = () => {
+    watcher.close();
+    clearTimeout(idleTimer);
+    // before `listen` there is no bound path to release: closing the
+    // handle here would be a no-op at best and, once a successor owns
+    // the path, a libuv unlink of its socket
+    releaseSocket?.();
+  };
+
+  const shutdown = (reason: string) => {
+    if (!releaseSocket) {
+      pendingShutdownReason ??= reason;
+      return;
+    }
+    log(`sheriff daemon shutting down: ${reason}`);
+    releaseResources();
+    // exit asynchronously so a pending response can flush first
+    setTimeout(exit, 50).unref();
+  };
 
   const idleTimer = setTimeout(() => shutdown('idle timeout'), idleTimeoutMs);
   idleTimer.unref();
@@ -81,7 +106,9 @@ export async function startDaemonServer(
 
   return new Promise((resolve, reject) => {
     server.once('error', (error) => {
-      // e.g. EADDRINUSE when another daemon won the startup race
+      // e.g. EADDRINUSE when another daemon won the startup race; the
+      // watcher would pin the process and the timer keep firing. The
+      // never-listening handle owns no path, so nothing to release.
       watcher.close();
       clearTimeout(idleTimer);
       reject(error);
@@ -93,7 +120,7 @@ export async function startDaemonServer(
       // only ever unlink this exact file, never a successor daemon's
       const ownedSocketInode = getSocketInode(socketPath);
 
-      const releaseSocket = () => {
+      releaseSocket = () => {
         // stat-then-close is a TOCTOU window: a successor could claim
         // the path in between. Unavoidable without an atomic
         // inode-checked unlink, and the window is a few microseconds.
@@ -109,23 +136,14 @@ export async function startDaemonServer(
         }
       };
 
-      shutdown = (reason: string) => {
-        log(`sheriff daemon shutting down: ${reason}`);
-        watcher.close();
-        clearTimeout(idleTimer);
-        releaseSocket();
-        // exit asynchronously so a pending response can flush first
-        setTimeout(exit, 50).unref();
-      };
-
       resolve({
         socketPath,
-        close: () => {
-          watcher.close();
-          clearTimeout(idleTimer);
-          releaseSocket();
-        },
+        close: releaseResources,
       });
+
+      if (pendingShutdownReason !== undefined) {
+        shutdown(pendingShutdownReason);
+      }
     });
   });
 }
