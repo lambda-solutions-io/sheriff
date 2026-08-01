@@ -82,9 +82,7 @@ export function startWatcher(options: WatcherOptions): { close: () => void } {
   // Without this, an `ENOSPC`/`EPERM`/deleted-root error on the watcher
   // has no listener and Node rethrows it as an uncaught exception,
   // crashing the whole process instead of letting the caller degrade.
-  watcher.on('error', (error) => {
-    onError?.(error instanceof Error ? error : new Error(String(error)));
-  });
+  watcher.on('error', (error) => onError?.(error));
 
   return { close: () => watcher.close() };
 }

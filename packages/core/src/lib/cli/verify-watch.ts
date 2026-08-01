@@ -36,7 +36,13 @@ export function verifyWatch(args: string[]): void {
     rerunTimer = setTimeout(runVerification, RERUN_DEBOUNCE_MS);
   };
 
-  const watcher = startWatcher({
+  // `let` (not `const`) + assign-after-declare so onError can close the
+  // watcher even if fs.watch ever emitted 'error' synchronously during
+  // the startWatcher call below (TDZ on `const watcher = startWatcher(...)`
+  // referenced from inside its own options otherwise)
+  let watcher: { close: () => void };
+  // eslint-disable-next-line prefer-const
+  watcher = startWatcher({
     rootDir,
     onInvalidate: scheduleRun,
     onConfigChange: () => {

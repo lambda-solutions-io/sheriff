@@ -60,6 +60,10 @@ export async function startDaemonServer(
   // timeout); the reason is remembered so the event is honoured rather than
   // lost once the server is up.
   let pendingShutdownReason: string | undefined;
+  // set only by a pre-listen watcher error: unlike a config change or idle
+  // timeout, a dead watcher means the daemon can never safely serve, so
+  // startup must reject instead of resolving and shutting down right after
+  let pendingWatcherError: Error | undefined;
   // assigned once listening, when the owned socket inode is known
   let releaseSocket: (() => void) | undefined;
 
@@ -94,7 +98,10 @@ export async function startDaemonServer(
     // an unwatchable root (ENOSPC, EPERM, renamed/deleted root) leaves the
     // cache unable to stay exact; shut down cleanly instead of serving
     // stale results or crashing uncaught
-    onError: (error) => shutdown(`filesystem watcher error: ${error.message}`),
+    onError: (error) => {
+      pendingWatcherError ??= error;
+      shutdown(`filesystem watcher error: ${error.message}`);
+    },
   });
 
   const server = net.createServer((socket) => {
@@ -139,6 +146,16 @@ export async function startDaemonServer(
           server.unref();
         }
       };
+
+      // a watcher error pre-listen means the daemon could never safely
+      // serve; fail startup outright instead of resolving and shutting
+      // down right after, unlike a config change or idle timeout, which
+      // are routine restarts and may resolve then replay below
+      if (pendingWatcherError) {
+        releaseResources();
+        reject(pendingWatcherError);
+        return;
+      }
 
       resolve({
         socketPath,
