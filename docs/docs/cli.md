@@ -185,6 +185,8 @@ Sheriff can run as a background daemon that keeps the parsed project in memory a
 
 One daemon runs per project root. It exits automatically after 5 minutes without requests (override with `SHERIFF_DAEMON_IDLE_MS`), when its version differs from a connecting client, or when `sheriff.config.ts` changes — the config is evaluated code, so a changed config always gets a fresh process. Clients respawn it on demand.
 
+Each request times out after 60 seconds (override with `SHERIFF_DAEMON_REQUEST_TIMEOUT_MS`) so a stuck daemon can't hang a client forever.
+
 Available RPC methods: `handshake`, `verify`, `getProjectData`, `getConfig` (function-valued fields are stripped), `lintFile` (accepts unsaved file content), `clearCache`, and `shutdown`.
 
 ## Caching

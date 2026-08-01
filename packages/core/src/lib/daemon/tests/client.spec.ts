@@ -2,7 +2,7 @@ import * as net from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DaemonClient } from '../client';
 
 /**
@@ -10,7 +10,9 @@ import { DaemonClient } from '../client';
  * accepts the connection but never answers must not hang the caller
  * forever, and a response the client cannot correlate (id -1, emitted
  * by the server on a JSON parse failure) must not leave the request
- * pending indefinitely either.
+ * pending indefinitely either. Also covers the multi-pending case: the
+ * id:-1 heuristic must not misattribute the failure to an unrelated,
+ * merely-slow request.
  */
 describe('DaemonClient request timeout', () => {
   let socketPath: string;
@@ -77,7 +79,7 @@ describe('DaemonClient request timeout', () => {
     client.close();
   });
 
-  it('rejects the oldest pending request on an unparseable-request response', async () => {
+  it('rejects the single pending request on an unparseable-request response', async () => {
     // Mirrors daemon/server.ts handleRequestLine, which replies with
     // `{ id: -1, error }` when it cannot JSON.parse the request line.
     server = await listen((socket) => {
@@ -91,6 +93,56 @@ describe('DaemonClient request timeout', () => {
     const client = await connectClient();
 
     await expect(client.request('verify')).rejects.toThrow('invalid request');
+
+    client.close();
+  });
+
+  it('does not misattribute an id:-1 response when multiple requests are pending', async () => {
+    // Regression: with two requests in flight, an id:-1 response must
+    // NOT be blamed on the oldest one — an earlier request may simply be
+    // slow (e.g. a wedged handler), not the one that failed to parse.
+    // The healthy id1 must resolve normally; only id2 times out on its
+    // own. This is what the MCP bridge relies on when it shares one
+    // connection across parallel calls.
+    //
+    // Line-buffer server-side (chunks can coalesce both writes into one
+    // `data` event) so exactly one id:-1 is sent, correlated to the
+    // second *line*, regardless of TCP chunking.
+    let lineCount = 0;
+    server = await listen((socket) => {
+      let buffered = '';
+      socket.on('data', (chunk) => {
+        buffered += chunk.toString();
+        let newlineIndex = buffered.indexOf('\n');
+        while (newlineIndex >= 0) {
+          buffered = buffered.slice(newlineIndex + 1);
+          lineCount += 1;
+          if (lineCount === 2) {
+            // id2's line is treated as corrupt; the client has no id to
+            // correlate it to.
+            socket.write(
+              `${JSON.stringify({ id: -1, error: { message: 'invalid request' } })}\n`,
+            );
+          }
+          // id1 (lineCount === 1): never answered, simulating a wedged
+          // handler.
+          newlineIndex = buffered.indexOf('\n');
+        }
+      });
+    });
+
+    const client = await connectClient();
+
+    const first = client.request('verify');
+    const second = client.request('getConfig');
+    // Attach both rejection handlers in the same microtask turn so
+    // neither promise is ever momentarily unhandled while the other's
+    // assertion is pending.
+    const firstAssertion = expect(first).rejects.toThrow(/timed out/);
+    const secondAssertion = expect(second).rejects.toThrow(/timed out/);
+
+    await Promise.all([firstAssertion, secondAssertion]);
+    await vi.waitFor(() => expect(lineCount).toBe(2));
 
     client.close();
   });

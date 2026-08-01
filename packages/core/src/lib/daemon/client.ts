@@ -12,7 +12,10 @@ import {
 const CONNECT_TIMEOUT_MS = 200;
 const SPAWN_RETRY_DELAY_MS = 100;
 const SPAWN_RETRIES = 30;
-const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+// The first request after spawnDaemon can be a cold full-graph build; a
+// too-low default here would false-positive-timeout, and callDaemon's
+// close-on-failure would then respawn into another cold build.
+const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
 export type DaemonClientOptions = {
   /** Spawn a daemon when none is reachable. */
@@ -38,9 +41,9 @@ export type DaemonClientOptions = {
 export class DaemonClient {
   #socket: net.Socket;
   #nextRequestId = 1;
-  // Insertion order doubles as request order: the server processes one
-  // line at a time per connection, so the oldest entry is the one an
-  // unparseable-request response (id -1, see #handleResponseLine) belongs to.
+  // An id:-1 parse-failure response (see #handleResponseLine) is only
+  // attributed to a specific entry when exactly one request is pending;
+  // otherwise it's a no-op and each request falls back to its own timeout.
   #pending = new Map<
     number,
     {
@@ -117,15 +120,16 @@ export class DaemonClient {
     params: Record<string, unknown> = {},
   ): Promise<unknown> {
     const id = this.#nextRequestId++;
+    const timeoutMs = resolveRequestTimeout();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#pending.delete(id);
         reject(
           new Error(
-            `daemon request '${method}' timed out after ${resolveRequestTimeout()}ms`,
+            `daemon request '${method}' timed out after ${timeoutMs}ms`,
           ),
         );
-      }, resolveRequestTimeout());
+      }, timeoutMs);
       timer.unref();
 
       this.#pending.set(id, {
@@ -156,15 +160,16 @@ export class DaemonClient {
     }
 
     // The server could not parse the request line and has no id to
-    // correlate (daemon/server.ts handleRequestLine). Requests on one
-    // connection are handled strictly in order, so the oldest pending
-    // entry is the one that failed; without this it would otherwise
-    // hang until its timeout.
+    // correlate (daemon/server.ts handleRequestLine). We can only safely
+    // attribute this to "the" pending request when there is exactly one:
+    // with several in flight (e.g. the MCP bridge sharing one connection
+    // across parallel calls), an earlier request may simply be slow
+    // rather than missing, and blaming the oldest would reject a healthy
+    // request while the actually-broken one hangs to its own timeout.
     if (response.id === -1) {
-      const oldestId = this.#pending.keys().next().value;
-      if (oldestId !== undefined) {
-        const pending = this.#pending.get(oldestId)!;
-        this.#pending.delete(oldestId);
+      if (this.#pending.size === 1) {
+        const [[onlyId, pending]] = this.#pending;
+        this.#pending.delete(onlyId);
         pending.reject(
           new Error(response.error?.message ?? 'invalid request'),
         );
