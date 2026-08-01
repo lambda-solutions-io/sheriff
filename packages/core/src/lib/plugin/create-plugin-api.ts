@@ -39,7 +39,7 @@ function verifyForPlugin(
 ): VerificationResult {
   const fs = getFs();
   const root = rootDir ?? fs.cwd();
-  const projectEntries = getEntries(config, entryFile, rootDir);
+  const projectEntries = getEntries(config, entryFile, root);
   let encapsulationViolationCount = 0;
   let dependencyRuleViolationCount = 0;
   let externalRuleViolationCount = 0;
@@ -114,9 +114,10 @@ function getProjectDataForPlugin(
   rootDir?: string,
 ): ProjectData {
   const fs = getFs();
-  const projectEntries = getEntriesWithoutInit(config, entryFile, rootDir);
+  const root = rootDir ?? fs.cwd();
+  const projectEntries = getEntriesWithoutInit(config, entryFile, root);
   const entry = projectEntries[0];
-  const absoluteEntryFile = fs.join(rootDir ?? fs.cwd(), entry.entryFile);
+  const absoluteEntryFile = fs.join(root, entry.entryFile);
 
   return getProjectDataFn(absoluteEntryFile, {
     projectName: entry.projectName,

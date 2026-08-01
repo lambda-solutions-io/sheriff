@@ -14,7 +14,7 @@ import { DaemonServer, startDaemonServer } from '../server';
 describe('daemon rootDir independence from cwd', () => {
   let rootDir: string;
   let otherDir: string;
-  let server: DaemonServer;
+  let server: DaemonServer | undefined;
   let previousCwd: string;
   const exit = vi.fn();
 
@@ -32,11 +32,17 @@ describe('daemon rootDir independence from cwd', () => {
     server = await startDaemonServer({ rootDir, exit });
   });
 
+  // guarded so a failing beforeAll still restores cwd and removes temp dirs
   afterAll(() => {
-    process.chdir(previousCwd);
-    server.close();
-    fs.rmSync(rootDir, { recursive: true, force: true });
-    fs.rmSync(otherDir, { recursive: true, force: true });
+    if (previousCwd) {
+      process.chdir(previousCwd);
+    }
+    server?.close();
+    for (const dir of [rootDir, otherDir]) {
+      if (dir) {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
   });
 
   it('should return the config of rootDir', async () => {
@@ -66,6 +72,28 @@ describe('daemon rootDir independence from cwd', () => {
     // violation paths are relative to rootDir, not to cwd
     expect(Object.keys(result.violations)).toEqual(['src/feature/index.ts']);
     client!.close();
+  });
+
+  it('should analyze a relative rootDir against the process cwd', async () => {
+    // a relative root (e.g. SHERIFF_ROOT_DIR=.) must resolve, not fail
+    const relativeRoot = path.relative(otherDir, rootDir);
+    const relativeServer = await startDaemonServer({
+      rootDir: relativeRoot,
+      exit,
+    });
+
+    try {
+      const client = await DaemonClient.connect(relativeRoot);
+
+      const result = (await client!.request('verify')) as {
+        encapsulationViolationCount: number;
+      };
+
+      expect(result.encapsulationViolationCount).toBe(1);
+      client!.close();
+    } finally {
+      relativeServer.close();
+    }
   });
 
   it('should return the project data of rootDir', async () => {

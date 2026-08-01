@@ -14,6 +14,10 @@ describe('daemon socket path', () => {
     );
   });
 
+  it('should resolve a relative root dir to the same socket as its absolute path', () => {
+    expect(getDaemonSocketPath('.')).toBe(getDaemonSocketPath(process.cwd()));
+  });
+
   it('should use a named pipe on windows and a socket file elsewhere', () => {
     const socketPath = getDaemonSocketPath('/some/project');
     if (process.platform === 'win32') {

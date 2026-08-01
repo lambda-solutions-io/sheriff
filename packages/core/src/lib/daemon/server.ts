@@ -1,5 +1,6 @@
 import * as net from 'net';
 import * as fs from 'fs';
+import * as path from 'path';
 import { version as packageVersion } from '../../../package.json';
 import { getDocumentLintAnalysis } from '../eslint/lint-document';
 import { getPlugins } from '../cli/internal/get-plugins';
@@ -46,7 +47,8 @@ export type DaemonServer = {
 export async function startDaemonServer(
   options: DaemonServerOptions = {},
 ): Promise<DaemonServer> {
-  const rootDir = options.rootDir ?? process.cwd();
+  // absolute, so analysis and the socket hash never depend on cwd
+  const rootDir = path.resolve(options.rootDir ?? process.cwd());
   const idleTimeoutMs = resolveIdleTimeout(options.idleTimeoutMs);
   const log = options.log ?? (() => void 0);
   const exit = options.exit ?? (() => process.exit(0));
