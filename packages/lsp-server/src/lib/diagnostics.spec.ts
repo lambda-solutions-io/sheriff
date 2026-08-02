@@ -34,6 +34,18 @@ describe('Sheriff diagnostics', () => {
     expect(createSheriffDiagnostics(uri, "import '../shared';\n")).toEqual([]);
   });
 
+  it('returns no diagnostics for non-file URIs instead of throwing', () => {
+    expect(
+      createSheriffDiagnostics('untitled:Untitled-1', "import '../shared';\n"),
+    ).toEqual([]);
+    expect(
+      createSheriffDiagnostics(
+        'git:/project/src/app/main.ts',
+        "import '../shared';\n",
+      ),
+    ).toEqual([]);
+  });
+
   it('uses the root config discovered through an extended tsconfig', () => {
     const project = createFixtureProject({
       withConfig: true,

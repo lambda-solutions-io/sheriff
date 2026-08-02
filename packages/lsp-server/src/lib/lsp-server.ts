@@ -5,6 +5,7 @@ import {
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { createSheriffDiagnostics, Diagnostic } from './diagnostics';
+import { isFileUri } from './uri';
 import { isDiagnosticsSupersededError } from './worker-diagnostics';
 
 export interface SheriffLspServerOptions {
@@ -93,6 +94,17 @@ export function createSheriffLspServer(
     }
   }
 
+  function reportDiagnosticsFailure(uri: string, error: unknown): void {
+    try {
+      const message = error instanceof Error ? error.message : String(error);
+      connection.console.error(
+        `Sheriff diagnostics failed for ${uri}: ${message}`,
+      );
+    } catch {
+      // Error reporting must never terminate the language server.
+    }
+  }
+
   function isCurrentDiagnosticsRun(run: DiagnosticsRun): boolean {
     return (
       state === 'initialized' &&
@@ -132,18 +144,23 @@ export function createSheriffLspServer(
           (resolvedDiagnostics) =>
             finishDiagnosticsRun(run, resolvedDiagnostics),
           (error) => {
+            // Routine coalescing is neither a failure nor worth logging.
             if (isDiagnosticsSupersededError(error)) {
               inFlightDiagnostics.delete(run);
               return;
             }
-            finishDiagnosticsRun(run, []);
+            // Fail closed: keep the last published diagnostics instead of
+            // clearing every squiggle when analysis breaks (#44).
+            inFlightDiagnostics.delete(run);
+            reportDiagnosticsFailure(uri, error);
           },
         );
       } else {
         finishDiagnosticsRun(run, diagnostics);
       }
-    } catch {
-      finishDiagnosticsRun(run, []);
+    } catch (error) {
+      inFlightDiagnostics.delete(run);
+      reportDiagnosticsFailure(uri, error);
     }
   }
 
@@ -183,6 +200,11 @@ export function createSheriffLspServer(
   }
 
   function diagnoseChangedDocument(document: TextDocument): void {
+    if (!isFileUri(document.uri)) {
+      // Untitled buffers and scheme views (git:, vscode-userdata:) have no
+      // on-disk module, so they must never reach the diagnostics backend.
+      return;
+    }
     invalidateDocumentDiagnostics(document.uri);
     if (openDocuments.has(document.uri)) {
       scheduleDiagnostics(document);

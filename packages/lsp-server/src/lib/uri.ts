@@ -14,6 +14,14 @@ export function filePathToUri(filePath: string): string {
   return `file://${encoded}`;
 }
 
+export function isFileUri(uri: string): boolean {
+  try {
+    return new URL(uri).protocol === 'file:';
+  } catch {
+    return false;
+  }
+}
+
 export function uriToFilePath(uri: string): string {
   const url = new URL(uri);
   if (url.protocol !== 'file:') {

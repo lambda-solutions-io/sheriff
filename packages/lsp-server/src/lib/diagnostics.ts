@@ -58,7 +58,16 @@ export function createSheriffDiagnostics(
   text: string,
   checkers: SheriffRuleCheckers = defaultCheckers,
 ): Diagnostic[] {
-  const filename = uriToFilePath(uri);
+  let filename: string;
+  try {
+    // Non-file URIs (untitled buffers, git: diff views) have no on-disk
+    // module, so Sheriff has nothing to analyze. Throwing here would crash
+    // the diagnostics worker and disable the whole session (#44).
+    filename = uriToFilePath(uri);
+  } catch {
+    return [];
+  }
+
   const imports = extractImportSpecifiers(text);
   if (imports.length === 0) {
     return [];

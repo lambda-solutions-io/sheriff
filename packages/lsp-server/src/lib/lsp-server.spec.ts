@@ -159,8 +159,11 @@ describe('Sheriff LSP server', () => {
     expect((await published).diagnostics).toEqual([]);
   });
 
-  it('contains thrown and rejected analysis and stays responsive', async () => {
+  it('keeps last published diagnostics when analysis breaks and stays responsive', async () => {
     const createDiagnostics = vi.fn((_uri: string, text: string) => {
+      if (text === 'ok') {
+        return [testDiagnostic];
+      }
       if (text === 'throw') {
         throw new Error('diagnostics failed');
       }
@@ -169,27 +172,72 @@ describe('Sheriff LSP server', () => {
     const harness = await createServer({ createDiagnostics });
     const uri = 'file:///test.ts';
 
-    const thrown = harness.nextDiagnostics();
+    const opened = harness.nextDiagnostics();
     await harness.client.sendNotification('textDocument/didOpen', {
       textDocument: {
         uri,
         languageId: 'typescript',
         version: 1,
-        text: 'throw',
+        text: 'ok',
       },
     });
-    expect((await thrown).diagnostics).toEqual([]);
+    expect((await opened).diagnostics).toEqual([testDiagnostic]);
 
-    const rejected = harness.nextDiagnostics();
     await harness.client.sendNotification('textDocument/didChange', {
       textDocument: { uri, version: 2 },
+      contentChanges: [{ text: 'throw' }],
+    });
+    await harness.client.sendNotification('textDocument/didChange', {
+      textDocument: { uri, version: 3 },
       contentChanges: [{ text: 'reject' }],
     });
-    expect((await rejected).diagnostics).toEqual([]);
+    await vi.waitFor(() => expect(createDiagnostics).toHaveBeenCalledTimes(3));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // Failures must never clear existing squiggles with an empty publish.
+    expect(harness.diagnostics).toEqual([
+      { uri, version: 1, diagnostics: [testDiagnostic] },
+    ]);
 
     await expect(
       harness.client.sendRequest('workspace/stillAlive'),
     ).rejects.toMatchObject({ code: -32601 });
+  });
+
+  it('skips non-file URIs so they cannot break the diagnostics backend', async () => {
+    const createDiagnostics = vi.fn(() => [testDiagnostic]);
+    const harness = await createServer({ createDiagnostics });
+
+    await harness.client.sendNotification('textDocument/didOpen', {
+      textDocument: {
+        uri: 'untitled:Untitled-1',
+        languageId: 'typescript',
+        version: 1,
+        text: 'unsaved buffer',
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(createDiagnostics).not.toHaveBeenCalled();
+
+    const published = harness.nextDiagnostics();
+    await harness.client.sendNotification('textDocument/didOpen', {
+      textDocument: {
+        uri: 'file:///app.ts',
+        languageId: 'typescript',
+        version: 1,
+        text: 'saved file',
+      },
+    });
+    expect(await published).toEqual({
+      uri: 'file:///app.ts',
+      version: 1,
+      diagnostics: [testDiagnostic],
+    });
+    expect(createDiagnostics).toHaveBeenCalledOnce();
+    expect(createDiagnostics).toHaveBeenCalledWith(
+      'file:///app.ts',
+      'saved file',
+    );
   });
 
   it('does not publish diagnostics for superseded analysis', async () => {

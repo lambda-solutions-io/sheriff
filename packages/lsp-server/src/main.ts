@@ -18,7 +18,27 @@ function main(): void {
   }
 
   const connection = createConnection(process.stdin, process.stdout);
-  const diagnostics = createWorkerDiagnostics();
+  let workerFailureNotified = false;
+  const diagnostics = createWorkerDiagnostics({
+    onWorkerFailure: (error) => {
+      // Surface every crash in the log, but pop up at most one editor
+      // notification so repeated crashes do not spam the user. A disposed
+      // connection throws synchronously, so guard the whole notify block.
+      try {
+        connection.console.error(
+          `Sheriff diagnostics worker crashed: ${error.message}`,
+        );
+        if (!workerFailureNotified) {
+          workerFailureNotified = true;
+          void connection.window.showErrorMessage(
+            `Sheriff diagnostics worker crashed: ${error.message}`,
+          );
+        }
+      } catch {
+        // Crash reporting must never break worker supervision.
+      }
+    },
+  });
   createSheriffLspServer({
     changeDebounceMs: 150,
     connection,
