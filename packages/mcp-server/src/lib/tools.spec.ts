@@ -1,13 +1,24 @@
-import { DaemonClient } from '@lambda-solutions/sheriff-core';
+import {
+  DaemonClient,
+  DaemonTransportError,
+} from '@lambda-solutions/sheriff-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetDaemonConnection } from './daemon-bridge';
 import { handleToolCall, ToolCallOptions } from './tools';
 
-vi.mock('@lambda-solutions/sheriff-core', () => ({
-  DaemonClient: {
-    connect: vi.fn(),
-  },
-}));
+vi.mock('@lambda-solutions/sheriff-core', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@lambda-solutions/sheriff-core')>();
+  return {
+    // The real transport-error class and guard, so the bridge's
+    // transport-vs-application distinction is exercised, not mocked away.
+    DaemonTransportError: actual.DaemonTransportError,
+    isDaemonTransportError: actual.isDaemonTransportError,
+    DaemonClient: {
+      connect: vi.fn(),
+    },
+  };
+});
 
 describe('Sheriff MCP tool dispatch', () => {
   const cannedResult = { valid: true };
@@ -120,7 +131,7 @@ describe('Sheriff MCP tool dispatch', () => {
     expect(close).not.toHaveBeenCalled();
   });
 
-  it('closes the client and returns a tool error when a request fails', async () => {
+  it('keeps the connection and returns a tool error on an application error', async () => {
     request.mockRejectedValue(new Error('invalid sheriff config'));
 
     const result = await handleToolCall('getConfig', {}, options);
@@ -134,20 +145,87 @@ describe('Sheriff MCP tool dispatch', () => {
       ],
       isError: true,
     });
-    // A failed request drops the shared connection so the next call reconnects.
-    expect(close).toHaveBeenCalledOnce();
+    // The socket is healthy, so the shared connection survives.
+    expect(close).not.toHaveBeenCalled();
   });
 
-  it('reconnects after a failed request dropped the connection', async () => {
+  it('reuses the same connection after an application error', async () => {
     request.mockRejectedValueOnce(new Error('invalid sheriff config'));
 
     const failure = await handleToolCall('getConfig', {}, options);
     expect(failure.isError).toBe(true);
+
+    const recovery = await handleToolCall('getConfig', {}, options);
+    expect(recovery).toEqual(successResult(cannedResult));
+    // No reconnect: the application error never invalidated the connection.
+    expect(connect).toHaveBeenCalledOnce();
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it('fails only the originating call when a concurrent call errors', async () => {
+    request.mockImplementation((method) =>
+      method === 'getConfig'
+        ? Promise.reject(new Error('invalid sheriff config'))
+        : Promise.resolve(cannedResult),
+    );
+
+    const [failed, succeeded] = await Promise.all([
+      handleToolCall('getConfig', {}, options),
+      handleToolCall('verify', {}, options),
+    ]);
+
+    expect(failed.isError).toBe(true);
+    // The concurrent call completes on the still-open shared connection.
+    expect(succeeded).toEqual(successResult(cannedResult));
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it('drops the connection when the transport fails', async () => {
+    request.mockRejectedValueOnce(
+      new DaemonTransportError('daemon connection closed'),
+    );
+
+    const result = await handleToolCall('getConfig', {}, options);
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain('daemon connection closed');
+    // A dead socket invalidates the shared connection.
     expect(close).toHaveBeenCalledOnce();
 
     const recovery = await handleToolCall('getConfig', {}, options);
     expect(recovery).toEqual(successResult(cannedResult));
-    // A second connect happens because the failed connection was dropped.
+    expect(connect).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives concurrently connecting roots their own client', async () => {
+    const otherOptions: ToolCallOptions = {
+      rootDir: '/workspace/other',
+      cliBinPath: '/workspace/sheriff-cli.js',
+    };
+    const firstClient = { request: vi.fn().mockResolvedValue('first'), close };
+    const secondClient = {
+      request: vi.fn().mockResolvedValue('second'),
+      close,
+    };
+    // Both connects stay in flight simultaneously, so a root-agnostic
+    // pending promise would hand root B the client of root A.
+    connect.mockImplementation((rootDir) =>
+      Promise.resolve(
+        (rootDir === options.rootDir
+          ? firstClient
+          : secondClient) as unknown as DaemonClient,
+      ),
+    );
+
+    const [first, second] = await Promise.all([
+      handleToolCall('getConfig', {}, options),
+      handleToolCall('getConfig', {}, otherOptions),
+    ]);
+
+    expect(first).toEqual(successResult('first'));
+    expect(second).toEqual(successResult('second'));
+    expect(firstClient.request).toHaveBeenCalledOnce();
+    expect(secondClient.request).toHaveBeenCalledOnce();
     expect(connect).toHaveBeenCalledTimes(2);
   });
 });

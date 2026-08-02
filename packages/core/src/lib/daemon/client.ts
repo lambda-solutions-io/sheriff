@@ -17,6 +17,25 @@ const SPAWN_RETRIES = 30;
 // close-on-failure would then respawn into another cold build.
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
+/**
+ * Marks a rejection caused by the transport itself (socket error or
+ * close) rather than by an error response from a healthy daemon.
+ * Callers sharing one connection across parallel requests use this to
+ * decide whether the connection must be torn down: an error *response*
+ * only concerns its own request, a dead socket concerns all of them.
+ */
+export class DaemonTransportError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'DaemonTransportError';
+  }
+}
+
+/** True for failures that make the whole connection unusable. */
+export function isDaemonTransportError(error: unknown): boolean {
+  return error instanceof DaemonTransportError;
+}
+
 export type DaemonClientOptions = {
   /** Spawn a daemon when none is reachable. */
   spawnIfMissing?: boolean;
@@ -59,9 +78,15 @@ export class DaemonClient {
     socket.setEncoding('utf-8');
     const decode = createLineDecoder((line) => this.#handleResponseLine(line));
     socket.on('data', decode);
-    socket.on('error', (error) => this.#rejectAllPending(error));
+    socket.on('error', (error) =>
+      this.#rejectAllPending(
+        new DaemonTransportError(error.message, { cause: error }),
+      ),
+    );
     socket.on('close', () =>
-      this.#rejectAllPending(new Error('daemon connection closed')),
+      this.#rejectAllPending(
+        new DaemonTransportError('daemon connection closed'),
+      ),
     );
   }
 

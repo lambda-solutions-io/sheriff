@@ -1,4 +1,7 @@
-import { DaemonClient } from '@lambda-solutions/sheriff-core';
+import {
+  DaemonClient,
+  isDaemonTransportError,
+} from '@lambda-solutions/sheriff-core';
 
 /** Minimal daemon client contract used by the MCP bridge. */
 export interface SheriffDaemonClient {
@@ -27,16 +30,23 @@ const defaultDependencies: DaemonBridgeDependencies = {
 };
 
 /**
- * A single shared daemon connection, reused across tool calls to avoid
- * spawning competing daemons when the agent fires calls in parallel.
+ * A shared daemon connection for one root, reused across tool calls to
+ * avoid spawning competing daemons when the agent fires calls in parallel.
  */
 interface SharedConnection {
   rootDir: string;
   client: SheriffDaemonClient;
 }
 
-let sharedConnection: SharedConnection | undefined;
-let pendingConnect: Promise<SheriffDaemonClient | undefined> | undefined;
+/**
+ * One shared connection and one in-flight connect per root directory, so a
+ * call for root B never receives the client belonging to root A.
+ */
+const sharedConnections = new Map<string, SharedConnection>();
+const pendingConnects = new Map<
+  string,
+  Promise<SheriffDaemonClient | undefined>
+>();
 let exitHandlersRegistered = false;
 
 /** Resolves the installed Sheriff CLI, with an environment variable fallback. */
@@ -58,42 +68,52 @@ async function getSharedClient(
   cliBinPath: string | undefined,
   dependencies: DaemonBridgeDependencies,
 ): Promise<SheriffDaemonClient | undefined> {
-  if (sharedConnection && sharedConnection.rootDir === rootDir) {
-    return sharedConnection.client;
+  const existing = sharedConnections.get(rootDir);
+  if (existing) {
+    return existing.client;
   }
 
-  // Root changed since the last connection; drop the stale one.
-  if (sharedConnection && sharedConnection.rootDir !== rootDir) {
-    closeSharedConnection();
-  }
-
-  if (!pendingConnect) {
-    pendingConnect = dependencies
+  let pending = pendingConnects.get(rootDir);
+  if (!pending) {
+    pending = dependencies
       .connect(rootDir, { spawnIfMissing: true, cliBinPath })
       .then((client) => {
         if (client) {
-          sharedConnection = { rootDir, client };
+          sharedConnections.set(rootDir, { rootDir, client });
           registerExitHandlers();
         }
         return client;
       })
       .finally(() => {
-        pendingConnect = undefined;
+        pendingConnects.delete(rootDir);
       });
+    pendingConnects.set(rootDir, pending);
   }
 
-  return pendingConnect;
+  return pending;
 }
 
-/** Closes and clears the cached connection so the next call reconnects. */
-function closeSharedConnection(): void {
-  if (sharedConnection) {
-    try {
-      sharedConnection.client.close();
-    } catch {
-      // Ignore close failures during cleanup.
-    }
-    sharedConnection = undefined;
+/**
+ * Closes and clears the cached connection for one root, so the next call
+ * for that root reconnects. Other roots keep their connections.
+ */
+function closeSharedConnection(rootDir: string): void {
+  const connection = sharedConnections.get(rootDir);
+  if (!connection) {
+    return;
+  }
+  sharedConnections.delete(rootDir);
+  try {
+    connection.client.close();
+  } catch {
+    // Ignore close failures during cleanup.
+  }
+}
+
+/** Closes every cached connection. */
+function closeAllSharedConnections(): void {
+  for (const rootDir of [...sharedConnections.keys()]) {
+    closeSharedConnection(rootDir);
   }
 }
 
@@ -102,13 +122,13 @@ function registerExitHandlers(): void {
     return;
   }
   exitHandlersRegistered = true;
-  process.once('exit', closeSharedConnection);
+  process.once('exit', closeAllSharedConnections);
 }
 
-/** Closes any shared connection. Exposed primarily for tests. */
+/** Closes all shared connections. Exposed primarily for tests. */
 export function resetDaemonConnection(): void {
-  closeSharedConnection();
-  pendingConnect = undefined;
+  closeAllSharedConnections();
+  pendingConnects.clear();
 }
 
 /** Calls one daemon RPC and translates connection and request failures. */
@@ -123,7 +143,7 @@ export async function callDaemon(
   try {
     client = await getSharedClient(rootDir, cliBinPath, dependencies);
   } catch (error) {
-    closeSharedConnection();
+    closeSharedConnection(rootDir);
     return {
       success: false,
       message: `Sheriff daemon request failed: ${getErrorMessage(error)}`,
@@ -143,8 +163,13 @@ export async function callDaemon(
     const value = await requestDaemon(client, method, params);
     return { success: true, value };
   } catch (error) {
-    // Drop the shared client on failure so the next call reconnects.
-    closeSharedConnection();
+    // Only a dead transport invalidates the connection. An error response
+    // travels over a healthy socket and concerns just this request, so
+    // tearing the connection down would fail every concurrent call with an
+    // unrelated "daemon connection closed".
+    if (isDaemonTransportError(error)) {
+      closeSharedConnection(rootDir);
+    }
     return {
       success: false,
       message: `Sheriff daemon request failed: ${getErrorMessage(error)}`,
