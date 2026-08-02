@@ -3,7 +3,11 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DaemonClient } from '../client';
+import {
+  DaemonClient,
+  isDaemonRequestTimeoutError,
+  isDaemonTransportError,
+} from '../client';
 
 /**
  * Regression tests for the request timeout (issue #53): a daemon that
@@ -145,5 +149,61 @@ describe('DaemonClient request timeout', () => {
     await vi.waitFor(() => expect(lineCount).toBe(2));
 
     client.close();
+  });
+
+  it('rejects with a typed timeout error', async () => {
+    // Typed so callers need not match on message text: the MCP bridge
+    // counts consecutive timeouts to detect a wedged daemon, and must not
+    // mistake an application error that merely says "timed out" for one.
+    server = await listen(() => void 0);
+    const client = await connectClient();
+
+    const error = await client.request('verify').catch((reason) => reason);
+
+    expect(isDaemonRequestTimeoutError(error)).toBe(true);
+    // A timeout leaves the socket usable, so it must not read as fatal.
+    expect(isDaemonTransportError(error)).toBe(false);
+
+    client.close();
+  });
+});
+
+/**
+ * A connection can die while no request is in flight (the daemon exits, the
+ * socket errors). The resulting 'error'/'close' rejects an empty pending
+ * map, so nothing is left to settle a later request. Node compounds this by
+ * reporting a write on a destroyed socket only to the write callback, never
+ * as a second 'error' event, so an unguarded request never settles at all.
+ */
+describe('DaemonClient on a dead socket', () => {
+  it('should reject a request made after the socket died while idle', async () => {
+    const socket = new net.Socket();
+    const client = new DaemonClient(socket);
+
+    const closed = new Promise((resolve) => socket.once('close', resolve));
+    socket.destroy();
+    await closed;
+
+    const error = await client.request('getConfig').catch((reason) => reason);
+
+    expect(isDaemonTransportError(error)).toBe(true);
+    expect((error as Error).message).toContain('daemon connection closed');
+  });
+
+  it('should reject when the write fails on an already dead socket', async () => {
+    const socket = new net.Socket();
+    const client = new DaemonClient(socket);
+    // A socket that is not destroyed but cannot be written to: the guard
+    // does not catch this, so the write callback has to settle the request.
+    socket.write = ((_chunk: string, callback?: (error?: Error) => void) => {
+      callback?.(new Error('EPIPE'));
+      return false;
+    }) as typeof socket.write;
+
+    const error = await client.request('getConfig').catch((reason) => reason);
+
+    expect(isDaemonTransportError(error)).toBe(true);
+    expect((error as Error).message).toContain('EPIPE');
+    socket.destroy();
   });
 });

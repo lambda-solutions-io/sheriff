@@ -1,14 +1,13 @@
+import * as path from 'path';
 import {
   DaemonClient,
+  isDaemonRequestTimeoutError,
   isDaemonTransportError,
 } from '@lambda-solutions/sheriff-core';
 
 /** Minimal daemon client contract used by the MCP bridge. */
 export interface SheriffDaemonClient {
-  request(
-    method: string,
-    params?: Record<string, unknown>,
-  ): Promise<unknown>;
+  request(method: string, params?: Record<string, unknown>): Promise<unknown>;
   close(): void;
 }
 
@@ -47,7 +46,27 @@ const pendingConnects = new Map<
   string,
   Promise<SheriffDaemonClient | undefined>
 >();
+/** Consecutive timed-out requests per root; reset by any success. */
+const consecutiveTimeouts = new Map<string, number>();
 let exitHandlersRegistered = false;
+
+/**
+ * A single timeout is not fatal: with requests multiplexed over one
+ * connection, one slow request is no proof the daemon is gone, and tearing
+ * down would fail the healthy concurrent calls (the bug this guards).
+ * Repeated timeouts in a row are different — they indicate a wedged daemon
+ * that would otherwise stay cached forever, costing a full timeout on every
+ * later call with no path to recovery.
+ */
+const MAX_CONSECUTIVE_TIMEOUTS = 3;
+
+/**
+ * Canonical cache key for a root, so `/foo` and `/foo/` do not each open
+ * their own connection to the very same daemon.
+ */
+function toConnectionKey(rootDir: string): string {
+  return path.resolve(rootDir);
+}
 
 /** Resolves the installed Sheriff CLI, with an environment variable fallback. */
 export function resolveSheriffCliBinPath(): string | undefined {
@@ -65,29 +84,30 @@ export function resolveSheriffCliBinPath(): string | undefined {
  */
 async function getSharedClient(
   rootDir: string,
+  connectionKey: string,
   cliBinPath: string | undefined,
   dependencies: DaemonBridgeDependencies,
 ): Promise<SheriffDaemonClient | undefined> {
-  const existing = sharedConnections.get(rootDir);
+  const existing = sharedConnections.get(connectionKey);
   if (existing) {
     return existing.client;
   }
 
-  let pending = pendingConnects.get(rootDir);
+  let pending = pendingConnects.get(connectionKey);
   if (!pending) {
     pending = dependencies
       .connect(rootDir, { spawnIfMissing: true, cliBinPath })
       .then((client) => {
         if (client) {
-          sharedConnections.set(rootDir, { rootDir, client });
+          sharedConnections.set(connectionKey, { rootDir, client });
           registerExitHandlers();
         }
         return client;
       })
       .finally(() => {
-        pendingConnects.delete(rootDir);
+        pendingConnects.delete(connectionKey);
       });
-    pendingConnects.set(rootDir, pending);
+    pendingConnects.set(connectionKey, pending);
   }
 
   return pending;
@@ -97,12 +117,13 @@ async function getSharedClient(
  * Closes and clears the cached connection for one root, so the next call
  * for that root reconnects. Other roots keep their connections.
  */
-function closeSharedConnection(rootDir: string): void {
-  const connection = sharedConnections.get(rootDir);
+function closeSharedConnection(connectionKey: string): void {
+  consecutiveTimeouts.delete(connectionKey);
+  const connection = sharedConnections.get(connectionKey);
   if (!connection) {
     return;
   }
-  sharedConnections.delete(rootDir);
+  sharedConnections.delete(connectionKey);
   try {
     connection.client.close();
   } catch {
@@ -112,8 +133,8 @@ function closeSharedConnection(rootDir: string): void {
 
 /** Closes every cached connection. */
 function closeAllSharedConnections(): void {
-  for (const rootDir of [...sharedConnections.keys()]) {
-    closeSharedConnection(rootDir);
+  for (const connectionKey of [...sharedConnections.keys()]) {
+    closeSharedConnection(connectionKey);
   }
 }
 
@@ -129,6 +150,7 @@ function registerExitHandlers(): void {
 export function resetDaemonConnection(): void {
   closeAllSharedConnections();
   pendingConnects.clear();
+  consecutiveTimeouts.clear();
 }
 
 /** Calls one daemon RPC and translates connection and request failures. */
@@ -139,11 +161,17 @@ export async function callDaemon(
   params?: Record<string, unknown>,
   dependencies: DaemonBridgeDependencies = defaultDependencies,
 ): Promise<DaemonCallResult> {
+  const connectionKey = toConnectionKey(rootDir);
   let client: SheriffDaemonClient | undefined;
   try {
-    client = await getSharedClient(rootDir, cliBinPath, dependencies);
+    client = await getSharedClient(
+      rootDir,
+      connectionKey,
+      cliBinPath,
+      dependencies,
+    );
   } catch (error) {
-    closeSharedConnection(rootDir);
+    closeSharedConnection(connectionKey);
     return {
       success: false,
       message: `Sheriff daemon request failed: ${getErrorMessage(error)}`,
@@ -161,6 +189,8 @@ export async function callDaemon(
 
   try {
     const value = await requestDaemon(client, method, params);
+    // The daemon answered, so it is not wedged.
+    consecutiveTimeouts.delete(connectionKey);
     return { success: true, value };
   } catch (error) {
     // Only a dead transport invalidates the connection. An error response
@@ -168,7 +198,12 @@ export async function callDaemon(
     // tearing the connection down would fail every concurrent call with an
     // unrelated "daemon connection closed".
     if (isDaemonTransportError(error)) {
-      closeSharedConnection(rootDir);
+      closeSharedConnection(connectionKey);
+    } else if (isDaemonRequestTimeoutError(error)) {
+      registerTimeout(connectionKey);
+    } else {
+      // A plain error response proves the daemon is still answering.
+      consecutiveTimeouts.delete(connectionKey);
     }
     return {
       success: false,
@@ -185,6 +220,21 @@ function requestDaemon(
   return params === undefined
     ? client.request(method)
     : client.request(method, params);
+}
+
+/**
+ * Counts a timeout for one root and drops the connection once the daemon
+ * has missed `MAX_CONSECUTIVE_TIMEOUTS` requests in a row, so a wedged
+ * daemon is replaced instead of timing out every future call.
+ */
+function registerTimeout(connectionKey: string): void {
+  const timeouts = (consecutiveTimeouts.get(connectionKey) ?? 0) + 1;
+  if (timeouts >= MAX_CONSECUTIVE_TIMEOUTS) {
+    // Also clears the counter for this root.
+    closeSharedConnection(connectionKey);
+    return;
+  }
+  consecutiveTimeouts.set(connectionKey, timeouts);
 }
 
 function getErrorMessage(error: unknown): string {

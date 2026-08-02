@@ -26,8 +26,10 @@ export {
 } from './lib/plugin';
 export {
   DaemonClient,
+  DaemonRequestTimeoutError,
   DaemonTransportError,
   getDaemonStatus,
+  isDaemonRequestTimeoutError,
   isDaemonTransportError,
   stopDaemon,
 } from './lib/daemon/client';

@@ -32,8 +32,30 @@ export class DaemonTransportError extends Error {
 }
 
 /** True for failures that make the whole connection unusable. */
-export function isDaemonTransportError(error: unknown): boolean {
+export function isDaemonTransportError(
+  error: unknown,
+): error is DaemonTransportError {
   return error instanceof DaemonTransportError;
+}
+
+/**
+ * A request the daemon never answered in time. Deliberately not a
+ * transport error: the socket stays usable, and with requests multiplexed
+ * over one connection a single slow request must not fail the others.
+ * Callers can still treat repeated timeouts as a wedged daemon.
+ */
+export class DaemonRequestTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DaemonRequestTimeoutError';
+  }
+}
+
+/** True when a request timed out rather than failing outright. */
+export function isDaemonRequestTimeoutError(
+  error: unknown,
+): error is DaemonRequestTimeoutError {
+  return error instanceof DaemonRequestTimeoutError;
 }
 
 export type DaemonClientOptions = {
@@ -147,10 +169,20 @@ export class DaemonClient {
     const id = this.#nextRequestId++;
     const timeoutMs = resolveRequestTimeout();
     return new Promise((resolve, reject) => {
+      // A socket that died while idle has already emitted its single
+      // 'error'/'close' with nothing pending, so no listener remains to
+      // settle this promise. Node also swallows a write on a destroyed
+      // socket (it only reports ERR_STREAM_DESTROYED to the write
+      // callback), so without this guard the request would hang forever.
+      if (this.#socket.destroyed) {
+        reject(new DaemonTransportError('daemon connection closed'));
+        return;
+      }
+
       const timer = setTimeout(() => {
         this.#pending.delete(id);
         reject(
-          new Error(
+          new DaemonRequestTimeoutError(
             `daemon request '${method}' timed out after ${timeoutMs}ms`,
           ),
         );
@@ -168,7 +200,18 @@ export class DaemonClient {
         },
         timer,
       });
-      this.#socket.write(encodeMessage({ id, method, params }));
+      this.#socket.write(encodeMessage({ id, method, params }), (error) => {
+        if (error) {
+          const pending = this.#pending.get(id);
+          if (!pending) {
+            return;
+          }
+          this.#pending.delete(id);
+          pending.reject(
+            new DaemonTransportError(error.message, { cause: error }),
+          );
+        }
+      });
     });
   }
 
@@ -195,9 +238,7 @@ export class DaemonClient {
       if (this.#pending.size === 1) {
         const [[onlyId, pending]] = this.#pending;
         this.#pending.delete(onlyId);
-        pending.reject(
-          new Error(response.error?.message ?? 'invalid request'),
-        );
+        pending.reject(new Error(response.error?.message ?? 'invalid request'));
       }
       return;
     }
@@ -283,9 +324,7 @@ function normalizeDaemonStatus(status: HandshakeResult): HandshakeResult {
 }
 
 function isUnknownMethodError(error: unknown, method: string): boolean {
-  return (
-    error instanceof Error && error.message === `unknown method ${method}`
-  );
+  return error instanceof Error && error.message === `unknown method ${method}`;
 }
 
 /** Returns true when a daemon was running and accepted the shutdown. */

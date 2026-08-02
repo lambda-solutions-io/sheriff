@@ -1,5 +1,6 @@
 import {
   DaemonClient,
+  DaemonRequestTimeoutError,
   DaemonTransportError,
 } from '@lambda-solutions/sheriff-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,10 +11,13 @@ vi.mock('@lambda-solutions/sheriff-core', async (importOriginal) => {
   const actual =
     await importOriginal<typeof import('@lambda-solutions/sheriff-core')>();
   return {
-    // The real transport-error class and guard, so the bridge's
-    // transport-vs-application distinction is exercised, not mocked away.
+    // The real error classes and guards, so the bridge's
+    // transport-vs-timeout-vs-application distinction is exercised on the
+    // same types production uses, not mocked away.
     DaemonTransportError: actual.DaemonTransportError,
     isDaemonTransportError: actual.isDaemonTransportError,
+    DaemonRequestTimeoutError: actual.DaemonRequestTimeoutError,
+    isDaemonRequestTimeoutError: actual.isDaemonRequestTimeoutError,
     DaemonClient: {
       connect: vi.fn(),
     },
@@ -22,9 +26,10 @@ vi.mock('@lambda-solutions/sheriff-core', async (importOriginal) => {
 
 describe('Sheriff MCP tool dispatch', () => {
   const cannedResult = { valid: true };
-  const request = vi.fn<
-    (method: string, params?: Record<string, unknown>) => Promise<unknown>
-  >();
+  const request =
+    vi.fn<
+      (method: string, params?: Record<string, unknown>) => Promise<unknown>
+    >();
   const close = vi.fn<() => void>();
   const connect = vi.mocked(DaemonClient.connect);
   const options: ToolCallOptions = {
@@ -195,6 +200,96 @@ describe('Sheriff MCP tool dispatch', () => {
     const recovery = await handleToolCall('getConfig', {}, options);
     expect(recovery).toEqual(successResult(cannedResult));
     expect(connect).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects fast and reconnects after the connection died while idle', async () => {
+    // An idle death emits its single 'error'/'close' with nothing pending,
+    // so the bridge still holds the client; the next request must not hang.
+    request.mockRejectedValueOnce(
+      new DaemonTransportError('daemon connection closed'),
+    );
+
+    const result = await handleToolCall('getConfig', {}, options);
+    expect(result.isError).toBe(true);
+    expect(close).toHaveBeenCalledOnce();
+
+    const recovery = await handleToolCall('getConfig', {}, options);
+    expect(recovery).toEqual(successResult(cannedResult));
+    expect(connect).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a wedged daemon after three consecutive timeouts', async () => {
+    request.mockRejectedValue(
+      new DaemonRequestTimeoutError(
+        "daemon request 'getConfig' timed out after 60000ms",
+      ),
+    );
+
+    const first = await handleToolCall('getConfig', {}, options);
+    const second = await handleToolCall('getConfig', {}, options);
+    expect(first.isError).toBe(true);
+    expect(second.isError).toBe(true);
+    // A single timeout must stay non-fatal, otherwise concurrent calls break.
+    expect(close).not.toHaveBeenCalled();
+
+    const third = await handleToolCall('getConfig', {}, options);
+    expect(third.isError).toBe(true);
+    // Three in a row means the daemon is wedged: drop it.
+    expect(close).toHaveBeenCalledOnce();
+
+    request.mockResolvedValue(cannedResult);
+    const recovery = await handleToolCall('getConfig', {}, options);
+    expect(recovery).toEqual(successResult(cannedResult));
+    expect(connect).toHaveBeenCalledTimes(2);
+  });
+
+  it('resets the timeout counter on a successful call', async () => {
+    const timeout = new DaemonRequestTimeoutError(
+      "daemon request 'getConfig' timed out after 60000ms",
+    );
+    request.mockRejectedValueOnce(timeout).mockRejectedValueOnce(timeout);
+
+    await handleToolCall('getConfig', {}, options);
+    await handleToolCall('getConfig', {}, options);
+    // A success in between proves the daemon still answers.
+    await handleToolCall('getConfig', {}, options);
+
+    request.mockRejectedValueOnce(timeout).mockRejectedValueOnce(timeout);
+    await handleToolCall('getConfig', {}, options);
+    await handleToolCall('getConfig', {}, options);
+
+    // Four timeouts total, but never three in a row.
+    expect(close).not.toHaveBeenCalled();
+    expect(connect).toHaveBeenCalledOnce();
+  });
+
+  it('ignores application errors that merely mention a timeout', async () => {
+    // Only the typed timeout counts. An ordinary error response whose text
+    // happens to say "timed out" arrives over a healthy socket and must
+    // never contribute to tearing the shared connection down.
+    request.mockRejectedValue(
+      new Error('rule check timed out for src/main.ts'),
+    );
+
+    await handleToolCall('getConfig', {}, options);
+    await handleToolCall('getConfig', {}, options);
+    await handleToolCall('getConfig', {}, options);
+    await handleToolCall('getConfig', {}, options);
+
+    expect(close).not.toHaveBeenCalled();
+    expect(connect).toHaveBeenCalledOnce();
+  });
+
+  it('reuses one connection for equivalent root paths', async () => {
+    await handleToolCall('getConfig', {}, options);
+    await handleToolCall(
+      'getConfig',
+      {},
+      { ...options, rootDir: '/workspace/project/' },
+    );
+
+    // '/foo' and '/foo/' address the same daemon.
+    expect(connect).toHaveBeenCalledOnce();
   });
 
   it('gives concurrently connecting roots their own client', async () => {
