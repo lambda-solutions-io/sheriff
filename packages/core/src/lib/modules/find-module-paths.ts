@@ -56,7 +56,7 @@ export function findModulePaths(
   // so they are cached with a staleness window (see project-cache).
   const modulesFromConfig = enableBarrelLess
     ? getOrCompute(
-        `module-paths-without-barrel\0${rootDir}\0${barrelFileName}\0${identityFromConfigOnly}\0${JSON.stringify(modules)}`,
+        `module-paths-without-barrel\0${rootDir}\0${barrelFileName}\0${identityFromConfigOnly}\0${stringifyModulesForCacheKey(modules)}`,
         () => ({
           value: findModulePathsWithoutBarrel(
             modules,
@@ -119,6 +119,21 @@ export function findBarrelDirectories(
       dependencies: [],
     }),
     { ttlMs: DEFAULT_STRUCTURE_CACHE_TTL_MS },
+  );
+}
+
+/**
+ * `JSON.stringify` drops function-valued properties (tag matcher functions,
+ * also inside nested sub-configs), so two different module configs could
+ * collide on the same cache key and the second one would silently reuse the
+ * first one's module paths (issue #45). A function leaf only marks its key
+ * as a leaf module — the resulting paths never depend on the function body —
+ * so replacing every function with a fixed marker keeps the key both stable
+ * and collision-free.
+ */
+function stringifyModulesForCacheKey(modules: ModuleConfig): string {
+  return JSON.stringify(modules, (_key, value: unknown) =>
+    typeof value === 'function' ? '[function]' : value,
   );
 }
 
