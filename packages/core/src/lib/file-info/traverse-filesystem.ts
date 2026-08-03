@@ -8,6 +8,7 @@ import { fixPathSeparators } from './fix-path-separators';
 import { isRelativeImport } from '../eslint/is-relative-import';
 import {
   extractPackageName,
+  getDependencyManifestPath,
   getDependencyUniverse,
 } from './dependency-universe';
 import {
@@ -123,15 +124,35 @@ function getImportResolutions(
   const ignoredExtensionsKey = [...ignoreFileExtensions].sort().join(',');
   return getOrCompute(
     `import-resolutions\0${tsData.sourceConfigPaths[0]}\0${fsPath}\0${ignoredExtensionsKey}`,
-    () => ({
-      value: resolveImports(
+    () => {
+      const fs = getFs();
+      const value = resolveImports(
         fsPath,
         tsData,
         ignoreFileExtensions,
-        getFs().readFile(fsPath),
-      ),
-      dependencies: [fsPath, ...tsData.sourceConfigPaths],
-    }),
+        fs.readFile(fsPath),
+      );
+      // the external-vs-unresolvable classification consults the nearest
+      // package.json (dependency universe), so the manifest content is
+      // part of this entry's read set: without stamping it, a long-lived
+      // process serves stale classifications after a dependency is
+      // installed or removed (#49 follow-up). Only entries with imports
+      // that did not resolve to a file can depend on it — module-only
+      // entries skip the lookup to keep the warm path free of extra work.
+      const manifestPath = value.some(
+        (resolution) => resolution.kind !== 'module',
+      )
+        ? getDependencyManifestPath(fs.getParent(fsPath), tsData.rootDir)
+        : undefined;
+      return {
+        value,
+        dependencies: [
+          fsPath,
+          ...tsData.sourceConfigPaths,
+          ...(manifestPath ? [manifestPath] : []),
+        ],
+      };
+    },
     { ttlMs: DEFAULT_STRUCTURE_CACHE_TTL_MS },
   );
 }
