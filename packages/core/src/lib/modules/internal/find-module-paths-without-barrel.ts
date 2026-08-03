@@ -103,7 +103,10 @@ function addAsModule(
 
   if (
     !includeDirectoriesWithBarrel &&
-    fs.exists(fs.join(directory, barrelFileName))
+    // exact-case probe: `findModulePathsWithBarrel` discovers barrels
+    // case-sensitively, so a case-variant file must not drop the
+    // directory here - the module would vanish entirely (issue #70)
+    fs.existsCaseSensitive(fs.join(directory, barrelFileName))
   ) {
     return;
   }
