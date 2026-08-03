@@ -3,7 +3,10 @@ import { parseConfig } from '../parse-config';
 import { toFsPath } from '../../file-info/fs-path';
 import getFs, { useVirtualFs } from '../../fs/getFs';
 import '../../test/expect.extensions';
-import { InvalidConfigsDirectoryError } from '../../error/user-error';
+import {
+  InvalidConfigsDirectoryError,
+  RootConfigsDirectoryError,
+} from '../../error/user-error';
 
 /**
  * Task 4, option B: a `configs` field in the root config maps a
@@ -122,5 +125,52 @@ export const config: SheriffConfig = {
     expect(() =>
       parseConfig(toFsPath(getFs().cwd() + '/sheriff.config.ts')),
     ).toThrowUserError(new InvalidConfigsDirectoryError('../hexagonal-demo'));
+  });
+
+  // a key resolving to the workspace root could never match any file in
+  // `resolveConfigForFile` and would be silently dead configuration
+  it.each(['.', './', ''])(
+    "should throw for configs key '%s' mapping the workspace root",
+    (directory) => {
+      getFs().writeFile(
+        'sheriff.config.ts',
+        `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  configs: {
+    '${directory}': './strict.sheriff.config.ts',
+  },
+  depRules: { 'noTag': 'noTag' },
+};
+      `,
+      );
+
+      expect(() =>
+        parseConfig(toFsPath(getFs().cwd() + '/sheriff.config.ts')),
+      ).toThrowUserError(new RootConfigsDirectoryError(directory));
+    },
+  );
+
+  it('should still accept a normal sub-directory key', () => {
+    getFs().writeFile(
+      'sheriff.config.ts',
+      `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  configs: {
+    'src/app': './src/app/sheriff.config.ts',
+  },
+  depRules: { 'noTag': 'noTag' },
+};
+      `,
+    );
+
+    const config = parseConfig(toFsPath(getFs().cwd() + '/sheriff.config.ts'));
+
+    expect(config.configs).toEqual({
+      'src/app': './src/app/sheriff.config.ts',
+    });
   });
 });
