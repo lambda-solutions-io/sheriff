@@ -6,6 +6,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startDaemonServer } from '../server';
 import * as watcherModule from '../watcher';
 
+/** Set by a test to fake `fs.statSync` results (e.g. a recycled inode). */
+let statSyncOverride: (() => fs.Stats) | undefined;
+
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof fs>();
+  return {
+    ...actual,
+    statSync: ((...args: Parameters<typeof actual.statSync>) =>
+      statSyncOverride
+        ? statSyncOverride()
+        : actual.statSync(...args)) as typeof actual.statSync,
+  };
+});
+
 /** Set by a test to make the next `net.createServer().listen` fail. */
 let listenError: Error | undefined;
 /** Widens the pre-listen window so a test can act inside it. */
@@ -120,6 +134,39 @@ describe('daemon server lifecycle', () => {
 
       // a second release must leave the successor's file alone
       server.close();
+      expect(fs.existsSync(server.socketPath)).toBe(true);
+    },
+  );
+
+  // ext4 recycles inode numbers immediately, so a successor claiming the
+  // freed path can receive the owned socket's inode — a bare ino match
+  // must not authorize a second unlink
+  it.skipIf(process.platform === 'win32')(
+    'should not unlink a successor socket whose inode number was recycled',
+    async () => {
+      const rootDir = createRootDir();
+      vi.spyOn(watcherModule, 'startWatcher').mockImplementation(() => ({
+        close: vi.fn(),
+      }));
+
+      const server = await startDaemonServer({ rootDir, exit: vi.fn() });
+      cleanups.push(() => server.close());
+      const ownedInode = fs.statSync(server.socketPath).ino;
+
+      // first release unlinks the owned socket
+      server.close();
+
+      // stand in for a successor that received the recycled inode
+      fs.writeFileSync(server.socketPath, 'successor');
+      cleanups.push(() => fs.rmSync(server.socketPath, { force: true }));
+      statSyncOverride = () => ({ ino: ownedInode }) as fs.Stats;
+      cleanups.push(() => (statSyncOverride = undefined));
+
+      try {
+        server.close();
+      } finally {
+        statSyncOverride = undefined;
+      }
       expect(fs.existsSync(server.socketPath)).toBe(true);
     },
   );

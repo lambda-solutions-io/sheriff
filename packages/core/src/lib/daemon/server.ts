@@ -139,7 +139,16 @@ export async function startDaemonServer(
       // only ever unlink this exact file, never a successor daemon's
       const ownedSocketInode = getSocketInode(socketPath);
 
+      // ownership may be judged only once: after the first release the
+      // inode number can be recycled to a successor's file (ext4 reuses
+      // freed inodes immediately), so a later ino match proves nothing
+      let socketReleased = false;
+
       releaseSocket = () => {
+        if (socketReleased) {
+          return;
+        }
+        socketReleased = true;
         // stat-then-close is a TOCTOU window: a successor could claim
         // the path in between. Unavoidable without an atomic
         // inode-checked unlink, and the window is a few microseconds.
