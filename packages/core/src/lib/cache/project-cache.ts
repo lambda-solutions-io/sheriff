@@ -93,8 +93,12 @@ export function getOrCompute<T>(
   }
 
   if (countStats) cacheStats.computes++;
+  const computeStart = snapshotComputeStart();
   const { value, dependencies } = compute();
-  entries.set(key, createEntry(value, dependencies, options.ttlMs));
+  entries.set(
+    key,
+    createEntry(value, dependencies, options.ttlMs, computeStart),
+  );
   return value;
 }
 
@@ -137,26 +141,64 @@ export function invalidateStructure(): void {
   }
 }
 
+/**
+ * Snapshot taken right before `compute` runs. Dependencies are only known
+ * after `compute` returns, so their stamps are collected afterwards — but a
+ * write landing *during* the computation must not be stamped as if its
+ * content had been incorporated (TOCTOU, #43). The snapshot marks the
+ * boundary: on the `VirtualFs` the write clock detects a concurrent write
+ * exactly; on the real fs an mtime at or after the compute start counts as
+ * concurrent.
+ */
+type ComputeStart = {
+  writeClock: number | undefined;
+  startedAt: number;
+};
+
+function snapshotComputeStart(): ComputeStart {
+  return { writeClock: getWriteClock(getFs()), startedAt: Date.now() };
+}
+
 function createEntry<T>(
   value: T,
   dependencies: FsPath[],
   ttlMs: number | undefined,
+  computeStart: ComputeStart,
 ): CacheEntry<T> {
   const fs = getFs();
   const isStructureDependent = ttlMs !== undefined;
-  const writeClock = getWriteClock(fs);
 
   return {
     value,
     dependencies: dependencies.map((path) => ({
       path,
-      lastModified: safeLastModified(fs, path),
+      lastModified: stampLastModified(fs, path, computeStart),
     })),
     expiresAt: isStructureDependent
       ? Date.now() + resolveTtlMs(ttlMs)
       : undefined,
-    writeClock: isStructureDependent ? writeClock : undefined,
+    // the pre-compute clock, so a write during compute makes the entry stale
+    writeClock: isStructureDependent ? computeStart.writeClock : undefined,
   };
+}
+
+/**
+ * Stamps `NaN` (permanently stale, like a vanished dependency) when the
+ * dependency was written while `compute` was running: the value may derive
+ * from the previous content, so the next lookup must recompute. The
+ * recompute then observes a settled mtime and caches normally.
+ */
+function stampLastModified(
+  fs: Fs,
+  path: FsPath,
+  computeStart: ComputeStart,
+): number {
+  const lastModified = safeLastModified(fs, path);
+  const wasWrittenDuringCompute =
+    computeStart.writeClock !== undefined
+      ? lastModified > computeStart.writeClock
+      : lastModified >= computeStart.startedAt;
+  return wasWrittenDuringCompute ? NaN : lastModified;
 }
 
 function isFresh(entry: CacheEntry<unknown>): boolean {
