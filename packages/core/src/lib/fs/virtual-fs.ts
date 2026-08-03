@@ -263,10 +263,9 @@ export class VirtualFs extends Fs {
   ): FsPath[] => {
     const found: FsPath[] = [];
     for (const childNode of node.children.values()) {
-      if (
-        childNode.type === 'file' &&
-        childNode.name === filename.toLowerCase()
-      ) {
+      // Exact match, mirroring DefaultFs: discovery must agree with the
+      // case-sensitive barrel path comparison in `Module.exposes` (issue #70).
+      if (childNode.type === 'file' && childNode.name === filename) {
         found.push(this.#absolutePath(childNode));
       }
 
