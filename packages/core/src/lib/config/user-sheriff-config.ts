@@ -270,6 +270,10 @@ export interface UserSheriffConfig {
    *
    * Intentional barrels can be excluded via {@link allowBarrelsIn}.
    *
+   * A barrel file in the project root is reported as well: the root module
+   * is always barrel-less, so a root-level barrel is inert. Allow it via
+   * the pattern `.` in {@link allowBarrelsIn} if it is intentional.
+   *
    * Setting `barrelPolicy` to `'warn'` or `'forbid'` without
    * `enableBarrelLess: true` is an error, because the policy would silently
    * have no effect.
@@ -332,7 +336,8 @@ export interface UserSheriffConfig {
    * Glob patterns, relative to the project root and matched against the
    * module path, for barrel modules that stay legal despite a restrictive
    * {@link barrelPolicy}. `**` matches any number of path segments;
-   * leading and trailing path separators in a pattern are ignored.
+   * leading and trailing path separators in a pattern are ignored. The
+   * project root itself matches the pattern `.`.
    *
    * Use this for intentional bucket-level barrels, e.g. an `api` folder
    * whose `index.ts` acts as a port with a short import path.

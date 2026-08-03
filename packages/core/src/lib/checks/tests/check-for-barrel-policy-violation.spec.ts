@@ -117,7 +117,10 @@ describe('checkForBarrelPolicyViolation', () => {
   it('should not report when barrel-less mode is disabled', () => {
     // parse-config rejects barrelPolicy without enableBarrelLess, so the
     // guard inside the check is exercised with a modified configuration.
-    const projectInfo = initProject({ barrelPolicy: 'forbid' }, strayBarrelTree);
+    const projectInfo = initProject(
+      { barrelPolicy: 'forbid' },
+      strayBarrelTree,
+    );
     expect(
       checkForBarrelPolicyViolation({
         ...projectInfo,
@@ -127,7 +130,10 @@ describe('checkForBarrelPolicyViolation', () => {
   });
 
   it('should report modulePath, barrelFilePath and a message naming the consequence', () => {
-    const projectInfo = initProject({ barrelPolicy: 'forbid' }, strayBarrelTree);
+    const projectInfo = initProject(
+      { barrelPolicy: 'forbid' },
+      strayBarrelTree,
+    );
     const violations = checkForBarrelPolicyViolation(projectInfo);
 
     expect(violations).toEqual([
@@ -424,6 +430,203 @@ describe('checkForBarrelPolicyViolation', () => {
             'index.ts turns a barrel-less module into a barrel module and changes its encapsulation semantics. Remove it or add the module to `allowBarrelsIn`.',
         },
       ]);
+    });
+  });
+
+  /**
+   * The root module is always barrel-less by construction (`createModules`
+   * overwrites it), so a root-level barrel file creates no barrel module
+   * and used to slip past the module-driven scan entirely (issue #48).
+   */
+  describe('root-level barrel (issue #48)', () => {
+    // project files live directly in the root, next to sheriff.config.ts
+    function initRootProject(
+      config: Partial<UserSheriffConfig>,
+      files: FileTree,
+    ) {
+      return testInit('main.ts', {
+        'tsconfig.json': tsConfig(),
+        'sheriff.config.ts': sheriffConfig({
+          ...{
+            modules: { '<domain>': ['domain:<domain>'] },
+            depRules: { root: '*', 'domain:*': '*' },
+            enableBarrelLess: true,
+          },
+          ...config,
+        }),
+        ...files,
+      });
+    }
+
+    const rootBarrelFiles: FileTree = {
+      'main.ts': ['./ui/customer.component'],
+      'index.ts': [],
+      ui: {
+        'customer.component.ts': [],
+      },
+    };
+
+    it('should report a root barrel with forbid and a root-flavoured message', () => {
+      const projectInfo = initRootProject(
+        { barrelPolicy: 'forbid' },
+        rootBarrelFiles,
+      );
+
+      expect(checkForBarrelPolicyViolation(projectInfo)).toEqual([
+        {
+          modulePath: '/project',
+          barrelFilePath: '/project/index.ts',
+          message:
+            'index.ts sits in the project root. The root module is always barrel-less, so the file has no effect on encapsulation. Remove it or add `.` to `allowBarrelsIn`.',
+        },
+      ]);
+    });
+
+    it('should report a root barrel with warn', () => {
+      const projectInfo = initRootProject(
+        { barrelPolicy: 'warn' },
+        rootBarrelFiles,
+      );
+
+      expect(
+        checkForBarrelPolicyViolation(projectInfo).map(
+          (violation) => violation.barrelFilePath,
+        ),
+      ).toEqual(['/project/index.ts']);
+    });
+
+    it('should not report a root barrel with allow', () => {
+      const projectInfo = initRootProject(
+        { barrelPolicy: 'allow' },
+        rootBarrelFiles,
+      );
+
+      expect(checkForBarrelPolicyViolation(projectInfo)).toEqual([]);
+    });
+
+    it("should report a root barrel under moduleIdentity 'config' as well", () => {
+      const projectInfo = initRootProject(
+        { moduleIdentity: 'config', barrelPolicy: 'forbid' },
+        rootBarrelFiles,
+      );
+
+      expect(
+        checkForBarrelPolicyViolation(projectInfo).map(
+          (violation) => violation.barrelFilePath,
+        ),
+      ).toEqual(['/project/index.ts']);
+    });
+
+    it('should suppress a root barrel via `.` in allowBarrelsIn', () => {
+      const projectInfo = initRootProject(
+        { barrelPolicy: 'forbid', allowBarrelsIn: ['.'] },
+        rootBarrelFiles,
+      );
+
+      expect(checkForBarrelPolicyViolation(projectInfo)).toEqual([]);
+    });
+
+    it('should keep reporting a root barrel for a non-matching allowBarrelsIn glob', () => {
+      const projectInfo = initRootProject(
+        { barrelPolicy: 'forbid', allowBarrelsIn: ['ui'] },
+        rootBarrelFiles,
+      );
+
+      expect(
+        checkForBarrelPolicyViolation(projectInfo).map(
+          (violation) => violation.barrelFilePath,
+        ),
+      ).toEqual(['/project/index.ts']);
+    });
+
+    it('should use the configured barrelFileName for the root barrel', () => {
+      const projectInfo = initRootProject(
+        { barrelPolicy: 'forbid', barrelFileName: 'public-api.ts' },
+        {
+          'main.ts': ['./ui/customer.component'],
+          'public-api.ts': [],
+          ui: {
+            'customer.component.ts': [],
+          },
+        },
+      );
+
+      expect(
+        checkForBarrelPolicyViolation(projectInfo).map(
+          (violation) => violation.barrelFilePath,
+        ),
+      ).toEqual(['/project/public-api.ts']);
+    });
+
+    it('should report a barrel next to tsconfig.json in an src layout too', () => {
+      // entry below src: the root module still owns the rootDir, so the
+      // stray barrel beside tsconfig.json is just as inert.
+      const projectInfo = testInit('src/main.ts', {
+        'tsconfig.json': tsConfig(),
+        'sheriff.config.ts': sheriffConfig({
+          modules: { 'src/<domain>': ['domain:<domain>'] },
+          depRules: { root: '*', 'domain:*': '*' },
+          enableBarrelLess: true,
+          barrelPolicy: 'forbid',
+        }),
+        'index.ts': [],
+        src: {
+          'main.ts': ['./ui/customer.component'],
+          ui: {
+            'customer.component.ts': [],
+          },
+        },
+      });
+
+      expect(
+        checkForBarrelPolicyViolation(projectInfo).map(
+          (violation) => violation.barrelFilePath,
+        ),
+      ).toEqual(['/project/index.ts']);
+    });
+
+    it('should report a root barrel and a module barrel exactly once each', () => {
+      const projectInfo = initRootProject(
+        { barrelPolicy: 'forbid' },
+        {
+          'main.ts': ['./ui/customer.component'],
+          'index.ts': [],
+          ui: {
+            'customer.component.ts': [],
+            'index.ts': [],
+          },
+        },
+      );
+
+      const violations = checkForBarrelPolicyViolation(projectInfo);
+      expect(violations.map((violation) => violation.barrelFilePath)).toEqual([
+        '/project/ui/index.ts',
+        '/project/index.ts',
+      ]);
+      expect(violations[0].message).toContain(
+        'turns a barrel-less module into a barrel module',
+      );
+      expect(violations[1].message).toContain('sits in the project root');
+    });
+
+    it("should report a root barrel and an outside barrel under 'config' exactly once each", () => {
+      const projectInfo = initRootProject(
+        { moduleIdentity: 'config', modules: {}, barrelPolicy: 'forbid' },
+        {
+          'main.ts': ['./ui/customer.component'],
+          'index.ts': [],
+          ui: {
+            'customer.component.ts': [],
+            'index.ts': [],
+          },
+        },
+      );
+
+      expect(
+        checkForBarrelPolicyViolation(projectInfo).map(
+          (violation) => violation.barrelFilePath,
+        ),
+      ).toEqual(['/project/ui/index.ts', '/project/index.ts']);
     });
   });
 });

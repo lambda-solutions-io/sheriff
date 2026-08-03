@@ -388,6 +388,8 @@ Teams that want editor visibility during an observation phase can set `barrelPol
 
 Setting `barrelPolicy` to `'warn'` or `'forbid'` without `enableBarrelLess: true` is a configuration error, because the policy would silently have no effect.
 
+A barrel file in the project root is reported as well. The root module is always barrel-less, so a root-level `index.ts` never affects encapsulation — it is inert and only misleads readers. Allow it via the pattern `.` in [`allowBarrelsIn`](#allowbarrelsin) if it is intentional (e.g. a package entry point).
+
 ```typescript
 export const config: SheriffConfig = {
   enableBarrelLess: true,
@@ -402,7 +404,7 @@ Intentional barrels can be excluded via [`allowBarrelsIn`](#allowbarrelsin).
 
 - **Type**: `string[]`
 - **Default**: `[]`
-- **Description**: Glob patterns, relative to the project root and matched against the module path, for barrel modules that stay legal despite a restrictive `barrelPolicy`. `**` matches any number of path segments; `*` matches within a single segment. Leading and trailing path separators in a pattern are ignored, so `src/api/` behaves like `src/api`.
+- **Description**: Glob patterns, relative to the project root and matched against the module path, for barrel modules that stay legal despite a restrictive `barrelPolicy`. `**` matches any number of path segments; `*` matches within a single segment. Leading and trailing path separators in a pattern are ignored, so `src/api/` behaves like `src/api`. The project root itself matches the pattern `.`.
 
 Use this for intentional bucket-level barrels, e.g. an `api` folder whose `index.ts` acts as a port with a short import path:
 

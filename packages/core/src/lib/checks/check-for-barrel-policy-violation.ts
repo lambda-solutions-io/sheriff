@@ -27,8 +27,9 @@ export type BarrelPolicyViolation = {
 /**
  * Every barrel file the policy has an opinion about, before `allowBarrelsIn`
  * is applied. Under `moduleIdentity: 'auto'` this is exactly the set of
- * barrel modules; under `'config'` it additionally contains barrel files in
- * directories which are not modules (see {@link findBarrelsOutsideModules}).
+ * barrel modules plus a root-level barrel (see {@link findRootBarrel});
+ * under `'config'` it additionally contains barrel files in directories
+ * which are not modules (see {@link findBarrelsOutsideModules}).
  */
 export function findBarrelCandidates(
   projectInfo: ProjectInfo,
@@ -45,7 +46,48 @@ export function findBarrelCandidates(
       message: `${config.barrelFileName} turns a barrel-less module into a barrel module and changes its encapsulation semantics. Remove it or add the module to \`allowBarrelsIn\`.`,
     }));
 
-  return [...barrelModules, ...findBarrelsOutsideModules(projectInfo)];
+  return [
+    ...barrelModules,
+    ...findBarrelsOutsideModules(projectInfo),
+    ...findRootBarrel(projectInfo),
+  ];
+}
+
+/**
+ * A barrel file in the project root.
+ *
+ * The root module is always created barrel-less (`createModules` overwrites
+ * whatever the module scan detected for the root directory), so a root-level
+ * barrel file never turns it into a barrel module. That makes it invisible
+ * to both the module-driven scan (`kind` stays `'barrel-less'`) and — under
+ * `moduleIdentity: 'config'` — to {@link findBarrelsOutsideModules}, whose
+ * not-a-module filter drops the root directory (issue #48). It is therefore
+ * probed directly on the filesystem. In `allowBarrelsIn` the root is
+ * addressable as `.`.
+ */
+function findRootBarrel({
+  config,
+  modules,
+}: ProjectInfo): BarrelPolicyViolation[] {
+  const fs = getFs();
+  const rootModule = modules.find((module) => module.isRoot);
+  if (!rootModule) {
+    return [];
+  }
+
+  // `Module.barrelPath` requires the file to exist, so probe the raw path
+  const rootBarrelPath = fs.join(rootModule.path, config.barrelFileName);
+  if (!fs.exists(rootBarrelPath)) {
+    return [];
+  }
+
+  return [
+    {
+      modulePath: rootModule.path,
+      barrelFilePath: toFsPath(rootBarrelPath),
+      message: `${config.barrelFileName} sits in the project root. The root module is always barrel-less, so the file has no effect on encapsulation. Remove it or add \`.\` to \`allowBarrelsIn\`.`,
+    },
+  ];
 }
 
 /**
@@ -96,6 +138,10 @@ function findBarrelsOutsideModules({
  * turning the flag on would trade one silent failure for another. They obey
  * `allowBarrelsIn` in the same way, matched against their directory.
  *
+ * A barrel file in the project root is reported as well: the root module is
+ * always barrel-less, so the file is inert under every module identity (see
+ * {@link findRootBarrel}). In `allowBarrelsIn` it matches the pattern `.`.
+ *
  * With `barrelPolicy: 'allow'` (default) or without barrel-less mode, no
  * violations are reported. It is up to the caller to decide whether a
  * violation fails the run (`'forbid'`) or is only reported (`'warn'`).
@@ -111,9 +157,11 @@ export function checkForBarrelPolicyViolation(
   const fs = getFs();
 
   return findBarrelCandidates(projectInfo).filter((candidate) => {
-    const relativeModulePath = normalizePathSeparators(
-      fs.relativeTo(rootDir, candidate.modulePath),
-    );
+    const relativeModulePath =
+      normalizePathSeparators(fs.relativeTo(rootDir, candidate.modulePath)) ||
+      // the root barrel's directory is the root itself; give it an
+      // addressable name instead of the empty string.
+      '.';
 
     return !config.allowBarrelsIn.some((pattern) =>
       matchesFolderPathGlob(pattern, relativeModulePath),
