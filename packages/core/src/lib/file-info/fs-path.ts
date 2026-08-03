@@ -7,14 +7,14 @@ export type FsPath = string & { type: 'FsPath' };
 
 /**
  * Main Check function which is used by `isFsPath` and `toFsPath`.
- * Uses a cache for valid paths.
+ *
+ * Always probes the filesystem. A positive result must not be cached
+ * across calls: in long-lived processes (daemon, LSP, `verify --watch`)
+ * a deleted file would otherwise keep validating as an existing FsPath
+ * and re-enter the graph, surfacing later as a raw ENOENT (#50). The
+ * daemon's watcher relies on `toFsPath` throwing for deleted files.
  */
-const fsPathCache = new Set<string>();
 const checkPath = (path: string): 'valid' | 'not absolute' | 'not existing' => {
-  if (fsPathCache.has(path)) {
-    return 'valid';
-  }
-
   const fs = getFs();
   if (!fs.isAbsolute(path)) {
     return 'not absolute';
@@ -23,7 +23,6 @@ const checkPath = (path: string): 'valid' | 'not absolute' | 'not existing' => {
     return 'not existing';
   }
 
-  fsPathCache.add(path);
   return 'valid';
 };
 
@@ -54,8 +53,8 @@ export const toFsPath = (path: string): FsPath => {
  * Constructs an FsPath from an absolute path returned by a Dirent scan.
  * The caller must obtain the path from `readdirSync({ withFileTypes: true })`,
  * which establishes the entry's existence without another filesystem probe.
+ * The trust is limited to this one call; later checks probe again.
  */
 export const toFsPathFromDirent = (path: string): FsPath => {
-  fsPathCache.add(path);
   return path as FsPath;
 };
