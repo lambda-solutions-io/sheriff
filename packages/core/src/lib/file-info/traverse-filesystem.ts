@@ -116,8 +116,13 @@ function getImportResolutions(
 
   // the tsconfig of the entry file governs the resolution, so it is part
   // of the key: the same file can resolve differently per project.
+  // `ignoreFileExtensions` is per sheriff config: in multi-config
+  // workspaces several configs share one tsconfig, so the filter must be
+  // part of the key too (issue #49). Sorted, so ordering doesn't fragment
+  // the cache.
+  const ignoredExtensionsKey = [...ignoreFileExtensions].sort().join(',');
   return getOrCompute(
-    `import-resolutions\0${tsData.sourceConfigPaths[0]}\0${fsPath}`,
+    `import-resolutions\0${tsData.sourceConfigPaths[0]}\0${fsPath}\0${ignoredExtensionsKey}`,
     () => ({
       value: resolveImports(
         fsPath,
