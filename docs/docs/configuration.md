@@ -204,8 +204,9 @@ The keys are workspace-relative directories and the values are config paths,
 relative to the workspace root or absolute. Matching happens at directory
 boundaries, so `apps/a` does not match `apps/ab`. If mappings overlap, the
 deepest matching directory wins. Files outside all mappings use the root
-config. Absolute directory keys and keys that escape the workspace root are
-invalid.
+config. Absolute directory keys, keys that escape the workspace root, and keys
+mapping the workspace root itself (`'.'`) are invalid — root rules belong in
+the root config.
 
 ```typescript
 export const config: SheriffConfig = {

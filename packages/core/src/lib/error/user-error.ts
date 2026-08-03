@@ -19,7 +19,8 @@ export type UserErrorCode =
   | 'SH-018'
   | 'SH-019'
   | 'SH-020'
-  | 'SH-021';
+  | 'SH-021'
+  | 'SH-022';
 
 export class UserError extends Error {
   constructor(
@@ -137,6 +138,15 @@ export class InvalidConfigsDirectoryError extends UserError {
     super(
       'SH-013',
       `Invalid configs directory '${directory}' in sheriff.config.ts. Configs keys must be workspace-relative directories that stay inside the workspace root.`,
+    );
+  }
+}
+
+export class RootConfigsDirectoryError extends UserError {
+  constructor(directory: string) {
+    super(
+      'SH-022',
+      `Configs key '${directory}' in sheriff.config.ts maps the workspace root itself, which no file could ever resolve to. The root sheriff.config.ts already governs the root; move the rules into the root config or map a sub-directory.`,
     );
   }
 }

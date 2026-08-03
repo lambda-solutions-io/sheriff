@@ -12,6 +12,7 @@ import {
   MissingModulesWithoutAutoTaggingError,
   ModuleIdentityConfigWithoutBarrelLessError,
   NoEntryPointsFoundError,
+  RootConfigsDirectoryError,
   TaggingAndModulesError,
 } from '../error/user-error';
 import { defaultConfig } from './default-config';
@@ -208,6 +209,13 @@ function validateConfigsKeys(
       fs.isAbsolute(relativeDirectory)
     ) {
       throw new InvalidConfigsDirectoryError(directory);
+    }
+
+    // '' means the key resolves to the workspace root ('.', './', ...).
+    // `resolveConfigForFile` could never select it, so the entry would be
+    // silently dead configuration.
+    if (relativeDirectory === '') {
+      throw new RootConfigsDirectoryError(directory);
     }
   }
 }
