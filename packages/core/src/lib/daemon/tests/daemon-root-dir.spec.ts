@@ -75,8 +75,17 @@ describe('daemon rootDir independence from cwd', () => {
   });
 
   it('should analyze a relative rootDir against the process cwd', async () => {
-    // a relative root (e.g. SHERIFF_ROOT_DIR=.) must resolve, not fail
-    const relativeRoot = path.relative(otherDir, rootDir);
+    // a relative root (e.g. SHERIFF_ROOT_DIR=.) must resolve, not fail.
+    // Needs its own project dir: the suite's daemon already listens for
+    // `rootDir`, and a second daemon on the same resolved root must refuse
+    // to start (socket-hijack guard). On macOS the cwd-resolved spelling
+    // (/private/var vs /var) hashes to a different socket, hiding that —
+    // on Linux it throws.
+    const relativeRootDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'sheriff-daemon-rel-'),
+    );
+    writeViolatingProject(relativeRootDir);
+    const relativeRoot = path.relative(process.cwd(), relativeRootDir);
     const relativeServer = await startDaemonServer({
       rootDir: relativeRoot,
       exit,
@@ -93,6 +102,7 @@ describe('daemon rootDir independence from cwd', () => {
       client!.close();
     } finally {
       relativeServer.close();
+      fs.rmSync(relativeRootDir, { recursive: true, force: true });
     }
   });
 
