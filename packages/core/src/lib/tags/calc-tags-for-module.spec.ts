@@ -193,6 +193,38 @@ describe('calc tags for module', () => {
     ).toEqual(['domain:holidays']);
   });
 
+  it('should not match a partial placeholder inside a longer directory name', () => {
+    const rootDir = '/project' as FsPath;
+    const moduleDir = '/project/my-feat-x' as FsPath;
+
+    expect(
+      calcTagsForModule(moduleDir, rootDir, {
+        'feat-<name>': 'feature:<name>',
+      }),
+    ).toEqual(['noTag']);
+  });
+
+  it('should not match when the directory only starts with the matcher', () => {
+    const rootDir = '/project' as FsPath;
+    const moduleDir = '/project/holidays-feature' as FsPath;
+
+    expect(
+      calcTagsForModule(moduleDir, rootDir, {
+        '<domain>-feat': 'domain:<domain>',
+      }),
+    ).toEqual(['noTag']);
+  });
+
+  it('should treat regex metacharacters in placeholder matchers literally', () => {
+    const moduleDir = '/project/+feat-booking' as FsPath;
+
+    expect(
+      calcTagsForModule(moduleDir, root, {
+        '+feat-<name>': 'feature:<name>',
+      }),
+    ).toEqual(['feature:booking']);
+  });
+
   it('should allow config key to have multiple paths', () => {
     const rootDir = '/project' as FsPath;
     const moduleDir = '/project/src/app/holidays' as FsPath;
