@@ -44,6 +44,18 @@ export class DefaultFs extends Fs {
     return fs.existsSync(path);
   }
 
+  override existsCaseSensitive(p: string): p is FsPath {
+    // existsSync follows filesystem case rules; realpath restores the
+    // on-disk casing, so a case-variant match is rejected (same pattern
+    // as findNearestParentFile, issue #70). A symlink whose target has a
+    // different basename is rejected too, consistent with findFiles,
+    // which never treats symlinks as barrels.
+    return (
+      fs.existsSync(p) &&
+      path.basename(fs.realpathSync.native(p)) === path.basename(p)
+    );
+  }
+
   tmpdir = () => os.tmpdir();
 
   cwd = () => process.cwd();

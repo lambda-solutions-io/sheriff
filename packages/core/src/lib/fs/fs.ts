@@ -10,6 +10,17 @@ export abstract class Fs {
   abstract createDir(path: string): void;
   abstract exists(path: string): path is FsPath;
 
+  /**
+   * Like {@link exists}, but on case-insensitive filesystems only an
+   * exact-case filename matches. Used for the `hasBarrel` probes, which
+   * must agree with the case-sensitive barrel discovery (`findFiles`) and
+   * `Module.exposes` (issue #70). The default delegates to `exists`;
+   * `DefaultFs` overrides it with an on-disk casing check.
+   */
+  existsCaseSensitive(path: string): path is FsPath {
+    return this.exists(path);
+  }
+
   abstract tmpdir(): string;
 
   join = (...paths: string[]) => path.join(...paths);

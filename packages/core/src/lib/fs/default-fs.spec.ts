@@ -136,6 +136,36 @@ describe('Default Fs', () => {
     );
   });
 
+  describe('existsCaseSensitive', () => {
+    it('should match an exact-case filename and reject a case-variant', () => {
+      const temporaryDirectory = nodeFs.mkdtempSync(
+        path.join(os.tmpdir(), 'sheriff-exists-case-'),
+      );
+
+      try {
+        nodeFs.writeFileSync(path.join(temporaryDirectory, 'Index.ts'), '');
+
+        expect(
+          fs.existsCaseSensitive(path.join(temporaryDirectory, 'Index.ts')),
+        ).toBe(true);
+        // on a case-insensitive filesystem (macOS/Windows) `exists` matches
+        // the variant; the case-sensitive probe must not (issue #70). On a
+        // case-sensitive filesystem this holds trivially.
+        expect(
+          fs.existsCaseSensitive(path.join(temporaryDirectory, 'index.ts')),
+        ).toBe(false);
+      } finally {
+        nodeFs.rmSync(temporaryDirectory, { recursive: true, force: true });
+      }
+    });
+
+    it('should return false for a missing file', () => {
+      expect(
+        fs.existsCaseSensitive(path.join(__dirname, 'does-not-exist.ts')),
+      ).toBe(false);
+    });
+  });
+
   describe('findNearest', () => {
     it('should find in second parent', () => {
       const found = fs.findNearestParentFile(
