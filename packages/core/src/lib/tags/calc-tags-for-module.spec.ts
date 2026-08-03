@@ -43,6 +43,15 @@ describe('calc tags for module', () => {
     ).toEqual(['feature:booking']);
   });
 
+  it('should support digits in placeholder names', () => {
+    const moduleDir = '/project/app-v2' as FsPath;
+    expect(
+      calcTagsForModule(moduleDir, root, {
+        'app-<v2>': 'tag:<v2>',
+      }),
+    ).toEqual(['tag:v2']);
+  });
+
   it('multiple tags', () => {
     const rootDir = '/project' as FsPath;
     const moduleDir = '/project/abc' as FsPath;

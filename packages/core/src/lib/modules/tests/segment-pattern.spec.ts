@@ -11,6 +11,11 @@ describe('matchesFolderPathGlob', () => {
     // single-segment wildcard stays segment-local
     ['src/*/api', 'src/customers/api', true],
     ['src/*/api', 'src/customers/sub/api', false],
+    // partial wildcards match digits and dots (#46)
+    ['src/feat-*', 'src/feat-v2', true],
+    ['src/domain-*/api', 'src/domain-2/api', true],
+    ['src/lib-*', 'src/lib-v2.5', true],
+    ['src/feat-*', 'src/other-v2', false],
     // globstar matches any number of segments, including none
     ['**/api', 'api', true],
     ['**/api', 'src/api', true],

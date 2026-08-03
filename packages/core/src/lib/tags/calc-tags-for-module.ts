@@ -14,8 +14,11 @@ import {
   TagWithoutValueError,
 } from '../error/user-error';
 
-export const FOLDER_CHARACTERS_REGEX_STRING = '[a-zA-Z-_]';
-export const PLACE_HOLDER_REGEX = /<[a-zA-Z-_]+>/g;
+// A folder wildcard matches any character except the path separator
+// (segments are matched individually), mirroring the `[^/]*` semantics
+// of file patterns. Keeps digits and dots matching, e.g. `feat-v2` (#46).
+export const FOLDER_CHARACTERS_REGEX_STRING = '[^/]';
+export const PLACE_HOLDER_REGEX = /<[a-zA-Z0-9_-]+>/g;
 
 export const calcTagsForModule = (
   moduleDir: FsPath,
