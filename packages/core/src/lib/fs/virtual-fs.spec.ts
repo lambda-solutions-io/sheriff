@@ -40,6 +40,15 @@ describe('Virtual Fs', () => {
       expect(fs.exists('/foobar')).toBe(false);
     });
 
+    it('should match case-sensitively in exists and existsCaseSensitive', () => {
+      // the VirtualFs never folds case, so both probes agree; pins the
+      // Fs default of existsCaseSensitive delegating to exists (issue #70)
+      fs.writeFile('/project/customers/Index.ts', '');
+      expect(fs.exists('/project/customers/index.ts')).toBe(false);
+      expect(fs.existsCaseSensitive('/project/customers/index.ts')).toBe(false);
+      expect(fs.existsCaseSensitive('/project/customers/Index.ts')).toBe(true);
+    });
+
     it.each(['./../..', '/..', '../..'])(
       'should throw if directory below root is requested: %s',
       (path) => {

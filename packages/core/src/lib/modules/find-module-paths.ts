@@ -76,7 +76,9 @@ export function findModulePaths(
     const fs = getFs();
     for (const path of modulesFromConfig) {
       modulePaths[path] = {
-        hasBarrel: fs.exists(fs.join(path, barrelFileName)),
+        // exact-case probe: must agree with the case-sensitive barrel
+        // path comparison in `Module.exposes` (issue #70)
+        hasBarrel: fs.existsCaseSensitive(fs.join(path, barrelFileName)),
         exports: findExportsForModulePath(path, rootDir, modules),
       };
     }
