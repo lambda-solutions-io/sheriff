@@ -170,10 +170,15 @@ describe('Virtual Fs', () => {
       expect(found).toBeVfsFiles(['index.ts']);
     });
 
-    it('should be case insensitive', () => {
+    it('should match filenames case-sensitively (issue #70)', () => {
+      // Same semantics as DefaultFs: discovery must match `Module.exposes`,
+      // which compares the barrel path case-sensitively.
       fs.writeFile('index.ts', 'hello');
-      const found = fs.findFiles(toFsPath('/project'), 'INDEX.ts');
-      expect(found).toBeVfsFiles(['index.ts']);
+      fs.writeFile('customers/Index.ts', 'hello');
+      expect(fs.findFiles(toFsPath('/project'), 'INDEX.ts')).toBeVfsFiles([]);
+      expect(fs.findFiles(toFsPath('/project'), 'Index.ts')).toBeVfsFiles([
+        'customers/Index.ts',
+      ]);
     });
 
     it('should throw if dir is file', () => {

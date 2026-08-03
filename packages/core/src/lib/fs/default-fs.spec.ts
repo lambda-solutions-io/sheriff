@@ -37,14 +37,15 @@ describe('Default Fs', () => {
       ]);
     });
 
-    it('should be case insensitive', () => {
+    it('should match filenames case-sensitively (issue #70)', () => {
+      // Discovery must match `Module.exposes`, which compares the barrel
+      // path case-sensitively. A case-insensitive match here would create
+      // barrel modules that expose nothing.
       const found = fs.findFiles(
         toFsPath(path.join(__dirname, './find-files/test1')),
         'INDEX.ts',
       );
-      expect(found).toEqual([
-        path.join(__dirname, 'find-files/test1/', 'index.ts'),
-      ]);
+      expect(found).toEqual([]);
     });
 
     it('should find the index.ts in sub directory', () => {

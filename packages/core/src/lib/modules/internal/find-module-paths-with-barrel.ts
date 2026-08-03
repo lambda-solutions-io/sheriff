@@ -8,6 +8,8 @@ export function findModulePathsWithBarrel(
   return projectDirs.flatMap((projectDir) =>
     getFs()
       .findFiles(projectDir, barrelFileName)
+      // findFiles matches the filename exactly, so every result ends with
+      // `/<barrelFileName>` and slicing it off yields the module directory.
       .map((path) => path.slice(0, -(barrelFileName.length + 1)))
       .map(toFsPath),
   );

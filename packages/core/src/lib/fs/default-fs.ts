@@ -64,7 +64,11 @@ export class DefaultFs extends Fs {
       const filePath = file.isSymbolicLink()
         ? toFsPath(joinedPath)
         : toFsPathFromDirent(joinedPath);
-      if (file.isFile() && file.name.toLowerCase() === filename.toLowerCase()) {
+      // Exact match, even on case-insensitive filesystems: barrel discovery
+      // must agree with `Module.exposes`, which compares the barrel path
+      // case-sensitively. A case-insensitive match would create barrel
+      // modules that expose nothing, not even their own barrel (issue #70).
+      if (file.isFile() && file.name === filename) {
         found.push(filePath);
       }
       if (file.isDirectory()) {
