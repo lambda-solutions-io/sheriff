@@ -26,21 +26,7 @@ export function getDependencyUniverse(
   fileDir: FsPath,
   rootDir: FsPath,
 ): Set<string> {
-  const fs = getFs();
-  const relativeFileDir = normalizePath(fs.relativeTo(rootDir, fileDir));
-
-  if (isOutsideRoot(relativeFileDir, fs.isAbsolute(relativeFileDir))) {
-    return new Set<string>();
-  }
-
-  const manifestPath = getOrCompute(
-    `dependency-manifest\0${normalizePath(rootDir)}\0${normalizePath(fileDir)}`,
-    () => ({
-      value: findNearestManifest(fileDir, rootDir),
-      dependencies: [],
-    }),
-    { ttlMs: DEFAULT_STRUCTURE_CACHE_TTL_MS },
-  );
+  const manifestPath = getDependencyManifestPath(fileDir, rootDir);
 
   if (!manifestPath) {
     return new Set<string>();
@@ -50,6 +36,35 @@ export function getDependencyUniverse(
     value: parseDependencyUniverse(manifestPath),
     dependencies: [manifestPath],
   }));
+}
+
+/**
+ * Path of the manifest defining the dependency universe for files in
+ * `fileDir`, or `undefined` when none exists within `rootDir`.
+ *
+ * Exposed so caches whose values depend on the manifest *content* (e.g.
+ * the import-resolution classification) can stamp it as a dependency
+ * (#49 follow-up).
+ */
+export function getDependencyManifestPath(
+  fileDir: FsPath,
+  rootDir: FsPath,
+): FsPath | undefined {
+  const fs = getFs();
+  const relativeFileDir = normalizePath(fs.relativeTo(rootDir, fileDir));
+
+  if (isOutsideRoot(relativeFileDir, fs.isAbsolute(relativeFileDir))) {
+    return undefined;
+  }
+
+  return getOrCompute(
+    `dependency-manifest\0${normalizePath(rootDir)}\0${normalizePath(fileDir)}`,
+    () => ({
+      value: findNearestManifest(fileDir, rootDir),
+      dependencies: [],
+    }),
+    { ttlMs: DEFAULT_STRUCTURE_CACHE_TTL_MS },
+  );
 }
 
 /**
