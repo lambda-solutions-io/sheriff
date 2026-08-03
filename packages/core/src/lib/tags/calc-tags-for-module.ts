@@ -185,10 +185,11 @@ function handlePlaceholderMatching(
   placeholderMatch: string[],
   placeholders: Record<string, string>,
 ) {
-  // literal parts must not act as regex syntax; anchor to match the full path
+  // literal parts must not act as regex syntax; anchor to match the full path;
+  // a placeholder matches within a single segment and never crosses a `/`
   const placeholderRegex =
     '^' +
-    pathMatcher.split(PLACE_HOLDER_REGEX).map(escapeRegExp).join('(.+)') +
+    pathMatcher.split(PLACE_HOLDER_REGEX).map(escapeRegExp).join('([^/]+)') +
     '$';
   const pathMatch = currentPath.match(new RegExp(placeholderRegex));
   if (!pathMatch) {

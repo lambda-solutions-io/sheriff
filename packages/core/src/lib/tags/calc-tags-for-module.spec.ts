@@ -225,6 +225,31 @@ describe('calc tags for module', () => {
     ).toEqual(['feature:booking']);
   });
 
+  it('should not let a placeholder capture across path separators', () => {
+    const rootDir = '/project' as FsPath;
+    const moduleDir = '/project/libs/a/b' as FsPath;
+
+    // <domain> is per-segment: it must never capture 'a/b'; 'libs/<domain>'
+    // matches 'libs/a', the leftover segment 'b' makes it a non-match.
+    expect(
+      calcTagsForModule(moduleDir, rootDir, {
+        'libs/<domain>': 'domain:<domain>',
+      }),
+    ).toEqual(['noTag']);
+  });
+
+  it('should match a placeholder to exactly one segment in multi-segment matchers', () => {
+    const rootDir = '/project' as FsPath;
+    const moduleDir = '/project/libs/a/b/src' as FsPath;
+
+    // over-capture would yield domain 'a/b'; per-segment semantics: no match
+    expect(
+      calcTagsForModule(moduleDir, rootDir, {
+        'libs/<domain>/src': 'domain:<domain>',
+      }),
+    ).toEqual(['noTag']);
+  });
+
   it('should allow config key to have multiple paths', () => {
     const rootDir = '/project' as FsPath;
     const moduleDir = '/project/src/app/holidays' as FsPath;
