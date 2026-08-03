@@ -178,13 +178,21 @@ function isRegularExpression(segment: string) {
   return segment.startsWith('/') && segment.endsWith('/');
 }
 
+function escapeRegExp(literal: string) {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function handlePlaceholderMatching(
   pathMatcher: string,
   currentPath: string,
   placeholderMatch: string[],
   placeholders: Record<string, string>,
 ) {
-  const placeholderRegex = pathMatcher.replace(PLACE_HOLDER_REGEX, '(.+)');
+  // literal parts must not act as regex syntax; anchor to match the full path
+  const placeholderRegex =
+    '^' +
+    pathMatcher.split(PLACE_HOLDER_REGEX).map(escapeRegExp).join('(.+)') +
+    '$';
   const pathMatch = currentPath.match(new RegExp(placeholderRegex));
   if (!pathMatch) {
     return false;
