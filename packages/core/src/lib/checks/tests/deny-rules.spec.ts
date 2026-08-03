@@ -175,6 +175,54 @@ describe('denyRules', () => {
     });
   });
 
+  describe('matcher context receives file paths (#47)', () => {
+    it('should pass the imported file path as toFilePath to denyRules', () => {
+      // `src/domain/booking.ts` imports `src/shared/util.ts`. A file-sensitive
+      // denyRule must see the imported FILE, not its module directory -
+      // otherwise `endsWith('/util.ts')` never matches and the forbidden
+      // import passes silently.
+      expect(
+        violatedImportsFor({
+          depRules: permissiveDepRules,
+          denyRules: {
+            'type:domain': ({ toFilePath }) => toFilePath.endsWith('/util.ts'),
+          },
+        }),
+      ).toEqual(['../shared/util.ts']);
+    });
+
+    it('should keep toModulePath as the module directory alongside toFilePath', () => {
+      // the matcher cannot close over test-scope variables (the config is
+      // serialized and eval'd), so both exact paths are asserted via a deny
+      // rule which only fires when file AND module path are correct
+      expect(
+        violatedImportsFor({
+          depRules: permissiveDepRules,
+          denyRules: {
+            'type:domain': ({ toFilePath, toModulePath }) =>
+              toFilePath === '/project/src/shared/util.ts' &&
+              toModulePath === '/project/src/shared',
+          },
+        }),
+      ).toEqual(['../shared/util.ts']);
+    });
+
+    it('should pass the imported file path as toFilePath to depRules', () => {
+      // depRules share the same context object, so they must see the file too.
+      // Only `type:domain` decides here; the other tags have clearance.
+      expect(
+        violatedImportsFor({
+          depRules: {
+            root: '*',
+            'domain:*': 'shared',
+            'type:domain': ({ toFilePath }) =>
+              !toFilePath.endsWith('/util.ts'),
+          },
+        }),
+      ).toEqual(['../shared/util.ts']);
+    });
+  });
+
   describe('no NoDependencyRuleForTagError for denyRules', () => {
     it('should not throw when a tag has no denyRule entry', () => {
       // 'domain:booking' has no denyRules entry at all - that is normal,
