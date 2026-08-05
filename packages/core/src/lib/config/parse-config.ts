@@ -8,6 +8,7 @@ import {
   BarrelPolicyWithoutBarrelLessError,
   CollidingEncapsulationSettings,
   CollidingEntrySettings,
+  ExportsOnFileModuleError,
   InvalidConfigsDirectoryError,
   MissingModulesWithoutAutoTaggingError,
   ModuleIdentityConfigWithoutBarrelLessError,
@@ -15,6 +16,8 @@ import {
   RootConfigsDirectoryError,
   TaggingAndModulesError,
 } from '../error/user-error';
+import { isModuleDefinition, ModuleConfig } from './module-config';
+import { hasSourceFileExtension } from '../modules/internal/segment-pattern';
 import { defaultConfig } from './default-config';
 import { anyTag } from '../checks/any-tag';
 import { sameTag } from '../checks/same-tag';
@@ -179,6 +182,8 @@ const computeParsedConfig = (
     );
   }
 
+  validateFileModuleKeys(userSheriffConfig.modules ?? {}, '');
+
   const mergedConfig = { ...defaultConfig, ...rest };
 
   const ignoreFileExtensions = getIgnoreFileExtensions(
@@ -216,6 +221,32 @@ function validateConfigsKeys(
     // silently dead configuration.
     if (relativeDirectory === '') {
       throw new RootConfigsDirectoryError(directory);
+    }
+  }
+}
+
+/**
+ * A key whose last segment ends with a source-file extension defines
+ * single-file modules. Such a module always exposes exactly its own file,
+ * so `exports` on it would be dead configuration (SH-023).
+ */
+function validateFileModuleKeys(modules: ModuleConfig, prefix: string) {
+  for (const [rawPath, value] of Object.entries(modules)) {
+    const fullPath = prefix ? `${prefix}/${rawPath}` : rawPath;
+    if (isModuleDefinition(value)) {
+      const segments = fullPath.split('/');
+      if (
+        value.exports !== undefined &&
+        hasSourceFileExtension(segments[segments.length - 1])
+      ) {
+        throw new ExportsOnFileModuleError(fullPath);
+      }
+    } else if (
+      typeof value === 'object' &&
+      value !== null &&
+      !Array.isArray(value)
+    ) {
+      validateFileModuleKeys(value, fullPath);
     }
   }
 }

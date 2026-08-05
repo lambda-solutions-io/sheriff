@@ -446,3 +446,83 @@ describe('** globs in module paths', () => {
     ]);
   });
 });
+// a key whose last segment literally ends with a source-file extension
+// defines single-file modules; every other key keeps matching directories
+// only, so existing configs cannot gain surprise modules
+describe('file modules via file patterns', () => {
+  beforeEach(() => useVirtualFs().reset());
+
+  it('should discover single-file modules from an extension-suffixed key', () => {
+    assertProject({
+      'src/stores': {
+        'user.store.ts': [],
+        'order.store.ts': [],
+        'stores.helper.ts': [],
+      },
+    })
+      .withModuleConfig({ 'src/stores/<name>.store.ts': 'store' })
+      .hasFileModulePaths([
+        'src/stores/user.store.ts',
+        'src/stores/order.store.ts',
+      ]);
+  });
+
+  it('should not create directory modules from a file-module key', () => {
+    assertProject({
+      'src/stores': {
+        'user.store.ts': [],
+      },
+    })
+      .withModuleConfig({ 'src/stores/<name>.store.ts': 'store' })
+      .hasModulePaths([]);
+  });
+
+  it('should combine ** with file patterns', () => {
+    assertProject({
+      src: {
+        'user.store.ts': [],
+        deep: { 'order.store.ts': [], 'other.ts': [] },
+      },
+    })
+      .withModuleConfig({ 'src/**/<name>.store.ts': 'store' })
+      .hasFileModulePaths([
+        'src/user.store.ts',
+        'src/deep/order.store.ts',
+      ]);
+  });
+
+  it('should not match a directory named like a file', () => {
+    assertProject({
+      'src/stores': {
+        'user.store.ts': { 'inner.ts': [] },
+      },
+    })
+      .withModuleConfig({ 'src/stores/<name>.store.ts': 'store' })
+      .hasFileModulePaths([]);
+  });
+
+  it('should not create file modules from generic directory keys', () => {
+    assertProject({
+      src: {
+        'lonely.ts': [],
+        'customers/x.ts': [],
+      },
+    })
+      .withModuleConfig({ 'src/<domain>': 'domain' })
+      .hasFileModulePaths([]);
+  });
+
+  it('should mix directory and file modules from sibling keys', () => {
+    assertProject({
+      src: {
+        'customers/x.ts': [],
+        'user.store.ts': [],
+      },
+    })
+      .withModuleConfig({
+        'src/<domain>': 'domain',
+        'src/<name>.store.ts': 'store',
+      })
+      .hasModulePaths(['src/customers']);
+  });
+});

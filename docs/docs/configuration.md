@@ -53,6 +53,8 @@ export const config: SheriffConfig = {
 };
 ```
 
+A key whose last segment ends with a source-file extension defines [single-file modules](./module_boundaries.md#file-modules): every matching file becomes its own module, e.g. `'src/stores/<name>.store.ts': ['type:store', 'store:<name>']`.
+
 ```typescript
 export const config: SheriffConfig = {
   modules: {
