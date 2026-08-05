@@ -182,17 +182,35 @@ function escapeRegExp(literal: string) {
   return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// module discovery matches `*` via matchesFolderSegmentPattern; tagging has
+// to agree, otherwise a wildcard-defined module exists but carries 'noTag'
+function escapeRegExpKeepingWildcards(literal: string) {
+  return literal
+    .split('*')
+    .map(escapeRegExp)
+    .join(`${FOLDER_CHARACTERS_REGEX_STRING}*`);
+}
+
+function matchesWildcardFragment(matcher: string, pathFragment: string) {
+  const regex = new RegExp(`^${escapeRegExpKeepingWildcards(matcher)}$`);
+  return regex.test(pathFragment);
+}
+
 function handlePlaceholderMatching(
   pathMatcher: string,
   currentPath: string,
   placeholderMatch: string[],
   placeholders: Record<string, string>,
 ) {
-  // literal parts must not act as regex syntax; anchor to match the full path;
+  // literal parts must not act as regex syntax (except `*`, which keeps its
+  // single-segment wildcard meaning); anchor to match the full path;
   // a placeholder matches within a single segment and never crosses a `/`
   const placeholderRegex =
     '^' +
-    pathMatcher.split(PLACE_HOLDER_REGEX).map(escapeRegExp).join('([^/]+)') +
+    pathMatcher
+      .split(PLACE_HOLDER_REGEX)
+      .map(escapeRegExpKeepingWildcards)
+      .join('([^/]+)') +
     '$';
   const pathMatch = currentPath.match(new RegExp(placeholderRegex));
   if (!pathMatch) {
@@ -252,6 +270,8 @@ function matchSegment(
         placeholderMatch,
         placeholders,
       );
+    } else if (segmentMatcher.includes('*')) {
+      matches = matchesWildcardFragment(segmentMatcher, pathFragment);
     } else {
       if (segmentMatcher !== pathFragment) {
         matches = false;
