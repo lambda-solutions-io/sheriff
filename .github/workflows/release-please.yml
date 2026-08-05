@@ -1,50 +1,63 @@
+name: release-please
+
 on:
   push:
     branches:
-      - release-please
+      - main
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: write # create tags, releases and the release commit
+  pull-requests: write # open/update the release PR
+  issues: write # label the release PR
 
-name: release-please
+# Never run two releases at once; queue pushes to main instead.
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
-      - uses: google-github-actions/release-please-action@v3
+      - uses: googleapis/release-please-action@v4
         id: release
         with:
-          command: manifest
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # Everything below only runs on the push that merges a release PR.
+      # `releases_created` is the string 'true'/'false', so compare explicitly:
+      # `if: steps.release.outputs.releases_created` would also fire on 'false'.
       - uses: actions/checkout@v4
-        if: ${{ steps.release.outputs.releases_created }}
+        if: steps.release.outputs.releases_created == 'true'
+
       - uses: actions/setup-node@v4
+        if: steps.release.outputs.releases_created == 'true'
         with:
           node-version: '24'
           cache: 'yarn'
           registry-url: 'https://registry.npmjs.org'
-        if: ${{ steps.release.outputs.releases_created }}
+
       - run: npm install -g yarn
-        if: ${{ steps.release.outputs.releases_created }}
-      - run: yarn
-        if: ${{ steps.release.outputs.releases_created }}
+        if: steps.release.outputs.releases_created == 'true'
+
+      - run: yarn --frozen-lockfile
+        if: steps.release.outputs.releases_created == 'true'
+
       # Build compiled output into dist/ so we publish JS, not raw TypeScript source.
       - run: yarn build:all
-        if: ${{ steps.release.outputs.releases_created }}
-      - run: npm publish dist/packages/core --access public
+        if: steps.release.outputs.releases_created == 'true'
+
+      # linked-versions keeps all four packages on one version, so they are
+      # always published together. NPM_TOKEN must be an npm *automation* token:
+      # the account has 2FA set to "auth-and-writes" and only an automation
+      # token can bypass the OTP prompt in CI.
+      - name: Publish packages to npm
+        if: steps.release.outputs.releases_created == 'true'
         env:
-          NODE_AUTH_TOKEN: ${{secrets.NPM_TOKEN}}
-        if: ${{ steps.release.outputs.releases_created }}
-      - run: npm publish dist/packages/eslint-plugin --access public
-        env:
-          NODE_AUTH_TOKEN: ${{secrets.NPM_TOKEN}}
-        if: ${{ steps.release.outputs.releases_created }}
-      - run: npm publish dist/packages/mcp-server --access public
-        env:
-          NODE_AUTH_TOKEN: ${{secrets.NPM_TOKEN}}
-        if: ${{ steps.release.outputs.releases_created }}
-      - run: npm publish dist/packages/lsp-server --access public
-        env:
-          NODE_AUTH_TOKEN: ${{secrets.NPM_TOKEN}}
-        if: ${{ steps.release.outputs.releases_created }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for pkg in core eslint-plugin mcp-server lsp-server; do
+            npm publish "dist/packages/$pkg" --access public
+          done
