@@ -300,3 +300,49 @@ describe('create module infos from the config only (moduleIdentity: config)', ()
       .hasModulePaths(['src/app/customers']);
   });
 });
+
+// regression tests for issue #56: traversal used to descend into only the
+// first matching pattern per directory, silently losing sibling patterns
+describe('multiple matching patterns per directory (issue #56)', () => {
+  beforeEach(() => useVirtualFs().reset());
+
+  it('should discover modules from all matching sibling patterns', () => {
+    assertProject({
+      'src/customers': {
+        'feature/x.ts': [],
+        'data/y.ts': [],
+      },
+    })
+      .withModuleConfig({
+        'src/<domain>/data': 'data',
+        'src/customers/feature': 'feature',
+      })
+      .hasModulePaths(['src/customers/data', 'src/customers/feature']);
+  });
+
+  it('should add a terminal match even when another pattern continues deeper', () => {
+    assertProject({
+      'src/shared': {
+        'ui/x.ts': [],
+      },
+    })
+      .withModuleConfig({
+        'src/shared': 'shared',
+        'src/<x>/ui': 'ui',
+      })
+      .hasModulePaths(['src/shared', 'src/shared/ui']);
+  });
+
+  it('should add a directory only once when several patterns match it', () => {
+    assertProject({
+      'src/customers': {
+        'x.ts': [],
+      },
+    })
+      .withModuleConfig({
+        'src/*': 'a',
+        'src/customers': 'b',
+      })
+      .hasModulePaths(['src/customers']);
+  });
+});
