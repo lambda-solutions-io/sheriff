@@ -1,14 +1,22 @@
 {
-  "gitSha": "e48cc79e4eba70a2d1600e284b647e88d0ed4ff9",
-  "node": "v22.16.0",
+  "gitSha": "d692ca58f430c183630c52e7e9eebef51c9b0495",
+  "node": "v22.22.2",
   "sizes": {
     "2.1k": {
       "files": 2101,
-      "medianMs": 404.81
+      "medianMs": 1369.63
     },
     "10.5k": {
       "files": 10501,
-      "medianMs": 1730.97
+      "medianMs": 2876.42
+    },
+    "1.8k-glob": {
+      "files": 1801,
+      "medianMs": 836.78
+    },
+    "9k-glob": {
+      "files": 9001,
+      "medianMs": 2331.02
     }
   }
 }

@@ -1,5 +1,7 @@
 // Generates a large synthetic Sheriff project for benchmarking.
-// Layout: src/app/<domain>/<module>/ modules with index.ts barrels.
+// Layout: src/app/<domain>/<module>/ modules with index.ts barrels
+// (mode: 'barrel', default) or without barrels and a `**` glob module
+// config (mode: 'barrel-less-glob').
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, parse, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -9,11 +11,18 @@ const DEFAULTS = {
   modulesPerDomain: 3,
   filesPerModule: 6,
 };
+const MODES = ['barrel', 'barrel-less-glob'];
 const MARKER_FILE = '.sheriff-perf-project';
 
 export function generateBenchProject(root, options = {}) {
-  const settings = { ...DEFAULTS, ...options };
+  const { mode = 'barrel', ...numericOptions } = options;
+  if (!MODES.includes(mode)) {
+    throw new Error(`mode must be one of ${MODES.join(', ')}`);
+  }
+  const settings = { ...DEFAULTS, ...numericOptions };
   validateSettings(settings);
+  settings.mode = mode;
+  const useBarrels = mode === 'barrel';
 
   const projectRoot = safeProjectRoot(root);
   if (existsSync(projectRoot) && !existsSync(join(projectRoot, MARKER_FILE))) {
@@ -29,9 +38,13 @@ export function generateBenchProject(root, options = {}) {
   const moduleTypes = createModuleTypes(settings.modulesPerDomain);
   const mainImports = [];
 
+  // without barrels, cross-module imports target the concrete file-0,
+  // which then carries the module's `api` export itself
+  const apiPathSuffix = useBarrels ? '' : '/file-0';
+
   for (let domain = 0; domain < settings.domains; domain++) {
     mainImports.push(
-      `import { api as d${domain} } from './app/domain-${domain}/${moduleTypes[0]}';`,
+      `import { api as d${domain} } from './app/domain-${domain}/${moduleTypes[0]}${apiPathSuffix}';`,
     );
 
     for (let module = 0; module < moduleTypes.length; module++) {
@@ -47,8 +60,10 @@ export function generateBenchProject(root, options = {}) {
         );
         barrel.push(`export { fn_${type}_${file} } from './file-${file}';`);
       }
-      barrel.push(`export const api = ${domain};`);
-      writeFileSync(join(directory, 'index.ts'), `${barrel.join('\n')}\n`);
+      if (useBarrels) {
+        barrel.push(`export const api = ${domain};`);
+        writeFileSync(join(directory, 'index.ts'), `${barrel.join('\n')}\n`);
+      }
     }
   }
 
@@ -76,9 +91,7 @@ export function generateBenchProject(root, options = {}) {
       2,
     )}\n`,
   );
-  writeFileSync(
-    join(projectRoot, 'sheriff.config.ts'),
-    `import { SheriffConfig, sameTag } from '@lambda-solutions/sheriff-core';
+  const barrelSheriffConfig = `import { SheriffConfig, sameTag } from '@lambda-solutions/sheriff-core';
 
 export const config: SheriffConfig = {
   version: 1,
@@ -94,7 +107,27 @@ export const config: SheriffConfig = {
     'type:*': ['type:*'],
   },
 };
-`,
+`;
+  // the `**` spans the domain level, so config-based discovery and tagging
+  // both run their glob paths over the whole tree
+  const globSheriffConfig = `import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  version: 1,
+  entryFile: 'src/main.ts',
+  enableBarrelLess: true,
+  modules: {
+    'src/app/**/<type>': ['type:<type>'],
+  },
+  depRules: {
+    root: ['type:*'],
+    'type:*': ['type:*'],
+  },
+};
+`;
+  writeFileSync(
+    join(projectRoot, 'sheriff.config.ts'),
+    useBarrels ? barrelSheriffConfig : globSheriffConfig,
   );
 
   return {
@@ -102,7 +135,7 @@ export const config: SheriffConfig = {
     files:
       settings.domains *
         settings.modulesPerDomain *
-        (settings.filesPerModule + 1) +
+        (settings.filesPerModule + (useBarrels ? 1 : 0)) +
       1,
     ...settings,
   };
@@ -112,6 +145,8 @@ function fileBody(domain, module, file, moduleTypes, settings) {
   const type = moduleTypes[module];
   const lines = [];
   const siblingCount = Math.min(3, settings.filesPerModule - 1);
+  const useBarrels = settings.mode !== 'barrel-less-glob';
+  const apiPathSuffix = useBarrels ? '' : '/file-0';
 
   for (let offset = 1; offset <= siblingCount; offset++) {
     const sibling = (file + offset) % settings.filesPerModule;
@@ -119,13 +154,13 @@ function fileBody(domain, module, file, moduleTypes, settings) {
   }
   if (file === 0 && module + 1 < moduleTypes.length) {
     lines.push(
-      `import { api as nextApi } from '../${moduleTypes[module + 1]}';`,
+      `import { api as nextApi } from '../${moduleTypes[module + 1]}${apiPathSuffix}';`,
     );
   }
   if (file === 0 && module === 0) {
     const nextDomain = (domain + 1) % settings.domains;
     lines.push(
-      `import { api as otherApi } from '../../domain-${nextDomain}/${type}';`,
+      `import { api as otherApi } from '../../domain-${nextDomain}/${type}${apiPathSuffix}';`,
     );
   }
   lines.push(
@@ -134,6 +169,9 @@ function fileBody(domain, module, file, moduleTypes, settings) {
     `  return ${file};`,
     '}',
   );
+  if (!useBarrels && file === 0) {
+    lines.push('', `export const api = ${domain};`);
+  }
   return `${lines.join('\n')}\n`;
 }
 
@@ -156,7 +194,7 @@ function validateSettings(settings) {
 function safeProjectRoot(root) {
   if (!root) {
     throw new Error(
-      'Usage: node tools/perf/gen-bench.mjs <root> [domains] [modulesPerDomain] [filesPerModule]',
+      'Usage: node tools/perf/gen-bench.mjs <root> [domains] [modulesPerDomain] [filesPerModule] [mode]',
     );
   }
 
@@ -181,6 +219,7 @@ if (invokedPath === import.meta.url) {
     domains: Number(process.argv[3] ?? DEFAULTS.domains),
     modulesPerDomain: Number(process.argv[4] ?? DEFAULTS.modulesPerDomain),
     filesPerModule: Number(process.argv[5] ?? DEFAULTS.filesPerModule),
+    mode: process.argv[6] ?? 'barrel',
   });
   console.log(`generated ${result.files} TS files in ${result.root}`);
 }

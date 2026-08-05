@@ -48,13 +48,16 @@ yarn perf:bench
 yarn perf:bench:compare
 ```
 
-The harness regenerates 2,101-file and 10,501-file projects below ignored
-`tmp/perf`, runs `verify` three times per size, and records each median in
-`tools/perf/baseline.json`. `perf:bench:compare` leaves the baseline unchanged
-and fails when either median is more than 25% slower. Review machine and Node
-version differences before treating a comparison as a code regression. To
-accept an intentional performance change, rerun `yarn perf:bench`, inspect the
-new table, and commit the updated baseline.
+The harness regenerates four projects below ignored `tmp/perf` — 2,101-file
+and 10,501-file barrel projects, plus 1,801-file and 9,001-file barrel-less
+variants whose module config uses a `**` glob (`'src/app/**/<type>'`), so
+config-based discovery and glob tagging are guarded too. It runs `verify`
+three times per size and records each median in `tools/perf/baseline.json`.
+`perf:bench:compare` leaves the baseline unchanged and fails when any median
+is more than 25% slower. Review machine and Node version differences before
+treating a comparison as a code regression. To accept an intentional
+performance change, rerun `yarn perf:bench`, inspect the new table, and
+commit the updated baseline.
 
 # Fork maintenance (@lambda-solutions/sheriff)
 
