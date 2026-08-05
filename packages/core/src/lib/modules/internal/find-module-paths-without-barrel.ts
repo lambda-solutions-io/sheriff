@@ -68,12 +68,15 @@ function traverseAndMatch(
   for (const subDirectory of subDirectories) {
     const currentSegment = fs.relativeTo(basePath, subDirectory);
 
+    // every matching pattern is followed: descending into only the first
+    // match silently loses sibling patterns and their modules (issue #56);
+    // duplicates from overlapping patterns collapse in the caller's Set
     const patterns = Object.keys(groupedPatterns);
-    const matchingPattern = patterns.find((pattern) =>
+    const matchingPatterns = patterns.filter((pattern) =>
       matchesFolderSegmentPattern(pattern, currentSegment),
     );
 
-    if (matchingPattern) {
+    for (const matchingPattern of matchingPatterns) {
       if (Object.keys(groupedPatterns[matchingPattern]).length === 0) {
         addModule(subDirectory);
       } else {
