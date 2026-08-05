@@ -19,7 +19,7 @@
     {
       "type": "linked-versions",
       "groupName": "sheriff",
-      "components": ["core", "eslint-plugin", "mcp-server", "lsp-server"]
+      "components": ["core", "eslint-plugin", "mcp-server"]
     }
   ]
 }
