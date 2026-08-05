@@ -148,7 +148,8 @@ export function invalidateStructure(): void {
  * content had been incorporated (TOCTOU, #43). The snapshot marks the
  * boundary: on the `VirtualFs` the write clock detects a concurrent write
  * exactly; on the real fs an mtime at or after the compute start counts as
- * concurrent.
+ * concurrent — compared at whole-millisecond granularity, see
+ * `stampLastModified`.
  */
 type ComputeStart = {
   writeClock: number | undefined;
@@ -187,6 +188,13 @@ function createEntry<T>(
  * dependency was written while `compute` was running: the value may derive
  * from the previous content, so the next lookup must recompute. The
  * recompute then observes a settled mtime and caches normally.
+ *
+ * On the real fs both sides are floored to whole milliseconds first:
+ * `startedAt` comes from `Date.now()` (integer ms) while `mtimeMs` carries
+ * sub-millisecond precision on APFS/ext4. Comparing them raw makes a file
+ * written in the *same* millisecond as the snapshot (mtime 1234.56 vs.
+ * startedAt 1234) look concurrent, so every entry whose dependency was just
+ * written got stamped `NaN` and never cached — a permanent cache miss.
  */
 function stampLastModified(
   fs: Fs,
@@ -197,7 +205,7 @@ function stampLastModified(
   const wasWrittenDuringCompute =
     computeStart.writeClock !== undefined
       ? lastModified > computeStart.writeClock
-      : lastModified >= computeStart.startedAt;
+      : Math.floor(lastModified) > computeStart.startedAt;
   return wasWrittenDuringCompute ? NaN : lastModified;
 }
 

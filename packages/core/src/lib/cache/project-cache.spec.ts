@@ -190,6 +190,32 @@ describe('project cache', () => {
     }
   });
 
+  it('should cache a dependency written in the same millisecond as the compute start', () => {
+    // `Date.now()` is whole-ms while `mtimeMs` is fractional on APFS/ext4.
+    // Comparing them raw made a file written just before `getOrCompute`
+    // look concurrent, stamping NaN and turning the entry into a permanent
+    // cache miss. Freshly written fixtures are the common case, so this must
+    // cache on the second call.
+    useDefaultFs();
+    clearProjectCache();
+    const temporaryDirectory = nodeFs.mkdtempSync(
+      path.join(os.tmpdir(), 'sheriff-cache-'),
+    );
+    const mainTsPath = path.join(temporaryDirectory, 'main.ts');
+
+    try {
+      nodeFs.writeFileSync(mainTsPath, 'A');
+      const mainTs = toFsPath(mainTsPath);
+      const compute = vi.fn(() => ({ value: 42, dependencies: [mainTs] }));
+
+      expect(getOrCompute('the-key', compute)).toBe(42);
+      expect(getOrCompute('the-key', compute)).toBe(42);
+      expect(compute).toHaveBeenCalledTimes(1);
+    } finally {
+      nodeFs.rmSync(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
   it('should bypass the cache with SHERIFF_NO_CACHE', () => {
     vi.stubEnv('SHERIFF_NO_CACHE', '1');
     const mainTs = writeMain();
