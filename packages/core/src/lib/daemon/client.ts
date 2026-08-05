@@ -1,4 +1,5 @@
 import * as net from 'net';
+import * as path from 'path';
 import { spawn } from 'child_process';
 import { version as packageVersion } from '../../../package.json';
 import { getDaemonSocketPath } from './socket-path';
@@ -68,7 +69,9 @@ export type DaemonClientOptions = {
   throwOnVersionMismatch?: boolean;
   /**
    * Script the daemon is spawned from, i.e. the sheriff CLI entry.
-   * Required with `spawnIfMissing`.
+   * Optional: when omitted, core resolves its own CLI entry relative to
+   * this module, so callers need no knowledge of core's layout. The
+   * `SHERIFF_CLI_BIN_PATH` environment variable overrides that default.
    */
   cliBinPath?: string;
 };
@@ -119,7 +122,11 @@ export class DaemonClient {
     const socketPath = getDaemonSocketPath(rootDir);
 
     let client = await connectToSocket(socketPath);
-    if (!client && options.spawnIfMissing && options.cliBinPath) {
+    // Deliberate behaviour change: spawning is gated on `spawnIfMissing`
+    // alone. Previously a caller asking to spawn without a `cliBinPath`
+    // silently did nothing; core now falls back to its own CLI entry.
+    // Callers that must never spawn simply leave `spawnIfMissing` unset.
+    if (!client && options.spawnIfMissing) {
       spawnDaemon(rootDir, options.cliBinPath);
       client = await waitForDaemon(socketPath);
     }
@@ -138,7 +145,7 @@ export class DaemonClient {
         }
         return undefined;
       }
-      if (options.spawnIfMissing && options.cliBinPath) {
+      if (options.spawnIfMissing) {
         await delay(SPAWN_RETRY_DELAY_MS);
         spawnDaemon(rootDir, options.cliBinPath);
         const freshClient = await waitForDaemon(socketPath);
@@ -378,8 +385,30 @@ async function waitForDaemon(
   return undefined;
 }
 
-function spawnDaemon(rootDir: string, cliBinPath: string): void {
-  const child = spawn(process.execPath, [cliBinPath, 'daemon', 'run'], {
+/**
+ * Sheriff CLI entry used when the caller supplies none. Resolved relative
+ * to this module, which holds in the published layout
+ * (`<pkg>/src/lib/daemon/client.js` -> `<pkg>/src/bin/main.js`), the same
+ * relative-path assumption `package.json` is already imported under.
+ *
+ * `SHERIFF_CLI_BIN_PATH` overrides it as an escape hatch for installs
+ * where the CLI lives elsewhere.
+ *
+ * Deliberately computed on demand rather than at module load: in the
+ * source tree only `main.ts` exists, so an eager constant would bake in a
+ * path that does not resolve under vitest.
+ */
+function resolveDefaultCliBinPath(): string {
+  const override = process.env['SHERIFF_CLI_BIN_PATH'];
+  if (override) {
+    return override;
+  }
+  return path.join(__dirname, '..', '..', 'bin', 'main.js');
+}
+
+function spawnDaemon(rootDir: string, cliBinPath?: string): void {
+  const binPath = cliBinPath ?? resolveDefaultCliBinPath();
+  const child = spawn(process.execPath, [binPath, 'daemon', 'run'], {
     cwd: rootDir,
     detached: true,
     stdio: 'ignore',

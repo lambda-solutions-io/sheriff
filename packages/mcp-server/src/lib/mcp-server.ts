@@ -3,10 +3,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import {
-  DaemonBridgeDependencies,
-  resolveSheriffCliBinPath,
-} from './daemon-bridge';
+import { DaemonBridgeDependencies } from './daemon-bridge';
 import { handleToolCall, sheriffTools } from './tools';
 
 /** Configuration overrides for a Sheriff MCP server instance. */
@@ -22,7 +19,9 @@ export function createSheriffMcpServer(
 ): Server {
   const rootDir =
     options.rootDir ?? process.env['SHERIFF_ROOT_DIR'] ?? process.cwd();
-  const cliBinPath = options.cliBinPath ?? resolveSheriffCliBinPath();
+  // Left undefined unless explicitly configured: core resolves its own CLI
+  // entry (and honours SHERIFF_CLI_BIN_PATH) without help from here.
+  const cliBinPath = options.cliBinPath;
   const server = new Server(
     {
       name: 'sheriff-mcp',
