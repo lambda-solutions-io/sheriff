@@ -366,6 +366,48 @@ export const sheriffConfig: SheriffConfig = {
 };
 ```
 
+## Recursive Globs (`**`) {#recursive-globs}
+
+All matchers above span a fixed number of directory segments: `*`,
+`<placeholder>` and `/regex/` each match exactly one segment. In workspaces
+where modules live at varying depths, every depth would need its own key. A
+`**` segment closes that gap: it matches **zero or more** directory segments.
+
+```typescript
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const sheriffConfig: SheriffConfig = {
+  modules: {
+    // feature modules at any depth below libs
+    'libs/**/feature-<name>': ['type:feature', 'feature:<name>'],
+    // api modules at any depth, tagged with their parent domain
+    'libs/**/<domain>/api': ['type:api', 'domain:<domain>'],
+  },
+  depRules: {
+    'type:feature': 'type:api',
+    'domain:*': ({ from, to }) => from === to,
+    root: '*',
+  },
+};
+```
+
+The rules for `**`:
+
+- `**` must be a **complete segment**. Inside a segment (`feat**`) the `*`
+  characters keep their single-segment wildcard meaning.
+- `**` matches **zero** segments too: `libs/**/api` also matches `libs/api`.
+- `**` never captures a placeholder; `<domain>` still matches exactly one
+  segment.
+- A trailing `**` makes every directory below (and including) the prefix a
+  module: `'src/**'` is the explicit "every folder is a module" setup.
+- Directory discovery driven purely by `**` skips `node_modules` and
+  dot-directories (such as `.git`). An explicit segment
+  (`'node_modules/<pkg>'`) still matches them.
+- Key order still decides between overlapping keys: the first matching key
+  wins, so place more specific keys before their `**` counterparts.
+- For file-level `exports`, a pattern without `**` always outranks a
+  pattern with `**` when both match the same module.
+
 ## `denyRules`
 
 Use `denyRules` when a tag must restrict dependencies even if `depRules` would

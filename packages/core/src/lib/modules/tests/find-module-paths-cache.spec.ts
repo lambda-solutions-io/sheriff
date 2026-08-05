@@ -112,4 +112,15 @@ export const config = {
       ),
     );
   });
+
+  it('should discover ** modules through the cached init pipeline', () => {
+    // end-to-end guard: ** keys flow through init, the module-path cache
+    // and encapsulation checks without colliding between sub-configs
+    assertBAppIsAnalysedWithItsOwnModules(
+      createMultiConfigProject(
+        `{ 'src/a-app/**/feature': () => 'domain:a' }`,
+        `{ 'src/b-app/**/feature': () => 'domain:b' }`,
+      ),
+    );
+  });
 });

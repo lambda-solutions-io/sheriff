@@ -43,6 +43,16 @@ These options are required for Sheriff to function properly. You need to underst
 
 Module values can be a tag string, a tag array, a tag matcher function, or an explicit module definition with `tags` and optional file-level `exports`.
 
+Module keys match directory paths segment by segment: a literal, a `*` wildcard, a `<placeholder>` and a `/regex/` each match exactly one segment. A `**` segment matches zero or more segments, so modules at varying depths need only one key — see [Recursive Globs](./dependency-rules.md#recursive-globs) for the full semantics.
+
+```typescript
+export const config: SheriffConfig = {
+  modules: {
+    'libs/**/feature-<name>': ['type:feature', 'feature:<name>'],
+  },
+};
+```
+
 ```typescript
 export const config: SheriffConfig = {
   modules: {

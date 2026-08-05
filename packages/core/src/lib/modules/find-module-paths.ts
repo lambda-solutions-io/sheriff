@@ -1,12 +1,15 @@
 import { FsPath } from '../file-info/fs-path';
 import { findModulePathsWithBarrel } from './internal/find-module-paths-with-barrel';
-import { findModulePathsWithoutBarrel } from './internal/find-module-paths-without-barrel';
+import {
+  ConfiguredModulePaths,
+  findModulePathsWithoutBarrel,
+} from './internal/find-module-paths-without-barrel';
 import { Configuration } from '../config/configuration';
 import { isModuleDefinition, ModuleConfig } from '../config/module-config';
 import getFs from '../fs/getFs';
 import { PLACE_HOLDER_REGEX } from '../tags/calc-tags-for-module';
 import {
-  matchesFolderPathPattern,
+  matchesFolderPathGlob,
   normalizePathSeparators,
 } from './internal/segment-pattern';
 import {
@@ -54,7 +57,7 @@ export function findModulePaths(
   // both finders walk the filesystem for every `init()`. Their results
   // depend on directory structure, which mtime stamps cannot validate,
   // so they are cached with a staleness window (see project-cache).
-  const modulesFromConfig = enableBarrelLess
+  const modulesFromConfig: ConfiguredModulePaths = enableBarrelLess
     ? getOrCompute(
         `module-paths-without-barrel\0${rootDir}\0${barrelFileName}\0${identityFromConfigOnly}\0${stringifyModulesForCacheKey(modules)}`,
         () => ({
@@ -68,13 +71,13 @@ export function findModulePaths(
         }),
         { ttlMs: DEFAULT_STRUCTURE_CACHE_TTL_MS },
       )
-    : [];
+    : { directories: new Set<FsPath>(), files: new Set<FsPath>() };
 
   const modulePaths: ModulePathMap = {};
 
   if (identityFromConfigOnly) {
     const fs = getFs();
-    for (const path of modulesFromConfig) {
+    for (const path of modulesFromConfig.directories) {
       modulePaths[path] = {
         // exact-case probe: must agree with the case-sensitive barrel
         // path comparison in `Module.exposes` (issue #70)
@@ -88,7 +91,7 @@ export function findModulePaths(
 
   const modulesWithBarrel = findBarrelDirectories(projectDirs, barrelFileName);
 
-  for (const path of modulesFromConfig) {
+  for (const path of modulesFromConfig.directories) {
     modulePaths[path] = {
       hasBarrel: false,
       exports: findExportsForModulePath(path, rootDir, modules),
@@ -150,7 +153,7 @@ function findExportsForModulePath(
   );
 
   return flattenModuleEntries(moduleConfig)
-    .filter(({ path }) => matchesFolderPathPattern(path, relativeModulePath))
+    .filter(({ path }) => matchesFolderPathGlob(path, relativeModulePath))
     .sort((left, right) => getSpecificity(right) - getSpecificity(left))
     .at(0)?.exports;
 }
@@ -184,5 +187,12 @@ function flattenModuleEntries(
 function getSpecificity(moduleExport: { path: string }): number {
   const segments = normalizePathSeparators(moduleExport.path).split('/');
   const staticSegments = segments.filter((segment) => !segment.includes('*'));
-  return segments.length * 100 + staticSegments.length;
+  // a `**` spans arbitrarily many segments, so any pattern without one is
+  // more specific than any pattern with one, regardless of segment count
+  const recursiveGlobs = segments.filter(
+    (segment) => segment === '**',
+  ).length;
+  return (
+    recursiveGlobs * -100_000 + segments.length * 100 + staticSegments.length
+  );
 }

@@ -599,4 +599,132 @@ describe('calc tags for module', () => {
       ).toEqual(['noTag']);
     });
   });
+
+  // a `**` segment matches zero or more path segments, consistent with
+  // matchesFolderPathGlob (allowBarrelsIn); `a**b` keeps its historical
+  // single-segment wildcard meaning
+  describe('recursive globs (**)', () => {
+    const rootDir = '/project' as FsPath;
+
+    it('should match any depth with a trailing **', () => {
+      expect(
+        calcTagsForModule('/project/libs/a/b' as FsPath, rootDir, {
+          'libs/**': 'lib',
+        }),
+      ).toEqual(['lib']);
+    });
+
+    it('should match zero segments with a trailing **', () => {
+      expect(
+        calcTagsForModule('/project/libs' as FsPath, rootDir, {
+          'libs/**': 'lib',
+        }),
+      ).toEqual(['lib']);
+    });
+
+    it('should match a segment after ** at any depth', () => {
+      expect(
+        calcTagsForModule('/project/libs/x/y/feature' as FsPath, rootDir, {
+          'libs/**/feature': 'feat',
+        }),
+      ).toEqual(['feat']);
+    });
+
+    it('should match zero segments for ** in the middle', () => {
+      expect(
+        calcTagsForModule('/project/libs/feature' as FsPath, rootDir, {
+          'libs/**/feature': 'feat',
+        }),
+      ).toEqual(['feat']);
+    });
+
+    it('should capture placeholders right of **', () => {
+      expect(
+        calcTagsForModule('/project/libs/a/b/booking/api' as FsPath, rootDir, {
+          'libs/**/<domain>/api': ['domain:<domain>'],
+        }),
+      ).toEqual(['domain:booking']);
+    });
+
+    it('should backtrack ** until the rest of the matcher fits', () => {
+      expect(
+        calcTagsForModule('/project/a/m1/m2/n' as FsPath, rootDir, {
+          'a/**/<p>': 'tag:<p>',
+        }),
+      ).toEqual(['tag:n']);
+    });
+
+    it('should extend a trailing ** into nested module configs', () => {
+      expect(
+        calcTagsForModule('/project/libs/z1/z2/data' as FsPath, rootDir, {
+          'libs/**': { data: 'inner' },
+        }),
+      ).toEqual(['inner']);
+    });
+
+    it('should support ** inside nested module configs', () => {
+      expect(
+        calcTagsForModule('/project/src/x1/x2/data' as FsPath, rootDir, {
+          src: { '**/data': 'd' },
+        }),
+      ).toEqual(['d']);
+    });
+
+    it('should collapse consecutive **', () => {
+      expect(
+        calcTagsForModule('/project/a/b' as FsPath, rootDir, {
+          'a/**/**/b': 'x',
+        }),
+      ).toEqual(['x']);
+    });
+
+    it('should not match when the segment after ** differs', () => {
+      expect(
+        calcTagsForModule('/project/libs/a/apix' as FsPath, rootDir, {
+          'libs/**/api': 'x',
+        }),
+      ).toEqual(['noTag']);
+    });
+
+    it('should keep first-match key order with overlapping ** keys', () => {
+      expect(
+        calcTagsForModule('/project/libs/a' as FsPath, rootDir, {
+          'libs/**': 'generic',
+          'libs/a': 'specific',
+        }),
+      ).toEqual(['generic']);
+    });
+
+    it('should throw for a placeholder that ** cannot provide', () => {
+      expect(() =>
+        calcTagsForModule('/project/libs/a' as FsPath, rootDir, {
+          'libs/**': 'domain:<domain>',
+        }),
+      ).toThrowUserError(
+        new InvalidPlaceholderError('<domain>', '/project/libs/a'),
+      );
+    });
+  });
+
+  // file modules: the module path is a file path; matchers work on the
+  // filename segment like on any other segment
+  describe('file module tagging', () => {
+    const rootDir = '/project' as FsPath;
+
+    it('should capture placeholders in the filename segment', () => {
+      expect(
+        calcTagsForModule('/project/src/stores/user.store.ts' as FsPath, rootDir, {
+          'src/stores/<name>.store.ts': ['type:store', 'store:<name>'],
+        }),
+      ).toEqual(['type:store', 'store:user']);
+    });
+
+    it('should combine ** with a filename matcher', () => {
+      expect(
+        calcTagsForModule('/project/src/a/b/user.store.ts' as FsPath, rootDir, {
+          'src/**/<name>.store.ts': 'store:<name>',
+        }),
+      ).toEqual(['store:user']);
+    });
+  });
 });

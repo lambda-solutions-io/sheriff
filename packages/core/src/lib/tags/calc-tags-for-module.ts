@@ -68,6 +68,26 @@ function traverseModuleConfig(
     // might be reset below
     const originalPlaceholders = { ...placeholders };
 
+    // a `**` segment spans zero or more path segments and therefore needs
+    // its own matching with variable spans and backtracking
+    if (
+      !isRegularExpression(pathMatcher) &&
+      pathMatcher.split('/').includes('**')
+    ) {
+      const result = traverseRecursiveGlobKey(
+        pathMatcher,
+        paths,
+        placeholders,
+        tagConfig[pathMatcher],
+        moduleDir,
+        tagConfigPath,
+      );
+      if (result !== false) {
+        return result;
+      }
+      continue;
+    }
+
     const { matcherContext, matches, pathFragmentSpan } = matchSegment(
       pathMatcher,
       paths,
@@ -122,6 +142,186 @@ function traverseModuleConfig(
   }
 
   return false;
+}
+
+/**
+ * Matches a key containing `**` against the module path. Spans are tried
+ * shortest-first with backtracking: a longer `**` span is only used when
+ * the rest of the matcher (and any nested config behind it) cannot be
+ * satisfied otherwise. `**` never captures a placeholder.
+ *
+ * Unlike fixed-span keys, a nested config that is reached with no path
+ * segments left is not an error here - the `**` legitimately covers the
+ * intermediate directories - and an exhausted key falls through to the
+ * next one instead of ending the traversal.
+ */
+function traverseRecursiveGlobKey(
+  pathMatcher: string,
+  paths: string[],
+  placeholders: Record<string, string>,
+  value: TagConfigValue | ModuleDefinition | ModuleConfig,
+  moduleDir: string,
+  tagConfigPath: string[],
+): string[] | false {
+  const matcherSegments = pathMatcher.split('/');
+  const minSpan = matcherSegments.filter(
+    (segment) => segment !== '**',
+  ).length;
+
+  for (let span = minSpan; span <= paths.length; span++) {
+    const trialPlaceholders = { ...placeholders };
+    if (
+      !matchesWithRecursiveGlobs(
+        matcherSegments,
+        paths.slice(0, span),
+        trialPlaceholders,
+      )
+    ) {
+      continue;
+    }
+
+    const restPaths = paths.slice(span);
+    if (restPaths.length === 0) {
+      if (!isModuleLeafValue(value)) {
+        continue;
+      }
+      const tagProperty = isModuleDefinition(value) ? value.tags : value;
+      if (typeof tagProperty === 'function') {
+        const matcherContext: MatcherContext = {
+          segment: paths.slice(0, span).join('/'),
+        };
+        return addToTags(
+          tagProperty(trialPlaceholders, matcherContext),
+          trialPlaceholders,
+          moduleDir,
+        );
+      }
+      return addToTags(tagProperty, trialPlaceholders, moduleDir);
+    }
+
+    if (isModuleLeafValue(value)) {
+      // a longer span may still consume the remaining segments
+      continue;
+    }
+
+    const result = traverseModuleConfig(
+      restPaths,
+      value,
+      trialPlaceholders,
+      moduleDir,
+      [...tagConfigPath, pathMatcher],
+      false,
+    );
+    if (result !== false) {
+      return result;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Segment-wise matching where `**` consumes zero or more path segments
+ * (shortest first). Placeholders captured by a failed branch are rolled
+ * back, so backtracking cannot trip the duplicate-placeholder guard.
+ */
+function matchesWithRecursiveGlobs(
+  matcherSegments: string[],
+  pathSegments: string[],
+  placeholders: Record<string, string>,
+): boolean {
+  if (matcherSegments.length === 0) {
+    return pathSegments.length === 0;
+  }
+
+  const [matcherSegment, ...remainingMatchers] = matcherSegments;
+
+  if (matcherSegment === '**') {
+    for (let skipped = 0; skipped <= pathSegments.length; skipped++) {
+      if (
+        matchesWithRecursiveGlobs(
+          remainingMatchers,
+          pathSegments.slice(skipped),
+          placeholders,
+        )
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  if (pathSegments.length === 0) {
+    return false;
+  }
+
+  const captured: string[] = [];
+  if (
+    !matchesSingleSegment(
+      matcherSegment,
+      pathSegments[0],
+      placeholders,
+      captured,
+    )
+  ) {
+    return false;
+  }
+  if (
+    matchesWithRecursiveGlobs(
+      remainingMatchers,
+      pathSegments.slice(1),
+      placeholders,
+    )
+  ) {
+    return true;
+  }
+  for (const name of captured) {
+    delete placeholders[name];
+  }
+  return false;
+}
+
+function matchesSingleSegment(
+  matcherSegment: string,
+  pathSegment: string,
+  placeholders: Record<string, string>,
+  captured: string[],
+): boolean {
+  const placeholderNames = (
+    matcherSegment.match(PLACE_HOLDER_REGEX) ?? []
+  ).map((name) => name.slice(1, name.length - 1));
+
+  if (placeholderNames.length === 0) {
+    if (matcherSegment === pathSegment) {
+      return true;
+    }
+    if (matcherSegment.includes('*')) {
+      return matchesWildcardFragment(matcherSegment, pathSegment);
+    }
+    return false;
+  }
+
+  const segmentRegex = new RegExp(
+    '^' +
+      matcherSegment
+        .split(PLACE_HOLDER_REGEX)
+        .map(escapeRegExpKeepingWildcards)
+        .join('([^/]+)') +
+      '$',
+  );
+  const match = pathSegment.match(segmentRegex);
+  if (!match) {
+    return false;
+  }
+
+  placeholderNames.forEach((name, ix) => {
+    if (name in placeholders) {
+      throw new ExistingTagPlaceholderError(name);
+    }
+    placeholders[name] = match[ix + 1];
+    captured.push(name);
+  });
+  return true;
 }
 
 function isModuleLeafValue(
