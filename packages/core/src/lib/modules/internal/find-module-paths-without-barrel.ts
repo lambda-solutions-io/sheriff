@@ -2,7 +2,10 @@ import { ModuleConfig } from '../../config/module-config';
 import { FsPath } from '../../file-info/fs-path';
 import getFs from '../../fs/getFs';
 import { flattenModules } from './flatten-modules';
-import { matchesFolderSegmentPattern } from './segment-pattern';
+import {
+  hasSourceFileExtension,
+  matchesFolderSegmentPattern,
+} from './segment-pattern';
 
 /**
  * A pattern being partially matched during the traversal: `index` points to
@@ -56,16 +59,18 @@ export function findModulePathsWithoutBarrel(
   );
 
   const matchedDirectories: FsPath[] = [];
+  const matchedFiles: FsPath[] = [];
   traverseAndMatch(
     initialStates,
     rootDir,
     barrelFileName,
     includeDirectoriesWithBarrel,
     matchedDirectories,
+    matchedFiles,
   );
   return {
     directories: new Set<FsPath>(matchedDirectories),
-    files: new Set<FsPath>(),
+    files: new Set<FsPath>(matchedFiles),
   };
 }
 
@@ -82,6 +87,7 @@ function traverseAndMatch(
   barrelFileName: string,
   includeDirectoriesWithBarrel: boolean,
   matchedDirectories: FsPath[],
+  matchedFiles: FsPath[],
 ): void {
   const fs = getFs();
 
@@ -95,6 +101,27 @@ function traverseAndMatch(
   }
 
   const subDirectories = fs.readDirectory(basePath, 'directory');
+
+  const fileMatchers = states
+    .filter(isOnFileSegment)
+    .map((state) => state.segments[state.index]);
+  if (fileMatchers.length > 0) {
+    const subDirectorySet = new Set<string>(subDirectories);
+    for (const child of fs.readDirectory(basePath, 'none')) {
+      if (subDirectorySet.has(child)) {
+        continue;
+      }
+      const fileName = fs.relativeTo(basePath, child);
+      if (
+        fileMatchers.some((matcher) =>
+          matchesFolderSegmentPattern(matcher, fileName),
+        )
+      ) {
+        matchedFiles.push(child);
+      }
+    }
+  }
+
   for (const subDirectory of subDirectories) {
     const currentSegment = fs.relativeTo(basePath, subDirectory);
     const nextStates = epsilonClosure(
@@ -108,9 +135,21 @@ function traverseAndMatch(
         barrelFileName,
         includeDirectoriesWithBarrel,
         matchedDirectories,
+        matchedFiles,
       );
     }
   }
+}
+
+/**
+ * Whether the state's next segment is the key's last one and names a
+ * source-file extension - the shape that defines single-file modules.
+ */
+function isOnFileSegment(state: PatternState): boolean {
+  return (
+    state.index === state.segments.length - 1 &&
+    hasSourceFileExtension(state.segments[state.index])
+  );
 }
 
 function advanceStates(
@@ -122,6 +161,12 @@ function advanceStates(
   for (const state of states) {
     const patternSegment = state.segments[state.index];
     if (patternSegment === undefined) {
+      continue;
+    }
+
+    if (isOnFileSegment(state)) {
+      // a file-defining segment never matches a directory, so a
+      // pathological directory named like a file cannot become a module
       continue;
     }
 

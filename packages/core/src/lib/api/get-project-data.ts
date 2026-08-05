@@ -6,7 +6,7 @@ import getFs from '../fs/getFs';
 
 export type ProjectDataEntry = {
   module: string;
-  moduleType: 'barrel' | 'barrel-less';
+  moduleType: 'barrel' | 'barrel-less' | 'file';
   tags: string[];
   imports: string[];
   externalLibraries?: string[];

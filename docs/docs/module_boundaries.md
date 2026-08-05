@@ -88,6 +88,32 @@ If `exports` is omitted, the historical barrel-less behavior remains unchanged: 
 
 This solves a similar problem to `@private` and `@public` decorators, but at file level instead of symbol level. Decorators can be more precise, but Sheriff would need symbol-level AST analysis to enforce them. File-level `exports` is statically cheaper and follows the same module-relative matching model as the existing configuration.
 
+## File Modules
+
+A module does not have to be a directory. When a module key's last segment ends with a source-file extension (`.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`), every matching **file** becomes its own single-file module:
+
+```typescript
+export const config: SheriffConfig = {
+  modules: {
+    'src/app/stores/<name>.store.ts': ['type:store', 'store:<name>'],
+  },
+  depRules: {
+    root: '*',
+    'type:store': [], // stores must not import each other
+  },
+};
+```
+
+With this configuration, `user.store.ts` and `order.store.ts` are separate modules even though they share a folder — something directory modules cannot express. Placeholders capture inside the filename (`<name>` becomes `user`), and `**` works to the left of the filename segment (`'src/**/<name>.store.ts'`).
+
+The rules for file modules:
+
+- Detection is implicit but strict: only a last segment that **literally ends with a source-file extension** defines file modules. A generic key such as `'src/<domain>'` keeps matching directories only, so existing configurations cannot gain surprise modules.
+- A file module always exposes exactly its own file. `exports` on a file-module key is rejected (`SH-023`), and the encapsulation pattern does not apply.
+- Neighboring files get no special treatment. `user.store.spec.ts` next to `user.store.ts` belongs to the surrounding directory's module (or the root module), so its import of the store is a normal cross-module import and needs a `depRule` like any other.
+- File modules work in barrel mode too — an extension-suffixed key must not be silently dead just because the project uses barrel files. Directory keys keep their barrel-less requirement.
+- A directory named like a file (`user.store.ts/`) is never matched by a file-module key.
+
 ## Barrel Modules
 
 Barrel modules have an `index.ts` in their root folder. Sheriff detects them automatically, even if `modules` in `sheriff.config.ts` doesn't define them.

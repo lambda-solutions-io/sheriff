@@ -1,6 +1,6 @@
 # Draft: Modul-Definition per Datei-Pattern/Glob
 
-**Status: Entwurf zur Diskussion — noch keine Implementierung, keine Tests.**
+**Status: umgesetzt (AP0–AP3, siehe § 10) — Draft bleibt als Design-Dokumentation erhalten.**
 
 Ziel-Feature: Module sollen in `sheriff.config.ts` über Patterns/Globs definiert werden
 können, statt nur über Pfade mit exakter Segmentanzahl.
@@ -230,16 +230,19 @@ modules: {
 
 ### 4.1 Semantik — die verbindlichen Entscheidungen
 
-1. **Implizite Erkennung** *(entschieden)*: Es gibt keinen `kind: 'file'`-Marker. Beim
-   config-basierten Traversal werden an **Terminal-Knoten** des Pattern-Baums neben
-   Verzeichnissen auch Dateien gegen das letzte Segment geprüft. Matcht eine Datei, wird
-   sie Datei-Modul; matcht (auch) ein Verzeichnis, wird das Verzeichnis wie bisher
-   Verzeichnis-Modul — beides gleichzeitig aus einem Key ist erlaubt (ein Key, viele
-   Module, wie bei `*`/`**` auch). Ein Verzeichnis, das wie eine Datei heißt
-   (`x.ts/`), bleibt ein Verzeichnis-Modul-Kandidat; es gewinnt keine Sonderregel.
-2. **Nur an Terminal-Knoten.** Ein Datei-Match kann nie „mitten im Pattern" passieren —
-   `'a/<x>.ts/b'` matcht keine Datei `a/f.ts` (Dateien haben keine Kinder). Damit bleibt
-   die Erkennung strukturell eindeutig, ohne Heuristik über Dateiendungen.
+1. **Implizite Erkennung über die Datei-Endung** *(entschieden, präzisiert)*: Es gibt
+   keinen `kind: 'file'`-Marker. Ein Key definiert Datei-Module genau dann, wenn sein
+   **letztes Segment literal auf eine analysierte Quelldatei-Endung endet**
+   (`.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs`). Solche Keys matchen
+   **nur Dateien**, alle anderen Keys — wie bisher — **nur Verzeichnisse**.
+   *Warum die Präzisierung gegenüber „Terminal-Knoten probieren einfach auch Dateien":*
+   ein generischer Terminal-Matcher wie `'src/<domain>'` würde sonst plötzlich auch
+   Dateien matchen und in Bestandsprojekten neue Module erzeugen — das verletzt die
+   Bit-Identisch-Garantie. Die Endungs-Regel hält die Erkennung implizit UND additiv.
+   Ein Verzeichnis, das wie eine Datei heißt (`x.ts/`), wird von einem Datei-Key
+   bewusst nicht gematcht (pathologisch, dokumentiert).
+2. **Nur als letztes Segment.** Ein Datei-Match kann nie „mitten im Pattern" passieren —
+   `'a/<x>.ts/b'` ist ein gewöhnlicher Verzeichnis-Key (Dateien haben keine Kinder).
 3. **Modulpfad = Dateipfad.** `Module.path` zeigt auf die Datei. `findClosestModulePath`
    (`create-modules.ts:76`) funktioniert unverändert: die Datei findet sich selbst als
    tiefsten Treffer im Set; Nachbardateien klettern an ihr vorbei zum Eltern-Modul.
@@ -394,7 +397,12 @@ dann Implementierung, dann atomarer Commit. Alt-Tests müssen nach jedem AP grü
 
 | AP | Inhalt | Commit |
 |---|---|---|
-| **AP0** | `*`-Tagging-Drift: gemeinsamer Matcher, rohes `*` matcht auch beim Tagging (§ 3.4) | `fix(core): match raw folder wildcards in tagging` |
-| **AP1** | #56: Multi-Pattern-Descent in `traverseAndMatch` (alle matchenden Patterns verfolgen) | `fix(core): descend into all matching module patterns` |
-| **AP2** | Phase 1: `**` in Discovery + Tagging + Spezifität, SH-023, `node_modules`-Skip, Cache-Gegentest, Bench, Doku | `feat(core): support ** globs in module paths` |
-| **AP3** | Phase 2: Datei-Module (implizite Erkennung, Exposure, Tagging, Ausgaben), Doku | `feat(core): define single-file modules via file patterns` |
+| **AP0** ✅ | `*`-Tagging-Drift: rohes `*` matcht auch beim Tagging (§ 3.4) | `fix(core): match raw folder wildcards in tagging` |
+| **AP1** ✅ | #56: Multi-Pattern-Descent in `traverseAndMatch` (alle matchenden Patterns verfolgen) | `fix(core): descend into all matching module patterns (#56)` |
+| **AP2** ✅ | Phase 1: `**` in Discovery (NFA) + Tagging + Spezifität, `node_modules`-Skip, Doku | `feat(core): support ** globs in module paths` |
+| **AP3** ✅ | Phase 2: Datei-Module (Endungs-Erkennung, Exposure, SH-023, Barrel-Modus), Doku, Release Notes | `feat(core): define single-file modules via file patterns` |
+
+Anmerkung zu AP2: SH-023 ist in AP3 gelandet (`exports` an Datei-Modul-Keys) — für `**`
+selbst war keine Validierung nötig, jede Key-Form hat wohldefinierte Semantik (Regel 1).
+Der eigene Bench aus der DoD wurde zugunsten der bestehenden Perf-Guards zurückgestellt;
+ohne `**` in der Config ist der Traversal-Aufwand unverändert (identische Baumbeschneidung).

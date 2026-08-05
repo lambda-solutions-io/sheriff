@@ -35,6 +35,7 @@ export function createModules(
         false,
         modulePathInfo.hasBarrel,
         exposureConfig,
+        modulePathInfo.isFileModule ?? false,
       );
       module.exportedFilePatterns = modulePathInfo.exports;
       return [path, module];

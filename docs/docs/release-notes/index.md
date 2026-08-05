@@ -9,6 +9,7 @@ This section contains release notes for all Sheriff versions.
 
 ## Available Versions
 
+- **[Version 1.1](./1.1.md)** - Recursive globs (`**`) in module paths, single-file modules, wildcard tagging fixes
 - **[Version 0.21](./0.21.md)** - New dependency and workspace configuration options, `encapsulationPattern` behavior change
 - **[Version 0.20](./0.20.md)** - Customizable File Extension Ignoring
 - **[Version 0.19](./0.19.md)** - Latest updates
@@ -18,7 +19,7 @@ This section contains release notes for all Sheriff versions.
 
 ## Latest Version
 
-The latest version is [0.21](./0.21.md), which documents new dependency and workspace configuration options.
+The latest version is [1.1](./1.1.md), which introduces glob-based module definition: recursive globs (`**`) in module paths and single-file modules.
 
 ## Migration Guide
 

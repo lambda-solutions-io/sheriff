@@ -115,3 +115,13 @@ function matchesFileSegmentPattern(
 function escapeRegex(value: string): string {
   return value.replace(/([.*+?^=!:${}()|[\]/\\])/g, '\\$1');
 }
+
+/**
+ * Whether a module-key segment literally ends with an analyzed source-file
+ * extension. Such a segment defines single-file modules; every other
+ * segment keeps matching directories only, so existing configs cannot gain
+ * surprise modules from files.
+ */
+export function hasSourceFileExtension(segment: string): boolean {
+  return /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(segment);
+}

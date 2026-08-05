@@ -48,6 +48,7 @@ The items below are specific to this fork. See [Why this fork?](./introduction.m
 
 These live on feature branches and are not part of a release yet.
 
+- Glob-based module definition: `**` in module paths (modules at any depth with one key) and single-file modules via extension-suffixed keys (`'src/stores/<name>.store.ts'`), plus fixes for wildcard tagging and lost sibling patterns (#56).
 - Rust analysis engine: move filesystem traversal, import extraction, module resolution and the static rule checks into a native engine, keeping config evaluation and function-valued rules in Node. Opt-in behind a flag, with per-project fallback to the TypeScript path whenever the engine cannot serve a project. Early measurements are promising, but parity with the TypeScript implementation is the gating requirement, not raw speed.
 - Further ESLint path optimizations: cache the module skeleton across linted files and flatten each module config once per config rather than once per module. Sharing a single analysis across the rules for one file has already landed; the ESLint path remains the slowest way to run Sheriff on a large project.
 - Reporters: JSON and JUnit XML output for CI consumption, regenerated on every watch-mode re-verify.

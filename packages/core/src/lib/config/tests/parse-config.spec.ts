@@ -8,6 +8,7 @@ import {
   BarrelPolicyWithoutBarrelLessError,
   CollidingEncapsulationSettings,
   CollidingEntrySettings,
+  ExportsOnFileModuleError,
   MissingModulesWithoutAutoTaggingError,
   ModuleIdentityConfigWithoutBarrelLessError,
   NoEntryPointsFoundError,
@@ -663,6 +664,85 @@ export const config: SheriffConfig = {
       );
       expect(config.ignoreFileExtensions).toEqual(
         defaultIgnoreFileExtensions.map((ext: string) => ext.toLowerCase()),
+      );
+    });
+  });
+
+  describe('file modules', () => {
+    it('should throw for exports on a file-module key', () => {
+      getFs().writeFile(
+        'sheriff.config.ts',
+        `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  modules: {
+    'src/stores/<name>.store.ts': {
+      tags: ['type:store'],
+      exports: ['whatever.ts'],
+    },
+  },
+  depRules: {},
+};
+      `,
+      );
+
+      expect(() =>
+        parseConfig(toFsPath(getFs().cwd() + '/sheriff.config.ts')),
+      ).toThrowUserError(
+        new ExportsOnFileModuleError('src/stores/<name>.store.ts'),
+      );
+    });
+
+    it('should throw for exports on a nested file-module key', () => {
+      getFs().writeFile(
+        'sheriff.config.ts',
+        `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  modules: {
+    src: {
+      '<name>.store.ts': {
+        tags: ['type:store'],
+        exports: ['whatever.ts'],
+      },
+    },
+  },
+  depRules: {},
+};
+      `,
+      );
+
+      expect(() =>
+        parseConfig(toFsPath(getFs().cwd() + '/sheriff.config.ts')),
+      ).toThrowUserError(
+        new ExportsOnFileModuleError('src/<name>.store.ts'),
+      );
+    });
+
+    it('should not throw for exports on a directory key', () => {
+      getFs().writeFile(
+        'sheriff.config.ts',
+        `
+import { SheriffConfig } from '@lambda-solutions/sheriff-core';
+
+export const config: SheriffConfig = {
+  modules: {
+    'src/api': {
+      tags: ['type:api'],
+      exports: ['*.port.ts'],
+    },
+  },
+  depRules: {},
+};
+      `,
+      );
+
+      expect(() =>
+        parseConfig(toFsPath(getFs().cwd() + '/sheriff.config.ts')),
+      ).not.toThrowUserError(
+        new ExportsOnFileModuleError('src/api'),
       );
     });
   });

@@ -39,6 +39,7 @@ export class Module {
     public readonly isRoot: boolean,
     private readonly hasBarrel: boolean,
     private readonly exposureConfig: ModuleExposureConfig,
+    private readonly isFileModule: boolean = false,
   ) {}
 
   addFileInfo(unassignedFileInfo: UnassignedFileInfo) {
@@ -60,7 +61,10 @@ export class Module {
    * Only for user-facing output (messages, project data). Access checks must
    * go through `exposes`, which is why `hasBarrel` itself is private.
    */
-  get kind(): 'barrel' | 'barrel-less' {
+  get kind(): 'barrel' | 'barrel-less' | 'file' {
+    if (this.isFileModule) {
+      return 'file';
+    }
     return this.hasBarrel ? 'barrel' : 'barrel-less';
   }
 
@@ -87,6 +91,15 @@ export class Module {
    * would be reported as publicly importable.
    */
   exposes(fileInfo: FileInfo): boolean {
+    // a single-file module is its own public API - in barrel mode too,
+    // which is why this branch precedes the enableBarrelLess check
+    if (this.isFileModule) {
+      return (
+        normalizePathSeparators(fileInfo.path) ===
+        normalizePathSeparators(this.path)
+      );
+    }
+
     if (this.hasBarrel) {
       return (
         normalizePathSeparators(fileInfo.path) ===

@@ -9,9 +9,11 @@ import { isModuleDefinition, ModuleConfig } from '../config/module-config';
 import getFs from '../fs/getFs';
 import { PLACE_HOLDER_REGEX } from '../tags/calc-tags-for-module';
 import {
+  hasSourceFileExtension,
   matchesFolderPathGlob,
   normalizePathSeparators,
 } from './internal/segment-pattern';
+import { flattenModules } from './internal/flatten-modules';
 import {
   DEFAULT_STRUCTURE_CACHE_TTL_MS,
   getOrCompute,
@@ -27,6 +29,12 @@ export interface ModulePathInfo {
    * Module-relative file patterns that can be imported from outside.
    */
   exports?: string[];
+
+  /**
+   * Whether the module is a single file instead of a directory. A file
+   * module always exposes exactly its own file.
+   */
+  isFileModule?: boolean;
 }
 
 export type ModulePathMap = Record<FsPath, boolean | ModulePathInfo>;
@@ -54,10 +62,17 @@ export function findModulePaths(
     sheriffConfig;
   const identityFromConfigOnly = moduleIdentity === 'config';
 
+  // outside barrel-less mode the config walk only serves file-module keys.
+  // Without such keys it is skipped entirely, so existing barrel projects
+  // keep their exact behavior and pay no extra filesystem scan - but a
+  // configured file module must not stay silently dead there (fail-open).
+  const useConfiguredModulePaths =
+    enableBarrelLess || hasFileModuleKeys(modules);
+
   // both finders walk the filesystem for every `init()`. Their results
   // depend on directory structure, which mtime stamps cannot validate,
   // so they are cached with a staleness window (see project-cache).
-  const modulesFromConfig: ConfiguredModulePaths = enableBarrelLess
+  const modulesFromConfig: ConfiguredModulePaths = useConfiguredModulePaths
     ? getOrCompute(
         `module-paths-without-barrel\0${rootDir}\0${barrelFileName}\0${identityFromConfigOnly}\0${stringifyModulesForCacheKey(modules)}`,
         () => ({
@@ -73,7 +88,12 @@ export function findModulePaths(
       )
     : { directories: new Set<FsPath>(), files: new Set<FsPath>() };
 
-  const modulePaths: ModulePathMap = {};
+  const fileModulePaths: ModulePathMap = {};
+  for (const path of modulesFromConfig.files) {
+    fileModulePaths[path] = { hasBarrel: false, isFileModule: true };
+  }
+
+  const modulePaths: ModulePathMap = { ...fileModulePaths };
 
   if (identityFromConfigOnly) {
     const fs = getFs();
@@ -89,20 +109,34 @@ export function findModulePaths(
     return modulePaths;
   }
 
-  const modulesWithBarrel = findBarrelDirectories(projectDirs, barrelFileName);
-
-  for (const path of modulesFromConfig.directories) {
-    modulePaths[path] = {
-      hasBarrel: false,
-      exports: findExportsForModulePath(path, rootDir, modules),
-    };
+  // configured directories only become modules in barrel-less mode;
+  // file modules (already merged above) work in both modes
+  if (enableBarrelLess) {
+    for (const path of modulesFromConfig.directories) {
+      modulePaths[path] = {
+        hasBarrel: false,
+        exports: findExportsForModulePath(path, rootDir, modules),
+      };
+    }
   }
 
+  const modulesWithBarrel = findBarrelDirectories(projectDirs, barrelFileName);
   for (const path of modulesWithBarrel) {
     modulePaths[path] = { hasBarrel: true };
   }
 
   return modulePaths;
+}
+
+/**
+ * Whether any module key defines single-file modules, i.e. its last
+ * segment literally ends with a source-file extension.
+ */
+function hasFileModuleKeys(modules: ModuleConfig): boolean {
+  return flattenModules(modules, '').some((pattern) => {
+    const segments = pattern.split('/');
+    return hasSourceFileExtension(segments[segments.length - 1]);
+  });
 }
 
 /**

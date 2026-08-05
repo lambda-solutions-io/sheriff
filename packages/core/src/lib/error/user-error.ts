@@ -20,7 +20,8 @@ export type UserErrorCode =
   | 'SH-019'
   | 'SH-020'
   | 'SH-021'
-  | 'SH-022';
+  | 'SH-022'
+  | 'SH-023';
 
 export class UserError extends Error {
   constructor(
@@ -218,6 +219,15 @@ export class ModuleIdentityConfigWithoutBarrelLessError extends UserError {
     super(
       'SH-021',
       `sheriff.config.ts sets moduleIdentity: 'config' without enableBarrelLess: true. Without barrel-less mode modules are defined by barrel files by definition, so the setting is meaningless. Enable barrel-less mode or remove moduleIdentity.`,
+    );
+  }
+}
+
+export class ExportsOnFileModuleError extends UserError {
+  constructor(moduleKey: string) {
+    super(
+      'SH-023',
+      `sheriff.config.ts declares exports for the file module '${moduleKey}'. A single-file module always exposes exactly its own file, so exports would be dead configuration. Remove the exports property.`,
     );
   }
 }
