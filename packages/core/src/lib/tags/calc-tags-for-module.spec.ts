@@ -518,4 +518,85 @@ describe('calc tags for module', () => {
       }),
     ).toEqual(['literal-tags-folder']);
   });
+
+  // module discovery matches raw wildcards via matchesFolderSegmentPattern;
+  // tagging must agree, otherwise a wildcard-defined module silently
+  // becomes 'noTag' while the module itself exists (fail-open drift)
+  describe('folder wildcards without placeholders', () => {
+    const rootDir = '/project' as FsPath;
+
+    it('should match a full wildcard segment', () => {
+      expect(
+        calcTagsForModule('/project/src/anything' as FsPath, rootDir, {
+          'src/*': 'shared',
+        }),
+      ).toEqual(['shared']);
+    });
+
+    it('should match a partial wildcard segment', () => {
+      expect(
+        calcTagsForModule('/project/feat-booking' as FsPath, rootDir, {
+          'feat-*': 'feature',
+        }),
+      ).toEqual(['feature']);
+    });
+
+    it('should match digits and dots like discovery does', () => {
+      expect(
+        calcTagsForModule('/project/feat-v2.1' as FsPath, rootDir, {
+          'feat-*': 'feature',
+        }),
+      ).toEqual(['feature']);
+    });
+
+    it('should match a wildcard in a middle segment', () => {
+      expect(
+        calcTagsForModule('/project/libs/customers/data' as FsPath, rootDir, {
+          'libs/*/data': ['type:data'],
+        }),
+      ).toEqual(['type:data']);
+    });
+
+    it('should not let a wildcard cross path separators', () => {
+      expect(
+        calcTagsForModule('/project/src/a/b' as FsPath, rootDir, {
+          'src/*': 'shared',
+        }),
+      ).toEqual(['noTag']);
+    });
+
+    it('should combine a wildcard segment with a placeholder segment', () => {
+      expect(
+        calcTagsForModule('/project/libs/booking' as FsPath, rootDir, {
+          '*/<domain>': ['domain:<domain>'],
+        }),
+      ).toEqual(['domain:booking']);
+    });
+
+    it('should combine a wildcard and a placeholder in the same segment', () => {
+      expect(
+        calcTagsForModule('/project/ui-buttons' as FsPath, rootDir, {
+          '<type>-*': 'type:<type>',
+        }),
+      ).toEqual(['type:ui']);
+    });
+
+    it('should match wildcards in nested module configs', () => {
+      expect(
+        calcTagsForModule('/project/src/customers/data' as FsPath, rootDir, {
+          src: {
+            '*/data': ['type:data'],
+          },
+        }),
+      ).toEqual(['type:data']);
+    });
+
+    it('should still not match a plain literal partially', () => {
+      expect(
+        calcTagsForModule('/project/source' as FsPath, rootDir, {
+          src: 'shared',
+        }),
+      ).toEqual(['noTag']);
+    });
+  });
 });
