@@ -30,8 +30,11 @@ describe('lsp-server release wiring', () => {
         ?.components,
     ).toContain('lsp-server');
     expect(manifest['packages/lsp-server']).toBe('1.0.0');
+    // The workflow publishes all four packages in one loop, so assert on the
+    // loop's package list plus the publish command instead of a literal line.
+    expect(workflow).toMatch(/for pkg in [^\n]*\blsp-server\b/);
     expect(workflow).toContain(
-      'npm publish dist/packages/lsp-server --access public',
+      'npm publish "dist/packages/$pkg" --access public',
     );
     expect(project.targets.publish.options.command).toContain(
       'tools/scripts/publish.mjs lsp-server',
