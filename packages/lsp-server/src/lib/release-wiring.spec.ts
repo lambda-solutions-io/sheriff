@@ -1,8 +1,8 @@
 import { readFileSync } from 'fs';
 import { describe, expect, it } from 'vitest';
 
-describe('lsp-server release wiring', () => {
-  it('registers the package for linked versioning and publishing', () => {
+describe('lsp-server independent versioning', () => {
+  it('registers the package for independent versioning and publishing', () => {
     const releaseConfig = JSON.parse(
       readFileSync('release-please-config.json', 'utf8'),
     ) as {
@@ -25,10 +25,14 @@ describe('lsp-server release wiring', () => {
     expect(releaseConfig.packages['packages/lsp-server']).toEqual({
       component: 'lsp-server',
     });
-    expect(
-      releaseConfig.plugins.find((plugin) => plugin.type === 'linked-versions')
-        ?.components,
-    ).toContain('lsp-server');
+    // lsp-server only uses sheriff-core's public API via the ^1.0.0 caret range, without internal path access.
+    const linkedComponents = releaseConfig.plugins.find(
+      (plugin) => plugin.type === 'linked-versions',
+    )?.components;
+    expect(linkedComponents).not.toContain('lsp-server');
+    expect(linkedComponents).toEqual(
+      expect.arrayContaining(['core', 'eslint-plugin', 'mcp-server']),
+    );
     expect(manifest['packages/lsp-server']).toBe('1.0.0');
     // The workflow publishes all four packages in one loop, so assert on the
     // loop's package list plus the publish command instead of a literal line.
