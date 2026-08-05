@@ -11,7 +11,9 @@
   "exclude": [
     "src/**/*.spec.ts",
     "src/**/*.test.ts",
-    "src/lib/daemon-bridge/tests/**",
-    "src/lib/rules/tests/**"
+    "src/**/*.full-spec.ts",
+    "src/**/test*/**",
+    "src/**/__tests__/**",
+    "src/**/__snapshots__/**"
   ]
 }
