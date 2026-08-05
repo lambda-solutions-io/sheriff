@@ -569,4 +569,36 @@ describe('module exports', () => {
       ).toEqual([]);
     });
   });
+
+  describe('exports on ** patterns', () => {
+    it('should apply exports declared on a ** pattern', () => {
+      expect(
+        violatedImportsFor({
+          modules: {
+            // ** spans two segments here (src/booking) - a single-segment
+            // wildcard reading of ** must fail this lookup
+            '**/api': { tags: ['type:api'], exports: ['*.port.ts'] },
+            'src/booking/feature': ['type:feature'],
+          },
+        }),
+      ).toEqual(['../api/http-booking.ts']);
+    });
+
+    it('should rank any exact pattern above a ** pattern', () => {
+      // 'src/**/booking/api' also matches (** = zero segments) and has more
+      // segments; the pattern without ** must still win the exports lookup
+      expect(
+        violatedImportsFor({
+          modules: {
+            'src/**/booking/api': { tags: ['type:api'], exports: [] },
+            'src/booking/api': {
+              tags: ['type:api'],
+              exports: ['*.port.ts'],
+            },
+            'src/booking/feature': ['type:feature'],
+          },
+        }),
+      ).toEqual(['../api/http-booking.ts']);
+    });
+  });
 });

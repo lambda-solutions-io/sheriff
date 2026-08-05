@@ -9,18 +9,24 @@ import { toFsPath } from '../../file-info/fs-path';
 function assertProject(fileTree: FileTree) {
   return {
     withModuleConfig(moduleConfig: ModuleConfig) {
+      const run = () => {
+        createProject(fileTree);
+        return findModulePathsWithoutBarrel(
+          moduleConfig,
+          toFsPath('/project'),
+          'index.ts',
+        );
+      };
       return {
         hasModulePaths(modulePaths: string[]) {
-          const absoluteModulePaths = modulePaths.map(
-            (path) => `/project/${path}`,
+          expect(Array.from(run().directories)).toEqual(
+            modulePaths.map((path) => `/project/${path}`),
           );
-          createProject(fileTree);
-          const actualModulePaths = findModulePathsWithoutBarrel(
-            moduleConfig,
-            toFsPath('/project'),
-            'index.ts',
+        },
+        hasFileModulePaths(filePaths: string[]) {
+          expect(Array.from(run().files)).toEqual(
+            filePaths.map((path) => `/project/${path}`),
           );
-          expect(Array.from(actualModulePaths)).toEqual(absoluteModulePaths);
         },
       };
     },
@@ -231,7 +237,7 @@ describe('create module infos from the config only (moduleIdentity: config)', ()
               'index.ts',
               true,
             );
-            expect(Array.from(actualModulePaths)).toEqual(
+            expect(Array.from(actualModulePaths.directories)).toEqual(
               modulePaths.map((path) => `/project/${path}`),
             );
           },
@@ -317,7 +323,8 @@ describe('multiple matching patterns per directory (issue #56)', () => {
         'src/<domain>/data': 'data',
         'src/customers/feature': 'feature',
       })
-      .hasModulePaths(['src/customers/data', 'src/customers/feature']);
+      // filesystem DFS order: 'feature' was created before 'data'
+      .hasModulePaths(['src/customers/feature', 'src/customers/data']);
   });
 
   it('should add a terminal match even when another pattern continues deeper', () => {
@@ -344,5 +351,98 @@ describe('multiple matching patterns per directory (issue #56)', () => {
         'src/customers': 'b',
       })
       .hasModulePaths(['src/customers']);
+  });
+});
+
+// a `**` segment matches zero or more directory segments; matches driven
+// purely by `**` skip node_modules and dot-directories
+describe('** globs in module paths', () => {
+  beforeEach(() => useVirtualFs().reset());
+
+  it('should discover directories at any depth', () => {
+    assertProject({
+      libs: {
+        'feature/a.ts': [],
+        a: { 'feature/b.ts': [], b: { 'feature/c.ts': [] } },
+      },
+    })
+      .withModuleConfig({ 'libs/**/feature': 'feat' })
+      .hasModulePaths(['libs/feature', 'libs/a/feature', 'libs/a/b/feature']);
+  });
+
+  it('should make every directory a module with a trailing **', () => {
+    assertProject({
+      src: { 'a/x.ts': [], 'a/b/y.ts': [], 'c/z.ts': [] },
+    })
+      .withModuleConfig({ 'src/**': 'x' })
+      .hasModulePaths(['src', 'src/a', 'src/a/b', 'src/c']);
+  });
+
+  it('should combine ** with partial wildcards', () => {
+    assertProject({
+      libs: {
+        'feat-x/a.ts': [],
+        deep: { 'feat-y/b.ts': [] },
+        'other/c.ts': [],
+      },
+    })
+      .withModuleConfig({ 'libs/**/feat-*': 'feat' })
+      .hasModulePaths(['libs/feat-x', 'libs/deep/feat-y']);
+  });
+
+  it('should skip node_modules and dot directories for ** matches', () => {
+    assertProject({
+      src: {
+        'a/x.ts': [],
+        node_modules: { 'pkg/y.ts': [] },
+        '.cache': { 'z.ts': [] },
+      },
+    })
+      .withModuleConfig({ 'src/**': 'x' })
+      .hasModulePaths(['src', 'src/a']);
+  });
+
+  it('should still match node_modules through an explicit segment', () => {
+    assertProject({
+      src: { node_modules: { 'pkg/y.ts': [] } },
+    })
+      .withModuleConfig({ 'src/node_modules/pkg': 'x' })
+      .hasModulePaths(['src/node_modules/pkg']);
+  });
+
+  it('should deduplicate overlapping ** and literal patterns', () => {
+    assertProject({
+      src: { 'x/a.ts': [] },
+    })
+      .withModuleConfig({ 'src/**': 'a', 'src/x': 'b' })
+      .hasModulePaths(['src', 'src/x']);
+  });
+
+  it('should exclude a ** match which contains a barrel file', () => {
+    assertProject({
+      libs: {
+        feature: { 'index.ts': [] },
+        data: { 'x.ts': [] },
+      },
+    })
+      .withModuleConfig({ 'libs/**': 'x' })
+      .hasModulePaths(['libs', 'libs/data']);
+  });
+
+  it('should keep barrel directories for ** matches with moduleIdentity config', () => {
+    createProject({
+      src: { app: { customers: { 'index.ts': [] } } },
+    });
+    const actualModulePaths = findModulePathsWithoutBarrel(
+      { 'src/**': 'x' },
+      toFsPath('/project'),
+      'index.ts',
+      true,
+    );
+    expect(Array.from(actualModulePaths.directories)).toEqual([
+      '/project/src',
+      '/project/src/app',
+      '/project/src/app/customers',
+    ]);
   });
 });
