@@ -13,15 +13,19 @@ Integration-Tests, JSDoc, Doku.
 
 ## 0. Scope-Entscheidung — zuerst lesen
 
-„Modul via file pattern/glob definieren" hat drei mögliche Lesarten. Der Draft empfiehlt
-eine Phasierung; **Lesart A ist als Kern angenommen** und unten voll ausgearbeitet.
-Falls primär B gemeint war: B ist als Phase 2 skizziert und kann vorgezogen werden —
-dann bitte Rückmeldung, bevor Tests geschrieben werden.
+„Modul via file pattern/glob definieren" hat drei mögliche Lesarten.
+
+> **Entschieden (2026-08-05):** Lesart **A und B werden beide umgesetzt** — A als
+> Phase 1, B als Phase 2, in dieser Reihenfolge. C bleibt Non-Goal. Datei-Module werden
+> **implizit** erkannt (das Traversal probiert auch Dateien, kein `kind: 'file'`-Marker);
+> Companion-/Spec-Dateien bekommen **keine Sonderbehandlung**; der `*`-Drift-Fix (§ 3.4)
+> läuft als **separater `fix(core)`-Commit vorweg**. Vorgehen: Tests zuerst (rot), dann
+> Implementierung — Arbeitspakete in § 10.
 
 | | Lesart | Beispiel | Bewertung |
 |---|---|---|---|
 | **A** | **Verzeichnis-Globs**: Modul-Keys dürfen `**` enthalten und matchen Verzeichnisse in beliebiger Tiefe | `'libs/**/feature-*': ['type:feature']` | **Empfohlener Kern (Phase 1).** Erhält alle Invarianten: Modul = Verzeichnis, Datei-Zuordnung über tiefsten Vorfahren, Exposure-Modell unverändert. |
-| **B** | **Datei-Module**: ein Key, dessen letztes Segment Dateien matcht, macht jede Treffer-Datei zu einem eigenen (Ein-Datei-)Modul | `'src/stores/<name>.store.ts': { tags: ['type:store', 'store:<name>'] }` | **Phase 2 (skizziert, § 4).** Bricht „Modul = Verzeichnis" kontrolliert; Zuordnung und Exposure bleiben definierbar. Für flache Strukturen wertvoll. |
+| **B** | **Datei-Module**: ein Key, dessen letztes Segment Dateien matcht, macht jede Treffer-Datei zu einem eigenen (Ein-Datei-)Modul | `'src/stores/<name>.store.ts': ['type:store', 'store:<name>']` | **Phase 2 (§ 4).** Bricht „Modul = Verzeichnis" kontrolliert; Zuordnung und Exposure bleiben definierbar. Für flache Strukturen wertvoll. |
 | **C** | **Verstreute Datei-Menge als EIN Modul**: alle `**/*.store.ts` bilden zusammen ein Modul | — | **Non-Goal.** Bricht `findClosestModulePath` (`create-modules.ts:76`) fundamental: Datei-Zuordnung ist reines Pfad-Präfix-Matching. Ein Modul ohne zusammenhängenden Teilbaum hat keinen Pfad, keine module-relative Exposure, keine sinnvolle `list`-Ausgabe. Nicht bauen. |
 
 Warum A vor B: A löst den häufigeren Schmerz (Monorepo-Tiefe, s. § 1), ist für Barrel-
@@ -147,9 +151,10 @@ export const config: SheriffConfig = {
 9. **Discovery-Traversal überspringt `node_modules` und Dot-Verzeichnisse** (`.git`,
    `.nx`, …), sobald ein `**` aktiv ist. Heute schützt die exakte Segmentanzahl faktisch
    davor, dass jemand versehentlich `node_modules` durchläuft; `'src/**'` oder `'**'`
-   hebt diesen Schutz auf. ⚠️ Vorher prüfen, ob `fs.readDirectory` bereits filtert —
-   falls nein, ist der Skip Teil dieses Features (nur im `**`-Pfad, um bestehendes
-   Verhalten nicht anzufassen; wer heute `'node_modules/<x>'` als Key hat, will das so).
+   hebt diesen Schutz auf. **Geprüft (2026-08-05):** `DefaultFs.readDirectory`
+   (`default-fs.ts:23-31`) filtert **nichts** — der Skip ist damit bestätigter Teil
+   dieses Features (nur im `**`-Pfad, um bestehendes Verhalten nicht anzufassen; wer
+   heute `'node_modules/<x>'` als Key hat, will das so).
 10. **Wirksam in beiden Modi:** Barrel-Projekte nutzen `**`-Keys fürs Tagging
     auto-erkannter Barrel-Module; Barrel-less (und `moduleIdentity: 'config'`) zusätzlich
     für die Discovery. `moduleIdentity: 'config'` + `'src/**'` ist die explizite
@@ -183,7 +188,8 @@ Konsumenten:
   Nebeneffekt, bewusst: **rohes `*` matcht dann auch beim Tagging** — behebt die
   Drift aus § 1.2. Das ist eine Verhaltensänderung nur für Configs, die heute `*` ohne
   Placeholder schreiben und dafür `noTag` bekommen — also fail-open-Reparatur, kein Bruch.
-  (Mit eigenem Regressionstest festnageln.)
+  (Mit eigenem Regressionstest festnageln.) **Entschieden:** dieser Fix läuft als
+  separater `fix(core)`-Commit **vor** dem Feature (Arbeitspaket AP0, § 10).
 - `find-module-paths-without-barrel.ts` → Segment-Prüfung im NFA.
 - `findExportsForModulePath` (`find-module-paths.ts:142`) → `matchesFolderPathPattern`
   wird `**`-fähig; `getSpecificity` (`:184`) wertet `**` als unspezifischstes Element:
@@ -208,40 +214,80 @@ Konsumenten:
 
 ---
 
-## 4. Phase 2 — Datei-Module (Skizze, eigener Task vor Implementierung)
+## 4. Phase 2 — Datei-Module (ausgearbeitet)
 
-Ein Key, dessen letztes Segment eine Datei matcht, macht **jede Treffer-Datei zu einem
-eigenen Modul** (Modulpfad = Dateipfad):
+Ein Key, dessen letztes Segment eine **Datei** matcht, macht jede Treffer-Datei zu einem
+eigenen Modul (Modulpfad = Dateipfad):
 
 ```ts
 modules: {
-  'src/app/stores/<name>.store.ts': { tags: ['type:store', 'store:<name>'] },
+  // jede *.store.ts-Datei ist ihr eigenes Modul; <name> capturet den Dateinamens-Stamm
+  'src/app/stores/<name>.store.ts': ['type:store', 'store:<name>'],
+  // kombinierbar mit ** (Phase 1): Store-Dateien in beliebiger Tiefe
+  'libs/**/<name>.store.ts':        ['type:store'],
 }
 ```
 
-Was trägt: `findClosestModulePath` funktioniert unverändert (die Datei findet sich selbst
-im Set); Exposure ist trivial (die Datei ist ihre eigene Public API); Tagging läuft über
-denselben Matcher aus § 3.4 (Placeholder inkl. Dateinamens-Anteil, z. B. `<name>` in
-`<name>.store.ts` — `matchesFilePathPattern`-Semantik existiert schon).
+### 4.1 Semantik — die verbindlichen Entscheidungen
 
-Was entschieden werden muss, bevor Phase 2 startet:
+1. **Implizite Erkennung** *(entschieden)*: Es gibt keinen `kind: 'file'`-Marker. Beim
+   config-basierten Traversal werden an **Terminal-Knoten** des Pattern-Baums neben
+   Verzeichnissen auch Dateien gegen das letzte Segment geprüft. Matcht eine Datei, wird
+   sie Datei-Modul; matcht (auch) ein Verzeichnis, wird das Verzeichnis wie bisher
+   Verzeichnis-Modul — beides gleichzeitig aus einem Key ist erlaubt (ein Key, viele
+   Module, wie bei `*`/`**` auch). Ein Verzeichnis, das wie eine Datei heißt
+   (`x.ts/`), bleibt ein Verzeichnis-Modul-Kandidat; es gewinnt keine Sonderregel.
+2. **Nur an Terminal-Knoten.** Ein Datei-Match kann nie „mitten im Pattern" passieren —
+   `'a/<x>.ts/b'` matcht keine Datei `a/f.ts` (Dateien haben keine Kinder). Damit bleibt
+   die Erkennung strukturell eindeutig, ohne Heuristik über Dateiendungen.
+3. **Modulpfad = Dateipfad.** `Module.path` zeigt auf die Datei. `findClosestModulePath`
+   (`create-modules.ts:76`) funktioniert unverändert: die Datei findet sich selbst als
+   tiefsten Treffer im Set; Nachbardateien klettern an ihr vorbei zum Eltern-Modul.
+4. **Exposure = die Datei selbst.** Ein Datei-Modul ist trivially public — seine einzige
+   Datei ist seine Public API. `encapsulationPattern`/`internal`-Logik und Barrel-Probe
+   werden für Datei-Module übersprungen (`Module.exposes` bekommt einen Datei-Modul-Ast).
+   `exports` an einem Key, der eine Datei matcht, ist widersprüchlich → `UserError`
+   (SH-023-Familie) beim Erzeugen des Moduls, nicht stillschweigend ignorieren.
+5. **Tagging über denselben Matcher** (§ 3.4): Der Modulpfad inkl. Dateinamens-Segment
+   läuft durch `calcTagsForModule`; Placeholder im Dateinamen (`<name>.store.ts` →
+   `([^/]+)\.store\.ts`) funktionieren wie heute Placeholder in Ordnersegmenten
+   (`handlePlaceholderMatching` ist bereits segmentintern). `**` links davon: Regel § 3.2.
+6. **Companion-/Spec-Dateien: keine Sonderbehandlung** *(entschieden)*.
+   `user.store.spec.ts` gehört zum umgebenden Verzeichnis-/Root-Modul; ihr Import von
+   `user.store.ts` ist ein normaler Cross-Module-Import und braucht eine `depRule`.
+   Via ESLint-Plugin (lintet alle Dateien) sofort sichtbar, via CLI nur bei
+   Erreichbarkeit vom Entry. Doku-Pflicht mit Beispiel-Regel (z. B. `root`-Regel oder
+   Spec-Ausschluss über den Entry-Scope). Ein `includes`-Mechanismus ist bewusst NICHT
+   Teil des Features; falls der Schmerz real wird, ist das ein eigener Draft.
+7. **Wirksam wie Verzeichnis-Discovery:** Datei-Module entstehen im config-basierten
+   Discovery-Pfad. Der läuft heute nur unter `enableBarrelLess: true` bzw.
+   `moduleIdentity: 'config'` (`find-module-paths.ts:57-87`). Damit ein Datei-Modul-Key
+   in einem reinen Barrel-Projekt nicht **still** wirkungslos bleibt (fail-open),
+   läuft die Discovery künftig auch dort, sobald `modules` konfiguriert ist —
+   beschränkt auf Datei-Treffer (Verzeichnis-Identität bleibt in Barrel-Projekten
+   unverändert barrel-getrieben). Additiv: solche Keys matchen heute schlicht nichts.
+8. **Kein Barrel-Bezug:** `hasBarrel = false`, `barrelPolicy`/`allowBarrelsIn`
+   betreffen Datei-Module nicht.
 
-1. **Erkennung:** Woran erkennt Sheriff, dass ein Key Dateien meint? Optionen: (a) beim
-   Traversal auch Dateien probieren, (b) expliziter Marker in `ModuleDefinition`
-   (z. B. `kind: 'file'`). Tendenz: (b) — explizit, kollisionsfrei, und der
-   Diskriminator-Falle von Task 3 wird direkt begegnet (`moduleDefinitionKeys` in
-   `module-config.ts:80` erweitern, sonst wird `{ tags, kind }` still zur Nested-Config).
-2. **Companion-Dateien:** `user.store.spec.ts` neben `user.store.ts` wird zum
-   *modulfremden* Import — via ESLint-Plugin (das alle Dateien lintet) sofort sichtbar,
-   via CLI nur bei Erreichbarkeit vom Entry. Braucht eine Antwort (Konvention,
-   `exports`-Analogon, oder bewusst „Spec gehört ins Root-Modul und braucht eine Regel").
-3. **Discovery-Kosten:** Datei-Listing statt nur Verzeichnis-Listing im Traversal
-   (`fs.readDirectory`-Erweiterung, `default-fs.ts` + `virtual-fs.ts`).
-4. **`sheriff list`/`export`/LSP-Hover:** Ein-Datei-Module müssen in allen Ausgaben
-   sinnvoll erscheinen (`getProjectData`).
+### 4.2 Technik
 
-Phase 2 wird **nicht** begonnen, bevor Phase 1 gemerged ist — sie erbt Matcher, NFA und
-Testinfrastruktur.
+- **Traversal:** an Terminal-Knoten zusätzlich `fs.readDirectory(dir, 'none')` und
+  Datei-Kandidaten gegen das letzte Segment matchen (`matchesFileSegmentPattern`-
+  Semantik existiert in `segment-pattern.ts:98`). Kostenmodell: ein Datei-Listing pro
+  Terminal-Verzeichnis — nur dort, wo Patterns ohnehin hinzeigen.
+- **`ModulePathMap`:** Werte tragen bereits `ModulePathInfo` — wird um die Information
+  „ist Datei" erweitert (oder abgeleitet via `fs`), damit `createModules` den
+  Exposure-Ast wählen kann, ohne erneut zu statten.
+- **Ausgaben:** `sheriff list`/`export`/LSP-Hover (`getProjectData`) zeigen Datei-Module
+  mit ihrem Dateipfad; `Module.kind` bekommt die Ausprägung `'file'` (heute
+  `'barrel' | 'barrel-less'`) — rein informativ, keine Zugriffs-Entscheidung (Issue #37).
+- **Cache-Key:** unverändert (Keys sind Strings); Gegentest wie § 3.6.
+
+### 4.3 Abgrenzung
+
+Phase 2 beginnt erst, wenn Phase 1 fertig ist — sie erbt den gemeinsamen Matcher, das
+NFA-Traversal und die Testinfrastruktur. Lesart C (mehrere verstreute Dateien als EIN
+Modul) bleibt Non-Goal; Regel 1 erzeugt bewusst **ein Modul pro Treffer-Datei**.
 
 ---
 
@@ -283,6 +329,12 @@ Integration: `test-projects/angular-iv` — `customers/**`-Variante der bestehen
 **Mutationsprobe (Pflicht, pro Szenario):** `**`-Key aus der Config nehmen → zugehöriger
 Test muss rot werden.
 
+**Phase 2 zusätzlich:** Datei-Modul-Discovery (Terminal-Knoten, Datei+Verzeichnis-Mix
+aus einem Key, `**`-Kombination), Tagging mit Placeholder im Dateinamen, Exposure
+(Datei-Modul importierbar, Nachbardatei-Import cross-module mit/ohne depRule),
+`exports`-an-Datei-Key-Fehler, Barrel-Projekt-Fall (§ 4.1 Regel 7), `sheriff list`-
+Ausgabe. Gleiche Spec-Orte, gleiche Mutationsprobe (Datei-Key entfernen → rot).
+
 ---
 
 ## 7. Betroffene Dateien (Phase 1)
@@ -299,16 +351,23 @@ Test muss rot werden.
 - Docs: `configuration.md` (Sektion unter `modules`), `dependency-rules.md` („Nested Paths"/„Placeholders" ergänzen), `module_boundaries.md`, `release-notes/`, `roadmap.md`
 - **Unverändert:** `create-modules.ts` (`findClosestModulePath`), `module.ts` (Exposure), `user-sheriff-config.ts`/`default-config.ts` (keine neue Option)
 
+**Zusätzlich in Phase 2:** `find-module-paths.ts` (Datei-Pass auch im Barrel-Modus,
+`ModulePathInfo`), `find-module-paths-without-barrel.ts` (Datei-Probe an
+Terminal-Knoten), `module.ts` (Exposure-Ast + `kind: 'file'`), `create-modules.ts`
+(Datei-Modul-Konstruktion, `exports`-Fehler), `api/get-project-data.ts` u. Ä.
+(Ausgaben), Doku wie Phase 1.
+
 ---
 
-## 8. Offene Fragen (vor Test-Phase zu klären)
+## 8. Beantwortete Fragen (2026-08-05)
 
-1. **Scope-Bestätigung:** Ist Lesart A (Verzeichnis-Globs) der gewünschte Kern, oder war
-   primär B (Datei-Module) gemeint? → entscheidet, ob Phase 2 vorgezogen wird.
-2. Filtert `fs.readDirectory` bereits `node_modules`/Dot-Verzeichnisse? (Empirisch
-   klären; Regel 9 hängt daran.)
-3. Soll die `*`-Tagging-Drift (§ 3.4) im selben PR gefixt werden oder als separater
-   `fix(core)` vorweg? Tendenz: vorweg, eigener Commit — dann ist der Feature-Diff sauber.
+1. **Scope:** Phase 1 **und** Phase 2 werden umgesetzt, in dieser Reihenfolge.
+   Datei-Module werden **implizit** erkannt (§ 4.1 Regel 1), kein `kind: 'file'`.
+2. **`fs.readDirectory`:** filtert nichts (geprüft, `default-fs.ts:23-31`) —
+   `node_modules`-/Dot-Skip ist Teil von Phase 1 (§ 3.2 Regel 9).
+3. **`*`-Tagging-Drift:** separater `fix(core)`-Commit vor dem Feature (AP0).
+4. **Companion-/Spec-Dateien:** keine Sonderbehandlung (§ 4.1 Regel 6).
+5. **Vorgehen:** Tests zuerst (rot), Implementierung danach — pro Arbeitspaket.
 
 ---
 
@@ -322,3 +381,20 @@ Test muss rot werden.
 - [ ] JSDoc an jedem neuen public member; Doku aktualisiert
 - [ ] Bestehende Configs ohne `**`: **bit-identisches Verhalten**
 - [ ] Conventional Commits, Scope `core`/`docs`, atomar
+
+Für Phase 2 gilt dieselbe Liste analog (Mutationsprobe: Datei-Modul-Key entfernen →
+zugehöriger Test rot; bestehende Configs ohne Datei-Keys bit-identisch).
+
+---
+
+## 10. Arbeitspakete (Umsetzungsreihenfolge)
+
+Jedes AP: erst Specs (rot, inkl. eingebauter Mutationsprobe über grüne Nachbartests),
+dann Implementierung, dann atomarer Commit. Alt-Tests müssen nach jedem AP grün sein.
+
+| AP | Inhalt | Commit |
+|---|---|---|
+| **AP0** | `*`-Tagging-Drift: gemeinsamer Matcher, rohes `*` matcht auch beim Tagging (§ 3.4) | `fix(core): match raw folder wildcards in tagging` |
+| **AP1** | #56: Multi-Pattern-Descent in `traverseAndMatch` (alle matchenden Patterns verfolgen) | `fix(core): descend into all matching module patterns` |
+| **AP2** | Phase 1: `**` in Discovery + Tagging + Spezifität, SH-023, `node_modules`-Skip, Cache-Gegentest, Bench, Doku | `feat(core): support ** globs in module paths` |
+| **AP3** | Phase 2: Datei-Module (implizite Erkennung, Exposure, Tagging, Ausgaben), Doku | `feat(core): define single-file modules via file patterns` |
