@@ -8,5 +8,13 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.spec.ts", "src/**/*.test.ts"]
+  "exclude": [
+    "src/**/*.spec.ts",
+    "src/**/*.test.ts",
+    "src/sheriff.full-spec.ts",
+    "src/lib/test/**",
+    "src/lib/cli/tests/**",
+    "src/lib/fs/find-files/test*/**",
+    "src/lib/fs/find-nearest/test*/**"
+  ]
 }

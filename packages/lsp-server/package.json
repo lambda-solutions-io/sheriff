@@ -2,7 +2,7 @@
   "name": "@lambda-solutions/lsp-server-sheriff",
   "version": "1.0.0",
   "description": "Language Server Protocol server for Sheriff",
-  "homepage": "https://github.com/michaelbe812/sheriff",
+  "homepage": "https://github.com/lambda-solutions-io/sheriff",
   "license": "MIT",
   "author": {
     "name": "Michael Berger",
@@ -13,7 +13,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/michaelbe812/sheriff"
+    "url": "https://github.com/lambda-solutions-io/sheriff"
   },
   "type": "commonjs",
   "dependencies": {
