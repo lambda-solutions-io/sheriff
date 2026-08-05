@@ -25,6 +25,22 @@ const unknownArguments = process.argv
 const benchmarkSizes = [
   { label: '2.1k', domains: 100, modulesPerDomain: 3, filesPerModule: 6 },
   { label: '10.5k', domains: 500, modulesPerDomain: 3, filesPerModule: 6 },
+  // barrel-less projects whose module config uses a `**` glob: exercises
+  // config-based discovery (NFA) and glob tagging instead of barrel scans
+  {
+    label: '1.8k-glob',
+    domains: 100,
+    modulesPerDomain: 3,
+    filesPerModule: 6,
+    mode: 'barrel-less-glob',
+  },
+  {
+    label: '9k-glob',
+    domains: 500,
+    modulesPerDomain: 3,
+    filesPerModule: 6,
+    mode: 'barrel-less-glob',
+  },
 ];
 
 try {
@@ -41,6 +57,7 @@ try {
         domains: size.domains,
         modulesPerDomain: size.modulesPerDomain,
         filesPerModule: size.filesPerModule,
+        mode: size.mode,
       },
     );
     const runsMs = Array.from({ length: 3 }, (_, run) => {

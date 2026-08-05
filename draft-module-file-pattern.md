@@ -404,5 +404,6 @@ dann Implementierung, dann atomarer Commit. Alt-Tests müssen nach jedem AP grü
 
 Anmerkung zu AP2: SH-023 ist in AP3 gelandet (`exports` an Datei-Modul-Keys) — für `**`
 selbst war keine Validierung nötig, jede Key-Form hat wohldefinierte Semantik (Regel 1).
-Der eigene Bench aus der DoD wurde zugunsten der bestehenden Perf-Guards zurückgestellt;
-ohne `**` in der Config ist der Traversal-Aufwand unverändert (identische Baumbeschneidung).
+Der Bench aus der DoD ist nachgezogen: `tools/perf` hat zwei Barrel-less-Glob-Szenarien
+(`1.8k-glob`, `9k-glob`) mit `'src/app/**/<type>'`-Config; ohne `**` in der Config ist
+der Traversal-Aufwand unverändert (identische Baumbeschneidung).
