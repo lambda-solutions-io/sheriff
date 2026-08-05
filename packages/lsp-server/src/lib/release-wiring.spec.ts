@@ -30,9 +30,10 @@ describe('lsp-server independent versioning', () => {
       (plugin) => plugin.type === 'linked-versions',
     )?.components;
     expect(linkedComponents).not.toContain('lsp-server');
-    expect(linkedComponents).toEqual(
-      expect.arrayContaining(['core', 'eslint-plugin', 'mcp-server']),
-    );
+    // mcp-server is independent too since core resolves its own CLI entry.
+    // core and eslint-plugin stay linked: the plugin pins core exactly and
+    // the daemon handshake rejects a version mismatch.
+    expect(linkedComponents).toEqual(['core', 'eslint-plugin']);
     expect(manifest['packages/lsp-server']).toBe('1.0.0');
     // The workflow publishes all four packages in one loop, so assert on the
     // loop's package list plus the publish command instead of a literal line.
