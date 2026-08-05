@@ -68,8 +68,9 @@ errors are returned as MCP tool errors.
 
 - `SHERIFF_ROOT_DIR`: project root used by Sheriff. Defaults to the MCP server
   process's current working directory.
-- `SHERIFF_CLI_BIN_PATH`: fallback path to the Sheriff CLI entry point when
-  `@lambda-solutions/sheriff-core/src/bin/main.js` cannot be resolved.
+- `SHERIFF_CLI_BIN_PATH`: overrides the Sheriff CLI entry point used to spawn
+  the daemon. `@lambda-solutions/sheriff-core` otherwise resolves it relative
+  to its own installation, so this is only needed when the CLI lives elsewhere.
 
 `@lambda-solutions/sheriff-core` must be installed and the target project must
 have a valid Sheriff configuration.

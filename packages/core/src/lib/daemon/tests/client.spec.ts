@@ -2,12 +2,20 @@ import * as net from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as childProcess from 'child_process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DaemonClient,
   isDaemonRequestTimeoutError,
   isDaemonTransportError,
 } from '../client';
+
+// Only `spawn` is stubbed; the rest of child_process stays real so any
+// other consumer in the import graph behaves normally.
+vi.mock('child_process', async (importOriginal) => ({
+  ...(await importOriginal<typeof childProcess>()),
+  spawn: vi.fn(),
+}));
 
 /**
  * Regression tests for the request timeout (issue #53): a daemon that
@@ -165,6 +173,92 @@ describe('DaemonClient request timeout', () => {
     expect(isDaemonTransportError(error)).toBe(false);
 
     client.close();
+  });
+});
+
+/**
+ * Core resolves the CLI it spawns the daemon from, so callers (the MCP
+ * server, the ESLint plugin) need no knowledge of core's file layout and
+ * no deep import into its internals.
+ */
+describe('DaemonClient spawn CLI resolution', () => {
+  let rootDir: string;
+  let previousBinPathEnv: string | undefined;
+
+  beforeEach(() => {
+    // An empty root has no daemon socket, so connect always takes the
+    // spawn path.
+    rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sheriff-spawn-spec-'));
+    previousBinPathEnv = process.env['SHERIFF_CLI_BIN_PATH'];
+    delete process.env['SHERIFF_CLI_BIN_PATH'];
+  });
+
+  afterEach(() => {
+    if (previousBinPathEnv === undefined) {
+      delete process.env['SHERIFF_CLI_BIN_PATH'];
+    } else {
+      process.env['SHERIFF_CLI_BIN_PATH'] = previousBinPathEnv;
+    }
+  });
+
+  /** The mocked spawn, reset per test so call counts stay isolated. */
+  function stubSpawn() {
+    const spawnMock = vi.mocked(childProcess.spawn);
+    spawnMock.mockReset();
+    spawnMock.mockReturnValue({
+      on: () => void 0,
+      unref: () => void 0,
+    } as unknown as childProcess.ChildProcess);
+    return spawnMock;
+  }
+
+  function spawnedScript(spawnMock: ReturnType<typeof stubSpawn>): string {
+    const args = spawnMock.mock.calls[0]?.[1] as string[];
+    return args[0];
+  }
+
+  it('spawns core own CLI entry when no cliBinPath is given', async () => {
+    const spawnSpy = stubSpawn();
+
+    await DaemonClient.connect(rootDir, { spawnIfMissing: true });
+
+    expect(spawnSpy).toHaveBeenCalled();
+    // Resolved relative to client.ts (src/lib/daemon) and so lands on
+    // core's own entry at src/bin/main.js.
+    expect(spawnedScript(spawnSpy)).toBe(
+      path.join(__dirname, '..', '..', '..', 'bin', 'main.js'),
+    );
+  });
+
+  it('lets SHERIFF_CLI_BIN_PATH override the resolved default', async () => {
+    process.env['SHERIFF_CLI_BIN_PATH'] = '/custom/sheriff-cli.js';
+    const spawnSpy = stubSpawn();
+
+    await DaemonClient.connect(rootDir, { spawnIfMissing: true });
+
+    expect(spawnedScript(spawnSpy)).toBe('/custom/sheriff-cli.js');
+  });
+
+  it('prefers an explicit cliBinPath over the environment and the default', async () => {
+    process.env['SHERIFF_CLI_BIN_PATH'] = '/custom/sheriff-cli.js';
+    const spawnSpy = stubSpawn();
+
+    await DaemonClient.connect(rootDir, {
+      spawnIfMissing: true,
+      cliBinPath: '/explicit/sheriff-cli.js',
+    });
+
+    expect(spawnedScript(spawnSpy)).toBe('/explicit/sheriff-cli.js');
+  });
+
+  it('never spawns without spawnIfMissing', async () => {
+    // The ESLint plugin worker connects this way and must stay
+    // spawn-free even though core could now resolve a CLI itself.
+    const spawnSpy = stubSpawn();
+
+    await DaemonClient.connect(rootDir, { throwOnVersionMismatch: true });
+
+    expect(spawnSpy).not.toHaveBeenCalled();
   });
 });
 

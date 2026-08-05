@@ -68,13 +68,15 @@ function toConnectionKey(rootDir: string): string {
   return path.resolve(rootDir);
 }
 
-/** Resolves the installed Sheriff CLI, with an environment variable fallback. */
+/**
+ * Reads the `SHERIFF_CLI_BIN_PATH` override for the Sheriff CLI entry.
+ *
+ * @deprecated Sheriff core resolves its own CLI entry point, and honours
+ * the same environment variable itself. Omit `cliBinPath` and let core
+ * decide instead of calling this.
+ */
 export function resolveSheriffCliBinPath(): string | undefined {
-  try {
-    return require.resolve('@lambda-solutions/sheriff-core/src/bin/main.js');
-  } catch {
-    return process.env['SHERIFF_CLI_BIN_PATH'];
-  }
+  return process.env['SHERIFF_CLI_BIN_PATH'];
 }
 
 /**
