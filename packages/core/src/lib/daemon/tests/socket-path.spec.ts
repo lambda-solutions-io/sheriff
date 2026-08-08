@@ -24,6 +24,20 @@ describe('daemon socket path', () => {
     );
   });
 
+  it('should differ between core versions for the same root dir', () => {
+    // Version-keyed sockets let two core versions serve the same root at
+    // once instead of refusing each other's daemon over the handshake.
+    expect(getDaemonSocketPath('/some/project', 'uid:1', '1.0.0')).not.toBe(
+      getDaemonSocketPath('/some/project', 'uid:1', '1.1.0'),
+    );
+  });
+
+  it('should be deterministic per core version', () => {
+    expect(getDaemonSocketPath('/some/project', 'uid:1', '1.0.0')).toBe(
+      getDaemonSocketPath('/some/project', 'uid:1', '1.0.0'),
+    );
+  });
+
   it('should use a named pipe on windows and a socket file elsewhere', () => {
     const socketPath = getDaemonSocketPath('/some/project');
     if (process.platform === 'win32') {

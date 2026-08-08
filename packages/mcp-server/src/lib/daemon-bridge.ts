@@ -3,6 +3,7 @@ import {
   DaemonClient,
   isDaemonRequestTimeoutError,
   isDaemonTransportError,
+  isDaemonVersionMismatchError,
 } from '@lambda-solutions/sheriff-core';
 
 /** Minimal daemon client contract used by the MCP bridge. */
@@ -15,7 +16,11 @@ export interface SheriffDaemonClient {
 export interface DaemonBridgeDependencies {
   connect(
     rootDir: string,
-    options: { spawnIfMissing?: boolean; cliBinPath?: string },
+    options: {
+      spawnIfMissing?: boolean;
+      cliBinPath?: string;
+      throwOnVersionMismatch?: boolean;
+    },
   ): Promise<SheriffDaemonClient | undefined>;
 }
 
@@ -98,7 +103,13 @@ async function getSharedClient(
   let pending = pendingConnects.get(connectionKey);
   if (!pending) {
     pending = dependencies
-      .connect(rootDir, { spawnIfMissing: true, cliBinPath })
+      // Ask for the mismatch to surface: without it a version-skewed daemon
+      // resolves to `undefined` and is indistinguishable from "no daemon".
+      .connect(rootDir, {
+        spawnIfMissing: true,
+        cliBinPath,
+        throwOnVersionMismatch: true,
+      })
       .then((client) => {
         if (client) {
           sharedConnections.set(connectionKey, { rootDir, client });
@@ -174,6 +185,16 @@ export async function callDaemon(
     );
   } catch (error) {
     closeSharedConnection(connectionKey);
+    if (isDaemonVersionMismatchError(error)) {
+      return {
+        success: false,
+        message:
+          `Sheriff daemon version mismatch for ${rootDir}: the running daemon ` +
+          `analyses with core ${error.daemonVersion}, this MCP server uses ` +
+          `${error.clientVersion}. Run \`npx sheriff daemon stop\` in that ` +
+          'directory, or align the installed @lambda-solutions/sheriff-core versions.',
+      };
+    }
     return {
       success: false,
       message: `Sheriff daemon request failed: ${getErrorMessage(error)}`,
