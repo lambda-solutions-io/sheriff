@@ -1,6 +1,6 @@
 {
   "name": "@lambda-solutions/mcp-server-sheriff",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Model Context Protocol server for Sheriff",
   "homepage": "https://github.com/lambda-solutions-io/sheriff",
   "license": "MIT",
