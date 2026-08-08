@@ -310,17 +310,37 @@ async function requestCompatibleHandshake(client: DaemonClient): Promise<void> {
     handshake.compatible === false ||
     handshake.coreVersion !== packageVersion
   ) {
+    const daemonVersion = handshake.coreVersion ?? 'unknown';
     throw new DaemonVersionMismatchError(
-      `sheriff daemon version mismatch: daemon ${handshake.coreVersion}, client ${packageVersion}`,
+      `sheriff daemon version mismatch: daemon ${daemonVersion}, client ${packageVersion}`,
+      daemonVersion,
+      packageVersion,
     );
   }
 }
 
-class DaemonVersionMismatchError extends Error {
-  constructor(message: string) {
+/**
+ * A daemon is already running for this root but analyses with a different
+ * core version. Carries both versions so callers can tell the user what to
+ * align instead of reporting a generic "daemon unavailable".
+ */
+export class DaemonVersionMismatchError extends Error {
+  readonly daemonVersion: string;
+  readonly clientVersion: string;
+
+  constructor(message: string, daemonVersion: string, clientVersion: string) {
     super(message);
     this.name = 'DaemonVersionMismatchError';
+    this.daemonVersion = daemonVersion;
+    this.clientVersion = clientVersion;
   }
+}
+
+/** True when a daemon refused the connection over a version mismatch. */
+export function isDaemonVersionMismatchError(
+  error: unknown,
+): error is DaemonVersionMismatchError {
+  return error instanceof DaemonVersionMismatchError;
 }
 
 function normalizeDaemonStatus(status: HandshakeResult): HandshakeResult {

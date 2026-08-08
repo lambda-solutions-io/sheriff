@@ -2,6 +2,7 @@ import {
   DaemonClient,
   DaemonRequestTimeoutError,
   DaemonTransportError,
+  DaemonVersionMismatchError,
 } from '@lambda-solutions/sheriff-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetDaemonConnection } from './daemon-bridge';
@@ -18,6 +19,8 @@ vi.mock('@lambda-solutions/sheriff-core', async (importOriginal) => {
     isDaemonTransportError: actual.isDaemonTransportError,
     DaemonRequestTimeoutError: actual.DaemonRequestTimeoutError,
     isDaemonRequestTimeoutError: actual.isDaemonRequestTimeoutError,
+    DaemonVersionMismatchError: actual.DaemonVersionMismatchError,
+    isDaemonVersionMismatchError: actual.isDaemonVersionMismatchError,
     DaemonClient: {
       connect: vi.fn(),
     },
@@ -117,6 +120,7 @@ describe('Sheriff MCP tool dispatch', () => {
     expect(connect).toHaveBeenCalledWith('/workspace/project', {
       spawnIfMissing: true,
       cliBinPath: '/workspace/sheriff-cli.js',
+      throwOnVersionMismatch: true,
     });
   });
 
@@ -128,12 +132,33 @@ describe('Sheriff MCP tool dispatch', () => {
     expect(connect).toHaveBeenCalledWith('/workspace/project', {
       spawnIfMissing: true,
       cliBinPath: '/workspace/sheriff-cli.js',
+      throwOnVersionMismatch: true,
     });
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain(
       'Sheriff daemon unavailable: could not connect or spawn a daemon for /workspace/project.',
     );
     expect(close).not.toHaveBeenCalled();
+  });
+
+  it('names both versions when a skewed daemon refuses the connection', async () => {
+    // Without `throwOnVersionMismatch` this arrives as a plain `undefined`
+    // and is reported as "unavailable", hiding the actual cause.
+    connect.mockRejectedValue(
+      new DaemonVersionMismatchError(
+        'sheriff daemon version mismatch: daemon 1.0.0, client 1.1.0',
+        '1.0.0',
+        '1.1.0',
+      ),
+    );
+
+    const result = await handleToolCall('verify', {}, options);
+
+    expect(result.isError).toBe(true);
+    const message = result.content[0]?.text ?? '';
+    expect(message).toContain('core 1.0.0');
+    expect(message).toContain('1.1.0');
+    expect(message).toContain('sheriff daemon stop');
   });
 
   it('keeps the connection and returns a tool error on an application error', async () => {

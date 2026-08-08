@@ -28,9 +28,11 @@ export {
   DaemonClient,
   DaemonRequestTimeoutError,
   DaemonTransportError,
+  DaemonVersionMismatchError,
   getDaemonStatus,
   isDaemonRequestTimeoutError,
   isDaemonTransportError,
+  isDaemonVersionMismatchError,
   stopDaemon,
 } from './lib/daemon/client';
 export { startDaemonServer } from './lib/daemon/server';
